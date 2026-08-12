@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+build/
+install/
+log/
+.coverage
+coverage.xml
+web_ground_station/.next/
+web_ground_station/dist/
+web_ground_station/node_modules/
+*.jsonl
+*.bag
+*.bag.active
+

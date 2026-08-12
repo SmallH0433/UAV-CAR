@@ -1,0 +1,32 @@
+{
+  "created_utc": "2026-08-06T11:54:10Z",
+  "firmware_heartbeat_source": "1/1",
+  "device": "COM4",
+  "mapping": "ArduPilot 4.7 old SR1_* -> new MAV2_*",
+  "parameters": {
+    "MAV2_EXT_STAT": {
+      "value": 0.0,
+      "type": 4
+    },
+    "MAV2_RC_CHAN": {
+      "value": 0.0,
+      "type": 4
+    },
+    "MAV2_POSITION": {
+      "value": 0.0,
+      "type": 4
+    },
+    "MAV2_EXTRA1": {
+      "value": 0.0,
+      "type": 4
+    },
+    "MAV2_EXTRA2": {
+      "value": 0.0,
+      "type": 4
+    },
+    "MAV2_EXTRA3": {
+      "value": 0.0,
+      "type": 4
+    }
+  }
+}

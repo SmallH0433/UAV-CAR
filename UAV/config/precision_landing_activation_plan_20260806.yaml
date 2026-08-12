@@ -1,0 +1,75 @@
+version: 1
+created: 2026-08-06
+status: applied_disarmed_bench_validated
+scope: real_pixhawk_parameter_activation_requires_explicit_user_authorization
+
+safety_prerequisites:
+  propellers_removed: required
+  armed: false
+  vehicle_motion: prohibited
+  flight_mode_change: prohibited
+  motor_commands: prohibited
+  camera_extrinsics_basis: user_declared_nominal_zero_translation_zero_roll_pitch
+
+current_read_only_snapshot:
+  source: Raspberry_Pi_TELEM1_MAVLink_parameter_reads
+  vehicle: ArduCopter_4.7.0_fmuv3
+  heartbeat_system_component: [1, 1]
+  armed: false
+  PLND_ENABLED: 0
+  PLND_TYPE: 0
+  PLND_EST_TYPE: 1
+  PLND_OPTIONS: 0
+  PLND_ORIENT: 25
+  PLND_LAG: 0.02
+  PLND_YAW_ALIGN: 0.0
+  PLND_CAM_POS_X: 0.0
+  PLND_CAM_POS_Y: 0.0
+  PLND_CAM_POS_Z: 0.0
+  PLND_LAND_OFS_X: 0.0
+  PLND_LAND_OFS_Y: 0.0
+  PLND_STRICT: 1
+  PLND_ALT_MIN: 0.75
+  PLND_ALT_MAX: 8.0
+  PLND_XY_DIST_MAX: 2.5
+  parameters_changed_during_snapshot: false
+
+firmware_feature_check:
+  official_stable_fmuv3_version: 4.7.0
+  AC_PRECLAND_ENABLED: true
+  AC_PRECLAND_MAVLINK_ENABLED: true
+  conclusion: installed_board_family_supports_MAVLink_precision_landing
+
+proposed_activation_after_authorization:
+  phase_1:
+    writes:
+      PLND_ENABLED: 1
+    then: reboot_flight_controller_while_disarmed
+  phase_2:
+    prerequisite: re_read_all_PLND_parameters_after_reboot
+    writes:
+      PLND_TYPE: 1
+    then: disarmed_bench_only_validation
+  intentionally_unchanged:
+    PLND_CAM_POS_X: 0.0
+    PLND_CAM_POS_Y: 0.0
+    PLND_CAM_POS_Z: 0.0
+    PLND_YAW_ALIGN: 0.0
+    PLND_OPTIONS: 0
+
+rollback:
+  require_disarmed: true
+  writes:
+    PLND_TYPE: 0
+    PLND_ENABLED: 0
+  then: reboot_flight_controller
+
+authorization_state:
+  parameter_writes_authorized: true
+  authorization_scope: disarmed_propellers_removed_bench_only
+  activation_applied: true
+  PLND_ENABLED: 1
+  PLND_TYPE: 1
+  disarmed_live_validation_messages: 177
+  disarmed_live_validation_rate_hz: 12.517346
+  real_flight_authorized: false

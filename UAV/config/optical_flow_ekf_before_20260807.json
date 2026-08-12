@@ -1,0 +1,44 @@
+{
+  "created_utc": "2026-08-07T10:03:41Z",
+  "vehicle": "real Pixhawk system 1 component 1",
+  "armed": false,
+  "parameters": {
+    "SERIAL2_OPTIONS": {
+      "value": 0.0,
+      "type": 6
+    },
+    "EK3_SRC_OPTIONS": {
+      "value": 0.0,
+      "type": 4
+    },
+    "EK3_SRC1_POSXY": {
+      "value": 3.0,
+      "type": 2
+    },
+    "EK3_SRC1_VELXY": {
+      "value": 3.0,
+      "type": 2
+    },
+    "EK3_SRC1_POSZ": {
+      "value": 1.0,
+      "type": 2
+    },
+    "EK3_SRC1_VELZ": {
+      "value": 3.0,
+      "type": 2
+    },
+    "EK3_SRC1_YAW": {
+      "value": 1.0,
+      "type": 2
+    }
+  },
+  "desired": {
+    "SERIAL2_OPTIONS": 1024.0,
+    "EK3_SRC_OPTIONS": 0.0,
+    "EK3_SRC1_POSXY": 0.0,
+    "EK3_SRC1_VELXY": 5.0,
+    "EK3_SRC1_POSZ": 1.0,
+    "EK3_SRC1_VELZ": 0.0,
+    "EK3_SRC1_YAW": 1.0
+  }
+}

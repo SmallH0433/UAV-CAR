@@ -1,0 +1,162 @@
+uav_mavlink_bridge:
+  ros__parameters:
+    # Multi-camera software rendering can make one simulated second span many
+    # wall-clock seconds. Real hardware keeps the stricter base-profile value.
+    heartbeat_timeout_s: 30.0
+
+uav_navigation:
+  ros__parameters:
+    command_enabled: false
+    require_perception: true
+    maximum_altitude_m: 8.0
+    geofence_radius_m: 14.0
+    obstacle_influence_distance_m: 3.2
+    obstacle_hard_stop_distance_m: 0.95
+    obstacle_repulsion_gain: 1.15
+    airspace_prediction_horizon_s: 2.0
+    airspace_margin_m: 0.22
+    odom_timeout_s: 5.0
+    scan_timeout_s: 3.0
+    perception_timeout_s: 3.0
+    no_fly_zones_json: >-
+      [{"name":"tower_nfz","shape":"cylinder","x":-3.7,"y":-1.2,"radius":1.55,"z_min":0.5,"z_max":8.0},{"name":"destination_nfz","shape":"cylinder","x":8.7,"y":6.9,"radius":1.35,"z_min":0.5,"z_max":7.0}]
+    height_limit_zones_json: >-
+      [{"name":"low_ceiling_corridor","shape":"box","x_min":0.75,"x_max":5.25,"y_min":-4.6,"y_max":-2.4,"max_z":2.30}]
+
+uav_perception:
+  ros__parameters:
+    influence_distance_m: 3.2
+    hard_stop_distance_m: 0.85
+    # Software rendering can lower camera and lidar publication rates.
+    sensor_stale_after_s: 1.8
+    sensor_wall_stale_after_s: 10.0
+    point_stride: 5
+    depth_stride: 10
+
+uav_ultrasonic_adapter:
+  ros__parameters:
+    status_stale_after_s: 2.5
+
+uav_docking_controller:
+  ros__parameters:
+    # Map/odometry performs the safe coarse descent; at 1.8 m the 130-degree
+    # landing camera resolves the tag code reliably before visual takeover.
+    approach_altitude_m: 1.8
+    follow_altitude_m: 2.8
+    follow_distance_m: 1.6
+    # The Iris base rests at about 0.57 m on the Hunter deck.  Latching near
+    # hard contact avoids a simulated drop that can invalidate land_complete.
+    capture_altitude_m: 0.60
+    # Redundant terminal vertical guard. Unlike local-Z, this follows a deck
+    # that pitches or changes elevation; acceptance still also requires a
+    # healthy downward channel, centered fresh tag and minimum tag area.
+    capture_deck_range_m: 0.55
+    # 130-degree down-camera normalized image gates.  At capture height these
+    # correspond to roughly 11 cm (latch) and 15 cm (descent) lateral error.
+    capture_error: 0.15
+    descent_error: 0.21
+    # Software rendering may run at 0.2-0.4 real-time factor.  A fresh frame
+    # drives only a short bounded pulse; the longer visibility timeout avoids
+    # treating the normal inter-frame gap as a lost target and climbing away.
+    visual_command_freshness_s: 1.00
+    descent_command_freshness_s: 4.00
+    near_deck_descent_rate_mps: 0.10
+    near_deck_freshness_margin_m: 0.55
+    visual_reacquire_hold_s: 15.0
+    tag_timeout_s: 6.0
+    pose_timeout_s: 3.0
+
+air_ground_mission:
+  ros__parameters:
+    # Stable evidence identity for this surveyed SIL world and route.  Real
+    # deployments still require a separate site-owned identifier and sign-off.
+    mission_plan_validated: true
+    mission_plan_id: SIL-AIR-GROUND-COOP-V1
+    simulation_lifecycle: true
+    require_system_ready: true
+    system_health_timeout_s: 2.5
+    # ArduPilot can briefly report the pre-arm bit before redundant IMUs have
+    # converged. Hazardous lifecycle transitions require continuous readiness.
+    system_ready_hold_s: 5.0
+    preflight_ready_hold_s: 5.0
+    mission_gate_topic: /ugv/mission_gate
+    emergency_stop_topic: /system/emergency_stop
+    initial_ugv_x: -9.0
+    initial_ugv_y: -6.0
+    transit_ugv_x: 4.8
+    transit_ugv_y: 5.2
+    # Align the terminal heading with the direct approach (about 0.68 rad),
+    # avoiding a large forward-only Dubins loop near the north wall.
+    transit_ugv_yaw: 0.70
+    transit_uav_x: 4.2
+    transit_uav_y: 4.5
+    transit_uav_z: 3.2
+    # A long forward-only U-turn into the clear north lane leaves enough path
+    # for the complete moving descent; capture is forbidden if speed drops.
+    moving_ugv_x: -7.0
+    moving_ugv_y: 7.5
+    moving_ugv_yaw: 3.14159
+    # After capture on the westbound north lane, continue in the same heading
+    # instead of asking the forward-only Dubins planner to reverse or loop.
+    # The gentle south component returns the pair inside the boundary margin.
+    ride_ugv_x: -3.5
+    ride_ugv_y: 7.9
+    ride_ugv_yaw: 3.14159
+    start_dock_altitude_m: 2.6
+    # Wall-clock watchdogs remain fail-closed, but software-rendered Gazebo can
+    # run at 0.1-0.3 real-time factor. Real hardware keeps the 1.0 defaults.
+    timeout_scale: 8.0
+    # Route-specific budgets account for the forward-only Ackermann U-turn.
+    # A separate distance-progress watchdog below still detects a stalled
+    # controller much sooner than these end-to-end state deadlines.
+    state_timeout_overrides_json: '{"PARALLEL_TRANSIT": 300.0, "FOLLOW_MOVING_UGV": 240.0, "DOCK_MOVING": 140.0, "RIDE_AND_DECELERATE": 180.0}'
+    # Standard Nav2 SpeedLimit percentages expressed as fractions. They are
+    # applied before the closed-loop velocity smoother; the chassis adapter is
+    # only a downstream binary safety gate. Use a faster follow/U-turn envelope
+    # before reducing to the separately commissioned moving-dock speed.
+    follow_ugv_speed_scale: 0.25
+    docking_ugv_speed_scale: 0.15
+    # Keep cruise authority while path recovery is needed, then reduce speed
+    # from the measured remaining distance instead of wall-clock time.
+    ride_final_ugv_speed_scale: 0.08
+    ride_slowdown_distance_m: 2.0
+    # Moving descent starts only after the Ackermann chassis has completed its
+    # turn and established a low-yaw-rate straight deck trajectory.
+    moving_dock_max_yaw_error_rad: 0.35
+    moving_dock_max_yaw_rate_rps: 0.20
+    # Schmitt-style entry/exit hysteresis: precision descent may start only
+    # inside this tighter envelope for a continuous hold, while the wider
+    # limits above remain the immediate go-around boundary after entry.
+    moving_dock_entry_max_yaw_error_rad: 0.20
+    moving_dock_entry_max_yaw_rate_rps: 0.12
+    moving_dock_entry_hold_s: 5.0
+    # AMCL updates are sparse in the software-rendered world; real hardware
+    # uses the strict profile value below.
+    ugv_map_pose_timeout_s: 30.0
+    ugv_progress_timeout_s: 20.0
+    ugv_progress_min_distance_m: 0.15
+    reset_stopped_speed_mps: 0.03
+    # Nav2 goal success is not mission completion. Require measured chassis
+    # speed to remain below this threshold before closing out the operation.
+    completion_stopped_speed_mps: 0.03
+    completion_stopped_hold_s: 2.0
+    arm_retry_s: 3.0
+    # A failed FCU ACK pauses retries long enough for SYS_STATUS/pre-arm
+    # telemetry to converge; the three-attempt hard ceiling remains unchanged.
+    arm_failure_cooldown_s: 15.0
+    arm_confirmation_timeout_s: 12.0
+    arm_max_attempts: 3
+    takeoff_retry_s: 5.0
+    takeoff_failure_cooldown_s: 15.0
+    # Rendering load reduces SITL real-time factor. Once ACKed, leave the FCU
+    # transaction undisturbed while motor spool and landed telemetry converge.
+    takeoff_confirmation_timeout_s: 60.0
+    takeoff_disarm_grace_s: 5.0
+    takeoff_max_attempts: 3
+    land_retry_s: 2.0
+    land_max_attempts: 3
+    # Above the observed stationary EKF noise (~0.03 m/s), but below the
+    # measured tight-curve speed (~0.049 m/s). Confirmation remains continuous.
+    moving_ugv_min_speed_mps: 0.04
+    moving_ugv_confirm_s: 2.0
+    moving_capture_max_altitude_m: 0.50

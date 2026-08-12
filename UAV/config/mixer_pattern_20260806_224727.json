@@ -1,0 +1,116 @@
+{
+  "scope": "real_pixhawk_no_prop_low_throttle_mixer_pattern",
+  "force_arm": false,
+  "throttle_pwm": 1150,
+  "output_cap_pwm": 1250,
+  "stages": [
+    {
+      "name": "diagonal_bias_positive",
+      "duration_s": 2.0,
+      "throttle_override": 1150,
+      "yaw_override": 1600,
+      "servo_output_raw": [
+        [
+          1102,
+          1102,
+          1102,
+          1102
+        ],
+        [
+          1133,
+          1133,
+          1133,
+          1133
+        ],
+        [
+          1448,
+          1434,
+          1200,
+          1150
+        ]
+      ],
+      "rc_channels": [
+        [
+          1500,
+          1500,
+          1150,
+          1600
+        ],
+        [
+          1500,
+          1500,
+          1150,
+          1600
+        ]
+      ],
+      "statustext": [],
+      "abort_reason": "OUTPUT_CAP_EXCEEDED_1448",
+      "elapsed_s": 0.8465129040000647,
+      "safe": false
+    }
+  ],
+  "initial_heartbeats": [
+    {
+      "armed": false,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3
+    },
+    {
+      "armed": false,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3
+    },
+    {
+      "armed": false,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3
+    },
+    {
+      "armed": false,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3
+    },
+    {
+      "armed": false,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3
+    }
+  ],
+  "armed_heartbeats": [
+    {
+      "armed": true,
+      "base_mode": 209,
+      "custom_mode": 0,
+      "system_status": 3
+    },
+    {
+      "armed": true,
+      "base_mode": 209,
+      "custom_mode": 0,
+      "system_status": 3
+    },
+    {
+      "armed": true,
+      "base_mode": 209,
+      "custom_mode": 0,
+      "system_status": 3
+    }
+  ],
+  "normal_arm_confirmed": true,
+  "safety_stop": "OUTPUT_CAP_EXCEEDED_1448",
+  "final_heartbeats": [
+    {
+      "armed": true,
+      "base_mode": 209,
+      "custom_mode": 0,
+      "system_status": 4
+    }
+  ],
+  "final_disarmed": false,
+  "rc_overrides_released": true
+}

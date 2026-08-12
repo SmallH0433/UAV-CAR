@@ -1,0 +1,67 @@
+version: 1
+updated: 2026-08-07
+scope: offline_and_sitl_only
+flight_use_approved: false
+
+hardware:
+  gps: QSDZ_u-blox_NEO-M9N
+  optical_flow_rangefinder: MicoAir_MTF-01P
+  camera: IMX296
+  companion: Raspberry_Pi_4B
+  autopilot: Pixhawk_fmuv3_ArduCopter_4.7
+
+target:
+  family: tag36h11
+  id: 0
+  size_m: 0.135
+
+tracker:
+  alpha: 0.65
+  beta: 0.08
+  max_residual_m: 0.25
+  min_dt_s: 0.02
+  max_dt_s: 0.5
+  acquire_count: 5
+
+controller:
+  mode: FOLLOW_XY
+  coordinate_frame: MAV_FRAME_LOCAL_NED
+  command_rate_hz: 10
+  kp_xy: 0.4
+  deadband_m: 0.05
+  max_speed_mps: 0.20
+  max_accel_mps2: 0.20
+  max_feedforward_mps: 0.50
+  vertical_velocity_mps: 0.0
+  yaw_rate_rad_s: 0.0
+
+safety:
+  predict_until_s: 0.25
+  hold_after_s: 0.70
+  rc_enable_required: true
+  guided_mode_required: true
+  ch7_auto_guided: true
+  guided_confirmation_heartbeats: 3
+  guided_request_timeout_s: 3.0
+  guided_request_retry_s: 0.5
+  allowed_entry_modes: [ALT_HOLD, LOITER, POSHOLD]
+  pilot_mode_override_latched: true
+  pilot_stick_override:
+    channels: [1, 2, 4]
+    threshold_pwm: 150
+    debounce_s: 0.20
+    throttle_channel_ignored: true
+  reenable_requires_ch7_low_then_high: true
+  restore_entry_mode_on_ch7_off: true
+  ekf_position_required: true
+  battery_telemetry_required: true
+  altitude_gate_required: true
+  auto_arm: false
+  auto_takeoff: false
+  auto_land_on_target_loss: false
+
+known_flight_blockers:
+  - BATT_MONITOR_is_zero
+  - camera_extrinsics_not_physically_measured
+  - range_correction_not_validated_above_0_87m
+  - GPS_flow_rangefinder_live_telemetry_not_yet_audited

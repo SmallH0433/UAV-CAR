@@ -1,0 +1,289 @@
+/**:
+  ros__parameters:
+    # Every simulation-side custom node uses Gazebo /clock for stamped data/TF.
+    # Control loops and safety watchdogs are scheduled by a steady clock, so a
+    # low, paused or reset simulation clock cannot delay a fail-closed action.
+    use_sim_time: true
+
+uav_mavlink_bridge:
+  ros__parameters:
+    connection: udpin:0.0.0.0:14551
+    baud: 57600
+    command_topic: /uav/cmd_vel
+    odom_topic: /uav/odom
+    odom_frame_id: uav_odom
+    base_frame_id: uav_base_link
+    # The mission enables velocity streaming only after positive airborne
+    # telemetry. A ground-level stream can cancel ArduPilot NAV_TAKEOFF.
+    command_enabled: false
+    max_xy_mps: 1.0
+    max_z_mps: 0.5
+    max_yaw_rate_rps: 0.8
+    command_timeout_s: 0.4
+    heartbeat_timeout_s: 6.0
+    telemetry_stream_max_attempts: 3
+    # Read back the safety-critical FCU parameters before declaring flight
+    # readiness. Parameter drift blocks arming; the companion never writes it.
+    required_parameters_json: '{"ARMING_CHECK": 1.0, "DISARM_DELAY": 5.0}'
+    required_parameter_tolerance: 0.001
+    parameter_attestation_retry_s: 1.0
+    parameter_attestation_period_s: 10.0
+    # Simulation only: mission orchestration may arm/take off/land SITL.
+    allow_lifecycle_commands: true
+    allow_mode_commands: true
+    allow_land_command: true
+    takeoff_altitude_m: 2.8
+
+ugv_command_gateway:
+  ros__parameters:
+    input_topic: /ugv/cmd_vel
+    output_topic: /ugv/sim/cmd_vel
+    command_enabled: true
+    max_linear_mps: 1.0
+    max_angular_rps: 1.0
+    command_timeout_s: 0.5
+
+ugv_control_mux:
+  ros__parameters:
+    navigation_topic: /cmd_vel
+    teleop_topic: /ugv/teleop/cmd_vel
+    output_topic: /ugv/control/cmd_vel
+    mission_status_topic: /mission/status
+    mission_gate_topic: /ugv/mission_gate
+    operator_heartbeat_topic: /ugv/operator/heartbeat
+    speed_gate_topic: /ugv/speed_scale
+    emergency_stop_topic: /system/emergency_stop
+    command_enabled: true
+    command_timeout_s: 0.35
+    mission_status_timeout_s: 0.75
+    mission_gate_timeout_s: 0.50
+    operator_timeout_s: 0.60
+    publish_rate_hz: 30.0
+
+system_supervisor:
+  ros__parameters:
+    source_timeout_s: 2.5
+    low_battery_pct: 20.0
+    critical_battery_pct: 10.0
+    stopped_speed_mps: 0.03
+    required_sources_json: '["mission", "mavlink", "perception", "command_mux", "ugv_control_mux", "chassis_adapter", "ugv_gateway"]'
+    external_estop_topic: /safety/external_estop
+    external_estop_required: false
+    external_estop_timeout_s: 0.30
+    startup_grace_s: 8.0
+    event_log_path: ~/.local/state/air-ground/sim-system-events.jsonl
+    event_log_required: false
+    auto_abort_mission: true
+    # Software rendering has multi-second sensor frame gaps; navigation still
+    # stops immediately, while the system latch requires a sustained outage.
+    critical_fault_hold_s: 3.0
+    # Gazebo currently runs at roughly 0.12 real-time factor on the reference
+    # software renderer.  The observed SITL LAND-to-disarm interval is ~21 s;
+    # 30 s preserves a bounded fail-closed deadline with scheduling margin.
+    # The real profile deliberately remains at 8 s and must be HIL-tuned.
+    moving_capture_armed_timeout_s: 30.0
+    moving_capture_max_altitude_m: 0.65
+
+vision_input_monitor:
+  ros__parameters:
+    image_topic: /vision/image_raw
+    stale_after_s: 1.0
+    reliable_qos: true
+
+apriltag_tracker:
+  ros__parameters:
+    image_topic: /vision/image_raw
+    command_topic: /uav/follow/cmd_vel
+    telemetry_topic: /uav/mavlink/status
+    debug_image_topic: /apriltag/debug_image
+    tag_id: 0
+    rc_channel: 7
+    rc_enable_pwm: 1700
+    allow_service_enable: true
+    min_altitude_m: 1.0
+    gain: 0.8
+    deadband: 0.06
+    max_xy_mps: 0.6
+    # Software-rendered WSL camera normally delivers 3-10 FPS.
+    # WSLg software rendering can deliver the full IMX296 frame at only
+    # 1--3 Hz.  Keep the last valid detection long enough to bridge a dropped
+    # rendered frame; the real profile below remains deliberately stricter.
+    detection_timeout_s: 2.0
+    tag_lost_abort_s: 6.0
+
+ugv_demo_motion:
+  ros__parameters:
+    # Legacy scripted motion is still routed through operator authority,
+    # Collision Monitor and every downstream watchdog.
+    command_topic: /ugv/teleop/cmd_vel
+    operator_heartbeat_topic: /ugv/operator/heartbeat
+    linear_mps: 0.20
+    turn_rps: 0.22
+    straight_s: 10.0
+    turn_s: 7.0
+
+uav_command_mux:
+  ros__parameters:
+    navigation_topic: /uav/nav/cmd_vel
+    follow_topic: /uav/follow/cmd_vel
+    docking_topic: /uav/docking/cmd_vel
+    output_topic: /uav/cmd_vel
+    navigation_status_topic: /uav/navigation/status
+    follow_status_topic: /apriltag/status
+    docking_status_topic: /uav/docking/status
+    command_timeout_s: 0.40
+    status_timeout_s: 1.0
+    command_enabled: true
+
+ugv_chassis_adapter:
+  ros__parameters:
+    adapter_type: ackermann
+    input_topic: /ugv/safety/cmd_vel
+    output_topic: /ugv/cmd_vel
+    command_enabled: true
+    command_timeout_s: 0.35
+    publish_rate_hz: 30.0
+    max_linear_mps: 0.80
+    max_angular_rps: 1.0
+    max_linear_accel_mps2: 0.80
+    max_angular_accel_rps2: 1.2
+    wheelbase_m: 0.650
+    max_steering_angle_rad: 0.41
+    min_linear_for_turn_mps: 0.03
+    require_speed_gate: true
+    speed_gate_timeout_s: 0.25
+    emergency_stop_topic: /system/emergency_stop
+
+uav_navigation:
+  ros__parameters:
+    odom_topic: /uav/odom
+    scan_topic: /uav/scan
+    goal_topic: /uav/nav/goal
+    command_topic: /uav/nav/cmd_vel
+    telemetry_topic: /uav/mavlink/status
+    perception_vector_topic: /uav/perception/avoidance_vector
+    perception_status_topic: /uav/perception/status
+    command_enabled: false
+    require_flight_ready: true
+    require_perception: true
+    odom_timeout_s: 0.6
+    scan_timeout_s: 0.6
+    perception_timeout_s: 1.5
+    max_xy_mps: 1.0
+    max_z_mps: 0.5
+    max_yaw_rate_rps: 0.6
+    minimum_navigation_altitude_m: 0.8
+    maximum_altitude_m: 12.0
+    geofence_radius_m: 20.0
+    obstacle_influence_distance_m: 3.0
+    obstacle_hard_stop_distance_m: 1.0
+    obstacle_repulsion_gain: 1.2
+    airspace_prediction_horizon_s: 1.8
+    airspace_margin_m: 0.20
+    no_fly_zones_json: "[]"
+    height_limit_zones_json: "[]"
+
+uav_ultrasonic_adapter:
+  ros__parameters:
+    pointcloud_topic: /uav/lidar3d/points
+    output_prefix: /uav/range
+    minimum_range_m: 0.20
+    maximum_range_m: 6.0
+    field_of_view_rad: 0.40
+    noise_stddev_m: 0.015
+    latency_ms: 18.0
+    dropout_probability: 0.01
+    random_seed: 41
+    status_stale_after_s: 0.8
+
+uav_perception:
+  ros__parameters:
+    scan_topic: /uav/scan
+    pointcloud_topic: /uav/lidar3d/points
+    depth_topic: /uav/stereo/depth/depth_image
+    range_prefix: /uav/range
+    influence_distance_m: 3.0
+    hard_stop_distance_m: 0.85
+    sensor_stale_after_s: 1.2
+    # Sensor age follows Gazebo time; a separate steady-clock deadline still
+    # detects a dead bridge or frozen renderer even when /clock is paused.
+    freshness_uses_ros_time: true
+    sensor_wall_stale_after_s: 8.0
+    point_stride: 4
+    depth_stride: 8
+    # Gazebo ray sensors can see the UAV's own arms / landing gear. Physical
+    # drivers apply the equivalent body mask using the calibrated CAD envelope.
+    self_filter_radius_m: 0.36
+
+uav_gimbal_controller:
+  ros__parameters:
+    setpoint_topic: /uav/gimbal/setpoint
+    yaw_command_topic: /uav/gimbal/cmd_yaw
+    pitch_command_topic: /uav/gimbal/cmd_pitch
+    yaw_min_rad: -2.967
+    yaw_max_rad: 2.967
+    pitch_min_rad: -0.436
+    pitch_max_rad: 1.5708
+    rate_limit_rad_s: 1.4
+
+uav_docking_controller:
+  ros__parameters:
+    command_topic: /uav/docking/cmd_vel
+    mode_topic: /uav/docking/mode
+    uav_odom_topic: /uav/odom
+    ugv_pose_topic: /amcl_pose
+    ugv_odom_topic: /odometry/filtered
+    apriltag_status_topic: /apriltag/status
+    perception_status_topic: /uav/perception/status
+    approach_altitude_m: 1.8
+    follow_altitude_m: 2.8
+    follow_distance_m: 1.6
+    deck_height_m: 0.39
+    capture_altitude_m: 0.60
+    max_xy_mps: 0.75
+    max_z_mps: 0.30
+    max_yaw_rate_rps: 0.45
+    coarse_gain: 0.55
+    visual_gain: 0.55
+    vertical_gain: 0.55
+    visual_deadband: 0.035
+    descent_rate_mps: 0.18
+    tag_timeout_s: 2.5
+    pose_timeout_s: 1.2
+    capture_error: 0.11
+    minimum_capture_tag_area_px: 1400.0
+
+web_gateway:
+  ros__parameters:
+    bind_address: 127.0.0.1
+    port: 8765
+    command_enabled: true
+    auth_token: ""
+    cors_origin: "*"
+    trust_proxy_headers: false
+    simulation_control_enabled: true
+    simulation_world: air_ground_cooperative
+    world_bounds_json: "[-15.0, 15.0, -11.0, 11.0]"
+    no_fly_zones_json: >-
+      [{"name":"tower_nfz","x":-3.7,"y":-1.2,"radius":1.55},{"name":"destination_nfz","x":8.7,"y":6.9,"radius":1.35}]
+    height_limit_zones_json: >-
+      [{"name":"low_ceiling","x_min":0.75,"x_max":5.25,"y_min":-4.6,"y_max":-2.4,"max_z":2.3}]
+    manual_uav_min_altitude_m: 0.8
+    manual_uav_max_altitude_m: 8.0
+    camera_max_rate_hz: 5.0
+    # Dashboard JPEG conversion is enabled only while an SSE viewer is
+    # connected. The UGV operator camera can then stay fully dormant during
+    # unattended SIL; UAV streams may remain active for perception health.
+    camera_stream_idle_timeout_s: 5.0
+    camera_stale_after_s: 12.0
+    jpeg_quality: 72
+    production_mode: false
+    auth_token_env: AIR_GROUND_CONTROL_TOKEN
+    require_request_id: false
+    require_operator_id: false
+    max_request_bytes: 16384
+    command_rate_limit_per_minute: 120
+    system_health_timeout_s: 2.5
+    audit_log_path: ~/.local/state/air-ground/sim-gateway-audit.jsonl
+    audit_required: false
+    audit_log_max_bytes: 20971520

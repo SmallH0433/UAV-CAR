@@ -1,0 +1,90 @@
+from glob import glob
+from setuptools import find_packages, setup
+
+
+package_name = "air_ground_sim"
+
+
+setup(
+    name=package_name,
+    version="0.4.0",
+    packages=find_packages(exclude=["test"]),
+    data_files=[
+        ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
+        (
+            "share/" + package_name,
+            [
+                "package.xml",
+                "README.md",
+                "THIRD_PARTY_NOTICES.md",
+                "DEPLOYMENT_SIMULATION.md",
+                "COOPERATIVE_MISSION.md",
+                "REAL_HARDWARE_MIGRATION.md",
+                "REQUIREMENTS_TRACEABILITY.md",
+                "PRODUCTION_READINESS.md",
+                "SAFETY.md",
+                "SECURITY.md",
+                "QUALITY_DECLARATION.md",
+                "CHANGELOG.rst",
+            ],
+        ),
+        ("share/" + package_name + "/launch", glob("launch/*.launch.py")),
+        ("share/" + package_name + "/config", glob("config/*.yaml")),
+        ("share/" + package_name + "/config", glob("config/*.parm")),
+        ("share/" + package_name + "/maps", glob("maps/*.*")),
+        ("share/" + package_name + "/behavior_trees", glob("behavior_trees/*.xml")),
+        ("share/" + package_name + "/rviz", glob("rviz/*.rviz")),
+        ("share/" + package_name + "/worlds", glob("worlds/*.sdf")),
+        (
+            "share/" + package_name + "/scripts",
+            glob("scripts/*.sh") + glob("scripts/*.py"),
+        ),
+        ("share/" + package_name + "/deploy/systemd", glob("deploy/systemd/*")),
+        ("share/" + package_name + "/deploy/env", glob("deploy/env/*")),
+        ("share/" + package_name + "/deploy/nginx", glob("deploy/nginx/*")),
+        ("share/" + package_name + "/security", glob("security/*")),
+        ("share/" + package_name + "/models/ground_vehicle", glob("models/ground_vehicle/*.*")),
+        (
+            "share/" + package_name + "/models/ground_vehicle/materials/textures",
+            glob("models/ground_vehicle/materials/textures/*"),
+        ),
+        ("share/" + package_name + "/models/uav_camera_rig", glob("models/uav_camera_rig/*.*")),
+        (
+            "share/" + package_name + "/models/hunter_ackermann",
+            glob("models/hunter_ackermann/*.*"),
+        ),
+        ("share/" + package_name + "/models/astra_oak_tree", glob("models/astra_oak_tree/*.*")),
+        ("share/" + package_name + "/models/astra_pine_tree", glob("models/astra_pine_tree/*.*")),
+    ],
+    install_requires=["setuptools"],
+    tests_require=["pytest"],
+    zip_safe=True,
+    maintainer="Air Ground Project",
+    maintainer_email="project@example.com",
+    description="Migration-oriented ROS 2 simulation for cooperative UAV and UGV autonomy.",
+    license="MIT",
+    entry_points={
+        "console_scripts": [
+            "uav_mavlink_bridge = air_ground_sim.uav_mavlink_bridge:main",
+            "ugv_command_gateway = air_ground_sim.ugv_command_gateway:main",
+            "vision_input_monitor = air_ground_sim.vision_input_monitor:main",
+            "apriltag_tracker = air_ground_sim.apriltag_tracker:main",
+            "ugv_demo_motion = air_ground_sim.ugv_demo_motion:main",
+            "sim_control_panel = air_ground_sim.sim_control_panel:main",
+            "ugv_chassis_adapter = air_ground_sim.ugv_chassis_adapter:main",
+            "uav_navigation = air_ground_sim.uav_navigation:main",
+            "uav_command_mux = air_ground_sim.uav_command_mux:main",
+            "uav_ultrasonic_adapter = air_ground_sim.uav_ultrasonic_adapter:main",
+            "uav_perception = air_ground_sim.uav_perception:main",
+            "uav_gimbal_controller = air_ground_sim.uav_gimbal_controller:main",
+            "uav_docking_controller = air_ground_sim.uav_docking_controller:main",
+            "air_ground_mission = air_ground_sim.air_ground_mission:main",
+            "web_gateway = air_ground_sim.web_gateway:main",
+            "ugv_control_mux = air_ground_sim.ugv_control_mux:main",
+            "system_supervisor = air_ground_sim.system_supervisor:main",
+            "docking_hardware_gateway = air_ground_sim.docking_hardware_gateway:main",
+            "air_ground_runtime_acceptance = air_ground_sim.runtime_acceptance:main",
+            "simulation_clock_relay = air_ground_sim.clock_relay:main",
+        ],
+    },
+)

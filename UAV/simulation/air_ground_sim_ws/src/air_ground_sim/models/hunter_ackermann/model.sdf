@@ -1,0 +1,226 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <model name="hunter_ackermann">
+    <self_collide>false</self_collide>
+
+    <!-- Hunter V2 dimensions used by the real driver and adapter:
+         wheelbase 0.650 m, track 0.605 m, wheel radius 0.165 m. -->
+    <link name="base_link">
+      <pose>0 0 0.27 0 0 0</pose>
+      <inertial>
+        <mass>46.0</mass>
+        <inertia>
+          <ixx>1.55</ixx><iyy>2.75</iyy><izz>3.60</izz>
+        </inertia>
+      </inertial>
+      <collision name="body_collision">
+        <geometry><box><size>0.82 0.54 0.18</size></box></geometry>
+      </collision>
+      <visual name="body_visual">
+        <geometry><box><size>0.82 0.54 0.18</size></box></geometry>
+        <material>
+          <ambient>0.03 0.12 0.16 1</ambient>
+          <diffuse>0.05 0.28 0.36 1</diffuse>
+          <specular>0.08 0.08 0.08 1</specular>
+        </material>
+      </visual>
+      <visual name="front_bumper">
+        <pose>0.45 0 -0.03 0 0 0</pose>
+        <geometry><box><size>0.08 0.62 0.10</size></box></geometry>
+        <material><ambient>0.04 0.04 0.04 1</ambient><diffuse>0.08 0.08 0.08 1</diffuse></material>
+      </visual>
+      <visual name="landing_pad">
+        <pose>-0.05 0 0.105 0 0 0</pose>
+        <geometry><box><size>0.74 0.64 0.018</size></box></geometry>
+        <material><ambient>0.8 0.8 0.8 1</ambient><diffuse>0.9 0.9 0.9 1</diffuse></material>
+      </visual>
+      <collision name="landing_pad_collision">
+        <pose>-0.05 0 0.105 0 0 0</pose>
+        <geometry><box><size>0.74 0.64 0.018</size></box></geometry>
+        <surface>
+          <friction><ode><mu>1.4</mu><mu2>1.4</mu2></ode></friction>
+          <contact><ode><kp>1000000</kp><kd>100</kd></ode></contact>
+        </surface>
+      </collision>
+      <visual name="apriltag_id0">
+        <pose>-0.05 0 0.115 0 0 0</pose>
+        <geometry><plane><normal>0 0 1</normal><size>0.36 0.36</size></plane></geometry>
+        <material>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
+          <pbr>
+            <metal>
+              <albedo_map>model://ground_vehicle/materials/textures/tag36h11_id0.png</albedo_map>
+              <metalness>0.0</metalness><roughness>1.0</roughness>
+            </metal>
+          </pbr>
+        </material>
+      </visual>
+    </link>
+
+    <link name="front_left_steering_link">
+      <pose>0.325 0.3025 0.165 0 0 0</pose>
+      <inertial><mass>0.35</mass><inertia><ixx>0.002</ixx><iyy>0.002</iyy><izz>0.002</izz></inertia></inertial>
+      <visual name="hub"><geometry><cylinder><radius>0.035</radius><length>0.08</length></cylinder></geometry></visual>
+    </link>
+    <link name="front_right_steering_link">
+      <pose>0.325 -0.3025 0.165 0 0 0</pose>
+      <inertial><mass>0.35</mass><inertia><ixx>0.002</ixx><iyy>0.002</iyy><izz>0.002</izz></inertia></inertial>
+      <visual name="hub"><geometry><cylinder><radius>0.035</radius><length>0.08</length></cylinder></geometry></visual>
+    </link>
+
+    <link name="front_left_wheel">
+      <pose>0.325 0.3025 0.165 -1.57079632679 0 0</pose>
+      <inertial><mass>2.2</mass><inertia><ixx>0.035</ixx><iyy>0.035</iyy><izz>0.060</izz></inertia></inertial>
+      <collision name="collision">
+        <geometry><cylinder><radius>0.165</radius><length>0.08</length></cylinder></geometry>
+        <surface><friction><ode><mu>0.8</mu><mu2>1.4</mu2><fdir1>0 0 1</fdir1></ode></friction></surface>
+      </collision>
+      <visual name="visual"><geometry><cylinder><radius>0.165</radius><length>0.08</length></cylinder></geometry><material><ambient>0.02 0.02 0.02 1</ambient><diffuse>0.05 0.05 0.05 1</diffuse></material></visual>
+    </link>
+    <link name="front_right_wheel">
+      <pose>0.325 -0.3025 0.165 -1.57079632679 0 0</pose>
+      <inertial><mass>2.2</mass><inertia><ixx>0.035</ixx><iyy>0.035</iyy><izz>0.060</izz></inertia></inertial>
+      <collision name="collision">
+        <geometry><cylinder><radius>0.165</radius><length>0.08</length></cylinder></geometry>
+        <surface><friction><ode><mu>0.8</mu><mu2>1.4</mu2><fdir1>0 0 1</fdir1></ode></friction></surface>
+      </collision>
+      <visual name="visual"><geometry><cylinder><radius>0.165</radius><length>0.08</length></cylinder></geometry><material><ambient>0.02 0.02 0.02 1</ambient><diffuse>0.05 0.05 0.05 1</diffuse></material></visual>
+    </link>
+    <link name="rear_left_wheel">
+      <pose>-0.325 0.3025 0.165 -1.57079632679 0 0</pose>
+      <inertial><mass>2.2</mass><inertia><ixx>0.035</ixx><iyy>0.035</iyy><izz>0.060</izz></inertia></inertial>
+      <collision name="collision">
+        <geometry><cylinder><radius>0.165</radius><length>0.08</length></cylinder></geometry>
+        <surface><friction><ode><mu>0.8</mu><mu2>1.4</mu2><fdir1>0 0 1</fdir1></ode></friction></surface>
+      </collision>
+      <visual name="visual"><geometry><cylinder><radius>0.165</radius><length>0.08</length></cylinder></geometry><material><ambient>0.02 0.02 0.02 1</ambient><diffuse>0.05 0.05 0.05 1</diffuse></material></visual>
+    </link>
+    <link name="rear_right_wheel">
+      <pose>-0.325 -0.3025 0.165 -1.57079632679 0 0</pose>
+      <inertial><mass>2.2</mass><inertia><ixx>0.035</ixx><iyy>0.035</iyy><izz>0.060</izz></inertia></inertial>
+      <collision name="collision">
+        <geometry><cylinder><radius>0.165</radius><length>0.08</length></cylinder></geometry>
+        <surface><friction><ode><mu>0.8</mu><mu2>1.4</mu2><fdir1>0 0 1</fdir1></ode></friction></surface>
+      </collision>
+      <visual name="visual"><geometry><cylinder><radius>0.165</radius><length>0.08</length></cylinder></geometry><material><ambient>0.02 0.02 0.02 1</ambient><diffuse>0.05 0.05 0.05 1</diffuse></material></visual>
+    </link>
+
+    <joint name="front_left_steering_joint" type="revolute">
+      <parent>base_link</parent><child>front_left_steering_link</child>
+      <axis><xyz>0 0 1</xyz><limit><lower>-0.52</lower><upper>0.52</upper><velocity>1.5</velocity><effort>80</effort></limit></axis>
+    </joint>
+    <joint name="front_right_steering_joint" type="revolute">
+      <parent>base_link</parent><child>front_right_steering_link</child>
+      <axis><xyz>0 0 1</xyz><limit><lower>-0.52</lower><upper>0.52</upper><velocity>1.5</velocity><effort>80</effort></limit></axis>
+    </joint>
+    <joint name="front_left_wheel_joint" type="revolute">
+      <parent>front_left_steering_link</parent><child>front_left_wheel</child>
+      <!-- The wheel links are rolled -90 deg so positive local-Z joint
+           velocity propels the chassis along +X, matching ROS convention. -->
+      <axis><xyz>0 0 1</xyz><limit><lower>-1.0e16</lower><upper>1.0e16</upper></limit></axis>
+    </joint>
+    <joint name="front_right_wheel_joint" type="revolute">
+      <parent>front_right_steering_link</parent><child>front_right_wheel</child>
+      <axis><xyz>0 0 1</xyz><limit><lower>-1.0e16</lower><upper>1.0e16</upper></limit></axis>
+    </joint>
+    <joint name="rear_left_wheel_joint" type="revolute">
+      <parent>base_link</parent><child>rear_left_wheel</child>
+      <axis><xyz>0 0 1</xyz><limit><lower>-1.0e16</lower><upper>1.0e16</upper></limit></axis>
+    </joint>
+    <joint name="rear_right_wheel_joint" type="revolute">
+      <parent>base_link</parent><child>rear_right_wheel</child>
+      <axis><xyz>0 0 1</xyz><limit><lower>-1.0e16</lower><upper>1.0e16</upper></limit></axis>
+    </joint>
+
+    <link name="lidar_link">
+      <pose relative_to="base_link">0.30 0 0.18 0 0 0</pose>
+      <gravity>false</gravity>
+      <inertial><mass>0.20</mass><inertia><ixx>0.0004</ixx><iyy>0.0004</iyy><izz>0.0004</izz></inertia></inertial>
+      <visual name="visual"><geometry><cylinder><radius>0.045</radius><length>0.055</length></cylinder></geometry><material><ambient>0.04 0.04 0.04 1</ambient><diffuse>0.10 0.10 0.10 1</diffuse></material></visual>
+      <sensor name="lidar" type="gpu_lidar">
+        <topic>/model/ground_vehicle/scan</topic>
+        <gz_frame_id>laser_frame</gz_frame_id>
+        <always_on>true</always_on><update_rate>6</update_rate><visualize>false</visualize>
+        <lidar>
+          <scan><horizontal><samples>360</samples><resolution>1</resolution><min_angle>-3.14159265359</min_angle><max_angle>3.14159265359</max_angle></horizontal></scan>
+          <range><min>0.12</min><max>20.0</max><resolution>0.01</resolution></range>
+          <noise><type>gaussian</type><mean>0.0</mean><stddev>0.01</stddev></noise>
+        </lidar>
+      </sensor>
+    </link>
+    <joint name="lidar_mount" type="fixed"><parent>base_link</parent><child>lidar_link</child></joint>
+
+    <link name="front_camera_link">
+      <pose relative_to="base_link">0.39 0 0.08 0 0 0</pose>
+      <gravity>false</gravity>
+      <inertial><mass>0.08</mass><inertia><ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz></inertia></inertial>
+      <visual name="visual"><geometry><box><size>0.05 0.06 0.04</size></box></geometry><material><ambient>0.05 0.05 0.05 1</ambient><diffuse>0.10 0.10 0.10 1</diffuse></material></visual>
+      <sensor name="front_camera" type="camera">
+        <topic>/model/ground_vehicle/front_camera</topic>
+        <gz_frame_id>ugv_camera_link</gz_frame_id>
+        <!-- The navigation stack uses lidar, not this operator video. Keep the
+             camera dormant until the lazy dashboard bridge has a viewer. -->
+        <always_on>false</always_on><update_rate>4</update_rate><visualize>false</visualize>
+        <camera>
+          <horizontal_fov>1.3962634</horizontal_fov>
+          <image><width>320</width><height>180</height><format>R8G8B8</format></image>
+          <clip><near>0.08</near><far>30.0</far></clip>
+          <noise><type>gaussian</type><mean>0.0</mean><stddev>0.003</stddev></noise>
+        </camera>
+      </sensor>
+    </link>
+    <joint name="front_camera_mount" type="fixed"><parent>base_link</parent><child>front_camera_link</child></joint>
+
+    <link name="imu_link">
+      <pose relative_to="base_link">0 0 0.04 0 0 0</pose>
+      <gravity>false</gravity>
+      <inertial><mass>0.02</mass><inertia><ixx>0.00001</ixx><iyy>0.00001</iyy><izz>0.00001</izz></inertia></inertial>
+      <sensor name="imu" type="imu">
+        <topic>/model/ground_vehicle/imu</topic>
+        <gz_frame_id>imu_link</gz_frame_id>
+        <always_on>true</always_on><update_rate>50</update_rate>
+      </sensor>
+    </link>
+    <joint name="imu_mount" type="fixed"><parent>base_link</parent><child>imu_link</child></joint>
+
+    <plugin filename="gz-sim-ackermann-steering-system" name="gz::sim::systems::AckermannSteering">
+      <left_joint>front_left_wheel_joint</left_joint>
+      <left_joint>rear_left_wheel_joint</left_joint>
+      <right_joint>front_right_wheel_joint</right_joint>
+      <right_joint>rear_right_wheel_joint</right_joint>
+      <left_steering_joint>front_left_steering_joint</left_steering_joint>
+      <right_steering_joint>front_right_steering_joint</right_steering_joint>
+      <kingpin_width>0.605</kingpin_width>
+      <!-- Hunter-class minimum turning radius is approximately 1.5 m. -->
+      <steering_limit>0.41</steering_limit>
+      <steer_p_gain>8.0</steer_p_gain>
+      <wheel_base>0.650</wheel_base>
+      <wheel_separation>0.605</wheel_separation>
+      <wheel_radius>0.165</wheel_radius>
+      <topic>/model/ground_vehicle/cmd_vel</topic>
+      <odom_topic>/model/ground_vehicle/odometry</odom_topic>
+      <tf_topic>/model/ground_vehicle/tf</tf_topic>
+      <frame_id>odom</frame_id>
+      <child_frame_id>base_link</child_frame_id>
+      <odom_publish_frequency>30</odom_publish_frequency>
+      <min_velocity>-1.5</min_velocity><max_velocity>1.5</max_velocity>
+      <min_acceleration>-1.0</min_acceleration><max_acceleration>1.0</max_acceleration>
+      <min_jerk>-4.0</min_jerk><max_jerk>4.0</max_jerk>
+    </plugin>
+
+    <!-- Simulation model of a magnetic/mechanical docking latch. The Gazebo
+         system starts attached, so the mission controller always publishes a
+         detach command before the first flight. Re-attachment is requested
+         only inside the visual capture envelope, above hard deck contact. -->
+    <plugin filename="gz-sim-detachable-joint-system"
+            name="gz::sim::systems::DetachableJoint">
+      <parent_link>base_link</parent_link>
+      <child_model>uav</child_model>
+      <child_link>dock_link</child_link>
+      <detach_topic>/uav/dock/detach</detach_topic>
+      <attach_topic>/uav/dock/attach</attach_topic>
+      <output_topic>/uav/dock/detached</output_topic>
+      <suppress_child_warning>true</suppress_child_warning>
+    </plugin>
+  </model>
+</sdf>

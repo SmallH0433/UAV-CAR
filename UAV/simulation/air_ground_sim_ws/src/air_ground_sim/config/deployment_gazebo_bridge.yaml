@@ -1,0 +1,209 @@
+- ros_topic_name: /clock_raw
+  gz_topic_name: /clock
+  ros_type_name: rosgraph_msgs/msg/Clock
+  gz_type_name: gz.msgs.Clock
+  direction: GZ_TO_ROS
+  qos_profile: CLOCK
+
+- ros_topic_name: /vision/image_raw
+  gz_topic_name: /uav/downward/image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+  lazy: true
+
+- ros_topic_name: /vision/camera_info
+  gz_topic_name: /uav/downward/camera_info
+  ros_type_name: sensor_msgs/msg/CameraInfo
+  gz_type_name: gz.msgs.CameraInfo
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+  lazy: true
+
+- ros_topic_name: /ugv/sim/cmd_vel
+  gz_topic_name: /model/ground_vehicle/cmd_vel
+  ros_type_name: geometry_msgs/msg/Twist
+  gz_type_name: gz.msgs.Twist
+  direction: ROS_TO_GZ
+
+- ros_topic_name: /ugv/wheel/odometry
+  gz_topic_name: /model/ground_vehicle/odometry
+  ros_type_name: nav_msgs/msg/Odometry
+  gz_type_name: gz.msgs.Odometry
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+
+- ros_topic_name: /scan
+  gz_topic_name: /model/ground_vehicle/scan
+  ros_type_name: sensor_msgs/msg/LaserScan
+  gz_type_name: gz.msgs.LaserScan
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+
+- ros_topic_name: /ugv/imu/data
+  gz_topic_name: /model/ground_vehicle/imu
+  ros_type_name: sensor_msgs/msg/Imu
+  gz_type_name: gz.msgs.IMU
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+
+- ros_topic_name: /ugv/camera/image_raw
+  gz_topic_name: /model/ground_vehicle/front_camera
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+  lazy: true
+
+- ros_topic_name: /ugv/camera/camera_info
+  gz_topic_name: /model/ground_vehicle/camera_info
+  ros_type_name: sensor_msgs/msg/CameraInfo
+  gz_type_name: gz.msgs.CameraInfo
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+  lazy: true
+
+- ros_topic_name: /uav/scan
+  gz_topic_name: /model/uav/front_scan
+  ros_type_name: sensor_msgs/msg/LaserScan
+  gz_type_name: gz.msgs.LaserScan
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+
+# Two-axis gimbal camera and joint position commands.
+- ros_topic_name: /uav/gimbal/image_raw
+  gz_topic_name: /uav/gimbal/image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+  lazy: true
+
+- ros_topic_name: /uav/gimbal/camera_info
+  gz_topic_name: /uav/gimbal/camera_info
+  ros_type_name: sensor_msgs/msg/CameraInfo
+  gz_type_name: gz.msgs.CameraInfo
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+  lazy: true
+
+- ros_topic_name: /uav/gimbal/cmd_yaw
+  gz_topic_name: /uav/gimbal/cmd_yaw
+  ros_type_name: std_msgs/msg/Float64
+  gz_type_name: gz.msgs.Double
+  direction: ROS_TO_GZ
+
+- ros_topic_name: /uav/gimbal/cmd_pitch
+  gz_topic_name: /uav/gimbal/cmd_pitch
+  ros_type_name: std_msgs/msg/Float64
+  gz_type_name: gz.msgs.Double
+  direction: ROS_TO_GZ
+
+# Stereo images. Both simulated cameras use identical timing and calibration;
+# synchronization is performed by the consuming ROS 2 stereo pipeline.
+- ros_topic_name: /uav/stereo/left/image_raw
+  gz_topic_name: /uav/stereo/left/image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+  lazy: true
+
+- ros_topic_name: /uav/stereo/left/camera_info
+  gz_topic_name: /uav/stereo/left/camera_info
+  ros_type_name: sensor_msgs/msg/CameraInfo
+  gz_type_name: gz.msgs.CameraInfo
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+  lazy: true
+
+- ros_topic_name: /uav/stereo/right/image_raw
+  gz_topic_name: /uav/stereo/right/image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+  lazy: true
+
+- ros_topic_name: /uav/stereo/right/camera_info
+  gz_topic_name: /uav/stereo/right/camera_info
+  ros_type_name: sensor_msgs/msg/CameraInfo
+  gz_type_name: gz.msgs.CameraInfo
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+  lazy: true
+
+# Gazebo RGB-D output stands in for disparity-derived depth in simulation.
+- ros_topic_name: /uav/stereo/depth/image_raw
+  gz_topic_name: /uav/stereo/depth/image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+  lazy: true
+
+- ros_topic_name: /uav/stereo/depth/camera_info
+  gz_topic_name: /uav/stereo/depth/camera_info
+  ros_type_name: sensor_msgs/msg/CameraInfo
+  gz_type_name: gz.msgs.CameraInfo
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+  lazy: true
+
+- ros_topic_name: /uav/stereo/depth/depth_image
+  gz_topic_name: /uav/stereo/depth/depth_image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+  lazy: true
+
+- ros_topic_name: /uav/stereo/depth/points
+  gz_topic_name: /uav/stereo/depth/points
+  ros_type_name: sensor_msgs/msg/PointCloud2
+  gz_type_name: gz.msgs.PointCloudPacked
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+  lazy: true
+
+# 16-layer 3D lidar: LaserScan is useful for diagnostics, PointCloud2 drives
+# the three-dimensional avoidance fusion.
+- ros_topic_name: /uav/lidar3d/scan
+  gz_topic_name: /uav/lidar3d
+  ros_type_name: sensor_msgs/msg/LaserScan
+  gz_type_name: gz.msgs.LaserScan
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+
+- ros_topic_name: /uav/lidar3d/points
+  gz_topic_name: /uav/lidar3d/points
+  ros_type_name: sensor_msgs/msg/PointCloud2
+  gz_type_name: gz.msgs.PointCloudPacked
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+
+# Harmonic has no acoustic sonar renderer. The ultrasonic adapter projects the
+# shared spherical 3D geometry stream above into six narrow cones, then applies
+# independent noise, saturation, dropout and latency to each Range topic.
+
+# Docking latch commands. The Boolean reports the detachable state (true means
+# detached). A real latch driver implements the same ROS-facing contract.
+- ros_topic_name: /uav/dock/detach
+  gz_topic_name: /uav/dock/detach
+  ros_type_name: std_msgs/msg/Empty
+  gz_type_name: gz.msgs.Empty
+  direction: ROS_TO_GZ
+
+- ros_topic_name: /uav/dock/attach
+  gz_topic_name: /uav/dock/attach
+  ros_type_name: std_msgs/msg/Empty
+  gz_type_name: gz.msgs.Empty
+  direction: ROS_TO_GZ
+
+- ros_topic_name: /uav/dock/detached
+  gz_topic_name: /uav/dock/detached
+  # Gazebo Harmonic 8 publishes the literal states "attached" / "detached".
+  ros_type_name: std_msgs/msg/String
+  gz_type_name: gz.msgs.StringMsg
+  direction: GZ_TO_ROS

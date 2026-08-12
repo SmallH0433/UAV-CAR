@@ -1,0 +1,113 @@
+{
+  "scope": "disarmed_bench_command_preview_only",
+  "duration_s": 15.472336549000033,
+  "frames": 280,
+  "records": 280,
+  "valid_detections": 280,
+  "rejected_detections": 0,
+  "valid_rate_hz": 18.096814215051197,
+  "state_counts": {
+    "ACQUIRE": 4,
+    "PREVIEW_FOLLOW": 276
+  },
+  "distance_m": {
+    "count": 280,
+    "min": 0.7000164798425405,
+    "mean": 0.7001472249947074,
+    "median": 0.7001488798130231,
+    "max": 0.7003400529519676,
+    "stddev": 3.728680222216382e-05
+  },
+  "target_body_frd_x_m": {
+    "count": 280,
+    "min": 0.040552855284526144,
+    "mean": 0.04062301130167547,
+    "median": 0.040627129663121965,
+    "max": 0.04065517082648803,
+    "stddev": 1.1283367262669138e-05
+  },
+  "target_body_frd_y_m": {
+    "count": 280,
+    "min": -0.0034952624340980256,
+    "mean": -0.003435418678822654,
+    "median": -0.0034357122470968565,
+    "max": -0.0033954994608653534,
+    "stddev": 9.726267472066839e-06
+  },
+  "proposed_forward_mps": {
+    "count": 280,
+    "min": -8.471041745831199e-05,
+    "mean": -1.3561140728249794e-06,
+    "median": -1.9170885490628694e-07,
+    "max": 6.725654461231338e-05,
+    "stddev": 1.4025195354191884e-05
+  },
+  "proposed_right_mps": {
+    "count": 280,
+    "min": -9.149855777309916e-05,
+    "mean": 3.9367934619777565e-07,
+    "median": 9.045319013911382e-07,
+    "max": 5.500891695409927e-05,
+    "stddev": 1.3956692386868805e-05
+  },
+  "max_proposed_horizontal_speed_mps": 9.467411745926586e-05,
+  "speed_limit_mps": 0.2,
+  "incoming_message_counts": {
+    "SYS_STATUS": 33,
+    "POWER_STATUS": 33,
+    "MEMINFO": 33,
+    "NAV_CONTROLLER_OUTPUT": 33,
+    "MISSION_CURRENT": 33,
+    "GPS_RAW_INT": 33,
+    "AHRS2": 160,
+    "ATTITUDE": 160,
+    "SERVO_OUTPUT_RAW": 80,
+    "RC_CHANNELS": 80,
+    "AHRS": 48,
+    "GLOBAL_POSITION_INT": 48,
+    "VFR_HUD": 48,
+    "SYSTEM_TIME": 48,
+    "DISTANCE_SENSOR": 48,
+    "TERRAIN_REPORT": 48,
+    "OPTICAL_FLOW": 48,
+    "EKF_STATUS_REPORT": 48,
+    "VIBRATION": 48,
+    "BATTERY_STATUS": 48,
+    "HEARTBEAT": 32,
+    "TIMESYNC": 3,
+    "STATUSTEXT": 1,
+    "AUTOPILOT_VERSION_REQUEST": 1,
+    "REQUEST_DATA_STREAM": 14,
+    "COMMAND_LONG": 1,
+    "PARAM_VALUE": 1
+  },
+  "disarmed_heartbeat_samples": 21,
+  "armed_heartbeat_samples": 0,
+  "serial_link_receive_only": true,
+  "rc_authorization": {
+    "channel": 7,
+    "enable_pwm_min": 1800,
+    "disable_pwm_max": 1200,
+    "timeout_s": 0.5,
+    "enabled_records": 280,
+    "disabled_records": 0,
+    "pwm": {
+      "count": 280,
+      "min": 2000,
+      "mean": 2000.0,
+      "median": 2000.0,
+      "max": 2000,
+      "stddev": 0.0
+    },
+    "fail_closed": true
+  },
+  "mavlink_packets_encoded_offline": 280,
+  "mavlink_packets_transmitted": 0,
+  "parameter_write": false,
+  "mode_change": false,
+  "arm_command": false,
+  "motor_command": false,
+  "takeoff_command": false,
+  "land_command": false,
+  "flight_use_approved": false
+}

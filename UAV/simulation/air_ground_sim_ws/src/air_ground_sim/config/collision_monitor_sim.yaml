@@ -1,0 +1,56 @@
+collision_monitor:
+  ros__parameters:
+    use_sim_time: true
+    base_frame_id: base_link
+    odom_frame_id: odom
+    cmd_vel_in_topic: /ugv/control/cmd_vel
+    cmd_vel_out_topic: /ugv/safety/cmd_vel
+    state_topic: /ugv/collision_monitor/state
+    transform_tolerance: 0.25
+    source_timeout: 0.80
+    base_shift_correction: true
+    stop_pub_timeout: 1.0
+    polygons: [StopZone, SlowdownZone, FootprintApproach]
+    StopZone:
+      type: polygon
+      points: [0.72, 0.47, 0.72, -0.47, -0.58, -0.47, -0.58, 0.47]
+      action_type: stop
+      max_points: 3
+      visualize: true
+      polygon_pub_topic: /ugv/collision_monitor/stop_zone
+      enabled: true
+    SlowdownZone:
+      type: polygon
+      points: [1.45, 0.78, 1.45, -0.78, -0.72, -0.78, -0.72, 0.78]
+      action_type: slowdown
+      max_points: 3
+      slowdown_ratio: 0.35
+      visualize: true
+      polygon_pub_topic: /ugv/collision_monitor/slowdown_zone
+      enabled: true
+    FootprintApproach:
+      type: polygon
+      action_type: approach
+      footprint_topic: /local_costmap/published_footprint
+      time_before_collision: 1.2
+      simulation_time_step: 0.05
+      max_points: 3
+      visualize: false
+      enabled: true
+    observation_sources: [scan]
+    scan:
+      type: scan
+      topic: /scan
+      enabled: true
+
+lifecycle_manager_collision:
+  ros__parameters:
+    use_sim_time: true
+    autostart: true
+    # Software rendering can hold the lifecycle manager while Gazebo publishes
+    # multiple camera/point-cloud frames.  Keep the real profile at 2 s, but do
+    # not treat a transient SIL scheduling stall as a failed lifecycle bond.
+    bond_timeout: 8.0
+    attempt_respawn_reconnection: true
+    bond_respawn_max_duration: 10.0
+    node_names: [collision_monitor]

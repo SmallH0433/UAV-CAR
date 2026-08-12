@@ -1,0 +1,82 @@
+<?xml version="1.0"?>
+<!--
+  Gazebo Harmonic adaptation of AstraDroneOpen dynamic_avoidance.world and
+  obstacle_params.yaml. Moving obstacles use Harmonic's physical trajectory
+  follower system, so they have mass and collision instead of visual-only animation.
+-->
+<sdf version="1.9">
+  <world name="air_ground">
+    <physics name="1ms" type="ignore"><max_step_size>0.001</max_step_size><real_time_factor>1.0</real_time_factor></physics>
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors"><render_engine>ogre2</render_engine></plugin>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+    <plugin filename="gz-sim-navsat-system" name="gz::sim::systems::NavSat"/>
+    <scene><ambient>0.78 0.78 0.78 1</ambient><background>0.55 0.70 0.87 1</background><sky/></scene>
+    <spherical_coordinates>
+      <latitude_deg>22.1350000</latitude_deg><longitude_deg>113.5447296</longitude_deg>
+      <elevation>10</elevation><heading_deg>0</heading_deg><surface_model>EARTH_WGS84</surface_model>
+    </spherical_coordinates>
+    <light type="directional" name="sun"><pose>0 0 25 0 0 0</pose><cast_shadows>true</cast_shadows><diffuse>0.9 0.9 0.9 1</diffuse><direction>-0.5 0.2 -0.9</direction></light>
+
+    <model name="ground_plane"><static>true</static><link name="link">
+      <collision name="collision"><geometry><plane><normal>0 0 1</normal><size>70 70</size></plane></geometry></collision>
+      <visual name="visual"><geometry><plane><normal>0 0 1</normal><size>70 70</size></plane></geometry><material><ambient>0.38 0.40 0.38 1</ambient><diffuse>0.48 0.50 0.48 1</diffuse></material></visual>
+    </link></model>
+
+    <!-- Static objects retain the Astra dynamic-avoidance map positions. -->
+    <include><uri>model://astra_oak_tree</uri><name>Oak_tree_1</name><pose>8 8 0 0 0 0</pose></include>
+    <include><uri>model://astra_oak_tree</uri><name>Oak_tree_2</name><pose>8 -8 0 0 0 0</pose></include>
+    <include><uri>model://astra_oak_tree</uri><name>Oak_tree_3</name><pose>-5 12 0 0 0 0</pose></include>
+    <include><uri>model://astra_pine_tree</uri><name>Pine_Tree_1</name><pose>-8 -6 0 0 0 0</pose></include>
+    <include><uri>model://astra_pine_tree</uri><name>Pine_Tree_2</name><pose>-12 4 0 0 0 0</pose></include>
+    <model name="House_1"><pose>15 0 0 0 0 0</pose><static>true</static><link name="building">
+      <collision name="collision"><pose>0 0 3 0 0 0</pose><geometry><box><size>9 8 6</size></box></geometry></collision>
+      <visual name="visual"><pose>0 0 3 0 0 0</pose><geometry><box><size>9 8 6</size></box></geometry><material><diffuse>0.66 0.58 0.43 1</diffuse></material></visual>
+    </link></model>
+
+    <!-- Linear X patrol: Astra center (0,6), amplitude 3 m. -->
+    <model name="obstacle_cylinder_1"><pose>-3 6 2 0 0 0</pose><link name="obstacle"><velocity_decay><linear>0.35</linear><angular>0.35</angular></velocity_decay>
+      <inertial><mass>8</mass><inertia><ixx>1000</ixx><iyy>1000</iyy><izz>1</izz></inertia></inertial>
+      <collision name="collision"><geometry><cylinder><radius>0.55</radius><length>4</length></cylinder></geometry><surface><friction><ode><mu>0.02</mu><mu2>0.02</mu2></ode></friction></surface></collision>
+      <visual name="visual"><geometry><cylinder><radius>0.55</radius><length>4</length></cylinder></geometry><material><diffuse>0.92 0.22 0.12 1</diffuse></material></visual>
+      </link><plugin filename="gz-sim-trajectory-follower-system" name="gz::sim::systems::TrajectoryFollower"><link_name>obstacle</link_name><loop>true</loop><force>3</force><torque>10</torque><zero_vel_on_bearing_reached>true</zero_vel_on_bearing_reached><line><direction>0</direction><length>6</length></line></plugin>
+    </model>
+
+    <!-- Linear Y patrol: Astra center (-4,0), amplitude 4 m. -->
+    <model name="obstacle_cylinder_2"><pose>-4 -4 2 0 0 1.57079632679</pose><link name="obstacle"><velocity_decay><linear>0.35</linear><angular>0.35</angular></velocity_decay>
+      <inertial><mass>8</mass><inertia><ixx>1000</ixx><iyy>1000</iyy><izz>1</izz></inertia></inertial>
+      <collision name="collision"><geometry><cylinder><radius>0.55</radius><length>4</length></cylinder></geometry><surface><friction><ode><mu>0.02</mu><mu2>0.02</mu2></ode></friction></surface></collision>
+      <visual name="visual"><geometry><cylinder><radius>0.55</radius><length>4</length></cylinder></geometry><material><diffuse>0.95 0.47 0.08 1</diffuse></material></visual>
+      </link><plugin filename="gz-sim-trajectory-follower-system" name="gz::sim::systems::TrajectoryFollower"><link_name>obstacle</link_name><loop>true</loop><force>3</force><torque>10</torque><zero_vel_on_bearing_reached>true</zero_vel_on_bearing_reached><line><direction>0</direction><length>8</length></line></plugin>
+    </model>
+
+    <!-- Diagonal patrol: Astra center (5,-5), amplitude 3.5 m. -->
+    <model name="obstacle_cylinder_3"><pose>2.525 -7.475 2 0 0 0.78539816339</pose><link name="obstacle"><velocity_decay><linear>0.35</linear><angular>0.35</angular></velocity_decay>
+      <inertial><mass>8</mass><inertia><ixx>1000</ixx><iyy>1000</iyy><izz>1</izz></inertia></inertial>
+      <collision name="collision"><geometry><cylinder><radius>0.55</radius><length>4</length></cylinder></geometry><surface><friction><ode><mu>0.02</mu><mu2>0.02</mu2></ode></friction></surface></collision>
+      <visual name="visual"><geometry><cylinder><radius>0.55</radius><length>4</length></cylinder></geometry><material><diffuse>0.72 0.14 0.70 1</diffuse></material></visual>
+      </link><plugin filename="gz-sim-trajectory-follower-system" name="gz::sim::systems::TrajectoryFollower"><link_name>obstacle</link_name><loop>true</loop><force>3</force><torque>10</torque><zero_vel_on_bearing_reached>true</zero_vel_on_bearing_reached><line><direction>0</direction><length>7</length></line></plugin>
+    </model>
+
+    <!-- Circular patrol: Astra center (0,-2), radius 3 m. -->
+    <model name="obstacle_box_1"><pose>3 -2 1.5 0 0 0</pose><link name="obstacle"><velocity_decay><linear>0.35</linear><angular>0.35</angular></velocity_decay>
+      <inertial><mass>10</mass><inertia><ixx>1000</ixx><iyy>1000</iyy><izz>6</izz></inertia></inertial>
+      <collision name="collision"><geometry><box><size>1.4 1.4 3</size></box></geometry><surface><friction><ode><mu>0.02</mu><mu2>0.02</mu2></ode></friction></surface></collision>
+      <visual name="visual"><geometry><box><size>1.4 1.4 3</size></box></geometry><material><diffuse>0.10 0.42 0.90 1</diffuse></material></visual>
+      </link><plugin filename="gz-sim-trajectory-follower-system" name="gz::sim::systems::TrajectoryFollower"><link_name>obstacle</link_name><loop>true</loop><force>3</force><torque>10</torque><zero_vel_on_bearing_reached>true</zero_vel_on_bearing_reached><circle><radius>3</radius></circle></plugin>
+    </model>
+
+    <!-- Waypoint patrol from Astra obstacle_params.yaml. -->
+    <model name="obstacle_box_2"><pose>-6 4 1.5 0 0 0</pose><link name="obstacle"><velocity_decay><linear>0.35</linear><angular>0.35</angular></velocity_decay>
+      <inertial><mass>10</mass><inertia><ixx>1000</ixx><iyy>1000</iyy><izz>6</izz></inertia></inertial>
+      <collision name="collision"><geometry><box><size>1.4 1.4 3</size></box></geometry><surface><friction><ode><mu>0.02</mu><mu2>0.02</mu2></ode></friction></surface></collision>
+      <visual name="visual"><geometry><box><size>1.4 1.4 3</size></box></geometry><material><diffuse>0.08 0.72 0.50 1</diffuse></material></visual>
+      </link><plugin filename="gz-sim-trajectory-follower-system" name="gz::sim::systems::TrajectoryFollower"><link_name>obstacle</link_name><loop>true</loop><force>3</force><torque>10</torque><zero_vel_on_bearing_reached>true</zero_vel_on_bearing_reached><waypoints><waypoint>-6 4</waypoint><waypoint>-10 2</waypoint><waypoint>-6 0</waypoint><waypoint>-2 2</waypoint><waypoint>-6 4</waypoint></waypoints></plugin>
+    </model>
+
+    <include><uri>model://uav_camera_rig</uri><name>uav</name><pose>0 0 0.20 0 0 1.57079632679</pose></include>
+    <include><uri>model://ground_vehicle</uri><name>ground_vehicle</name><pose>2.0 0 0 0 0 3.14159265359</pose></include>
+  </world>
+</sdf>

@@ -1,0 +1,46 @@
+{
+  "probe": "MAV_CMD_ACTUATOR_TEST stop-value timeout-zero",
+  "motion_requested": false,
+  "ack": 3,
+  "statustext": [],
+  "initial_heartbeats": [
+    {
+      "armed": false,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3
+    },
+    {
+      "armed": false,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3
+    },
+    {
+      "armed": false,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3
+    },
+    {
+      "armed": false,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3
+    },
+    {
+      "armed": false,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3
+    }
+  ],
+  "final_armed_flags": [
+    false,
+    false,
+    false,
+    false,
+    false
+  ],
+  "final_disarmed": true
+}

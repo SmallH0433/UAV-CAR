@@ -1,0 +1,88 @@
+# SAFE TEMPLATE -- the mission service rejects start until a site owner has
+# surveyed every coordinate/airspace rule and changes both fields below.
+uav_mavlink_bridge:
+  ros__parameters:
+    # Enable only after Pixhawk HIL confirms RC override, mode ACK handling,
+    # landing failsafes and the approved mission-abort procedure.
+    allow_mode_commands: false
+    allow_land_command: false
+
+air_ground_mission:
+  ros__parameters:
+    mission_plan_validated: false
+    mission_plan_id: UNCOMMISSIONED
+    simulation_lifecycle: false
+    require_system_ready: true
+    system_health_timeout_s: 1.0
+    system_ready_hold_s: 3.0
+    preflight_ready_hold_s: 3.0
+    # Replace with surveyed map-frame coordinates during commissioning.
+    initial_ugv_x: 0.0
+    initial_ugv_y: 0.0
+    transit_ugv_x: 0.0
+    transit_ugv_y: 0.0
+    transit_ugv_yaw: 0.0
+    transit_uav_x: 0.0
+    transit_uav_y: 0.0
+    transit_uav_z: 2.5
+    moving_ugv_x: 0.0
+    moving_ugv_y: 0.0
+    moving_ugv_yaw: 0.0
+    ride_ugv_x: 0.0
+    ride_ugv_y: 0.0
+    ride_ugv_yaw: 0.0
+    start_dock_altitude_m: 2.5
+    timeout_scale: 1.0
+    # Recalculate these route deadlines from surveyed path length, approved
+    # chassis speed and recovery allowance during site commissioning.
+    state_timeout_overrides_json: '{"FOLLOW_MOVING_UGV": 180.0, "DOCK_MOVING": 140.0, "RIDE_AND_DECELERATE": 180.0}'
+    follow_ugv_speed_scale: 0.20
+    docking_ugv_speed_scale: 0.12
+    ride_final_ugv_speed_scale: 0.06
+    moving_capture_max_altitude_m: 0.50
+    ride_slowdown_distance_m: 2.0
+    moving_dock_max_yaw_error_rad: 0.25
+    moving_dock_max_yaw_rate_rps: 0.12
+    moving_dock_entry_max_yaw_error_rad: 0.15
+    moving_dock_entry_max_yaw_rate_rps: 0.08
+    moving_dock_entry_hold_s: 3.0
+    ugv_map_pose_timeout_s: 1.0
+    ugv_progress_timeout_s: 15.0
+    ugv_progress_min_distance_m: 0.20
+    reset_stopped_speed_mps: 0.03
+    completion_stopped_speed_mps: 0.03
+    completion_stopped_hold_s: 2.0
+    arm_retry_s: 3.0
+    arm_failure_cooldown_s: 15.0
+    arm_confirmation_timeout_s: 8.0
+    arm_max_attempts: 3
+    takeoff_retry_s: 5.0
+    takeoff_failure_cooldown_s: 10.0
+    takeoff_confirmation_timeout_s: 10.0
+    takeoff_disarm_grace_s: 3.0
+    takeoff_max_attempts: 3
+    land_retry_s: 2.0
+    land_max_attempts: 3
+
+uav_navigation:
+  ros__parameters:
+    # Empty rules are not a deployment approval. Populate from the surveyed
+    # site and cross-check against the flight controller's native geofence.
+    no_fly_zones_json: "[]"
+    height_limit_zones_json: "[]"
+
+uav_docking_controller:
+  ros__parameters:
+    # Calibrate from the physical deck reference, range-sensor mounting pose,
+    # contact switches and latch geometry before validating the mission plan.
+    capture_deck_range_m: 0.35
+
+web_gateway:
+  ros__parameters:
+    # Replace with surveyed map bounds and the same reviewed airspace rules
+    # used by uav_navigation before commissioning this plan.
+    world_bounds_json: "[-0.1, 0.1, -0.1, 0.1]"
+    no_fly_zones_json: "[]"
+    height_limit_zones_json: "[]"
+    manual_uav_min_altitude_m: 1.0
+    manual_uav_max_altitude_m: 3.0

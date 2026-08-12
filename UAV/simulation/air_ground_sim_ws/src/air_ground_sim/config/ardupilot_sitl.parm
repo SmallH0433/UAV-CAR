@@ -1,0 +1,14 @@
+# Deterministic parameters for ArduCopter's JSON + Gazebo SITL backend.
+# The SITL board exposes two populated IMUs and one empty compatibility slot.
+# Keeping the empty slot enabled makes the real ArduPilot pre-arm consistency
+# check correctly reject the vehicle, so only that unavailable slot is disabled.
+INS_USE3 0
+
+# Keep the full ArduPilot pre-arm suite enabled and shorten only the automatic
+# disarm delay that starts after ArduPilot itself has positively detected
+# touchdown. ArduCopter 4.6 has a compiled 2 s motor arming delay; this value
+# must remain strictly above it or auto-disarm can win the race before the
+# motor interlock opens. This is not an in-flight force-disarm bypass. The
+# moving-platform hard deadline remains independently enforced by ROS.
+ARMING_CHECK 1
+DISARM_DELAY 5

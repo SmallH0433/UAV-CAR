@@ -1,0 +1,162 @@
+version: 1
+updated: 2026-08-06
+scope: disarmed_bench_only
+
+camera:
+  model: IMX296
+  resolution: [1456, 1088]
+  calibration: imx296_debug/imx296_calibration_run4_17mm.yaml
+  calibration_rms_px: 0.3037015609
+  calibration_mean_error_px: 0.2157752395
+
+detector:
+  camera_fps: 30
+  threads: 4
+  quad_decimate: 3.0
+  offline_benchmark_hz: 16.547
+  benchmark_valid_ratio: 1.0
+  live_body_frd_benchmark_hz: 12.6814
+  benchmark_source: imx296_debug/apriltag_pipeline_benchmark_raw_20260806.json
+
+target:
+  family: tag36h11
+  id: 0
+  detector_tag_size_m: 0.135
+  range_correction: imx296_debug/range_correction_20260806.json
+  range_scale: 0.613586842370
+  range_offset_m: -0.010204131220
+  range_fit_max_abs_residual_m: 0.004361214
+  validated_distance_m: 0.555
+  validated_output_mean_m: 0.5553
+
+transport:
+  device: /dev/serial0
+  baud: 57600
+  companion_system_id: 191
+  companion_component_id: 191
+
+landing_target:
+  frame: MAV_FRAME_CAMERA_OPTICAL
+  frame_id: 27
+  position_valid: false
+  target_num: 0
+  purpose: conservative_default_profile
+
+nominal_body_frd_profile:
+  source: user_explicit_assumption
+  scope: disarmed_bench_and_sitl
+  physical_verification_skipped: true
+  extrinsics: imx296_debug/imx296_body_extrinsics_20260806.json
+  translation_body_frd_m: [0.0, 0.0, 0.0]
+  mount_roll_deg: 0.0
+  mount_pitch_deg: 0.0
+  aircraft_nose_in_image: left
+  mapping: body_frd_equals_minus_camera_x_minus_camera_y_plus_camera_z
+  frame: MAV_FRAME_BODY_FRD
+  frame_id: 12
+  position_valid: true
+  real_serial_bench_validated: true
+  flight_use_approved: false
+
+required_flight_controller_state:
+  armed: false
+  PLND_ENABLED: 1
+  PLND_TYPE: 1
+
+observed_not_applied_parameters:
+  PLND_ORIENT: 25
+  PLND_LAG: 0.02
+
+safety_gates:
+  allow_arm_command: false
+  allow_mode_change: false
+  allow_motor_command: false
+  allow_body_frd: disarmed_bench_and_sitl_only
+  allow_position_valid: disarmed_bench_and_sitl_only
+  allow_parameter_write: only_explicitly_authorized_PLND_activation_completed
+  known_yaw_observation: aircraft_nose_appears_at_image_left
+  offline_yaw_only_mapping: body_frd_equals_minus_camera_x_minus_camera_y_plus_camera_z
+  body_frd_flight_blocked: nominal_zero_extrinsics_are_user_declared_not_physically_measured
+
+latest_bench_evidence:
+  valid_detections: 45
+  landing_target_sent: 45
+  duration_s: 15
+  jsonl: imx296_debug/landing_target_live_consistent_20260806.jsonl
+  annotated_image: imx296_debug/landing_target_live_consistent_20260806.jpg
+
+nominal_body_frd_evidence:
+  unit_tests_passed: 4
+  offline_packets: 43
+  sitl_packets_sent: 51
+  real_serial_replay_packets_sent: 49
+  real_live_valid_detections: 179
+  real_live_landing_target_sent: 179
+  real_live_duration_s: 15
+  real_live_packet_span_s: 14.036333
+  real_live_rate_hz: 12.681375
+  real_live_distance_mean_m: 0.556631053
+  real_live_distance_min_m: 0.556557577
+  real_live_distance_max_m: 0.556668799
+  real_live_x_mean_m: 0.075941962
+  real_live_x_range_m: [0.075920152, 0.075951734]
+  real_live_y_mean_m: -0.014374604
+  real_live_y_range_m: [-0.014385322, -0.014352357]
+  real_live_z_mean_m: 0.551238894
+  real_live_z_range_m: [0.551166581, 0.551277249]
+  real_live_decision_margin_mean: 69.696059
+  real_live_hamming: 0
+  real_live_frame_id: 12
+  real_live_position_valid: true
+  jsonl: imx296_debug/landing_target_body_frd_final_10hz_20260806.jsonl
+  annotated_image: imx296_debug/landing_target_body_frd_final_10hz_20260806.jpg
+  flight_use_approved: false
+
+plnd_enabled_bench_evidence:
+  authorization: user_explicit
+  PLND_ENABLED: 1
+  PLND_TYPE: 1
+  parameter_backup: config/precision_landing_before_activation_20260806.json
+  gyro_health_after_reboot: 25/25
+  accel_health_after_reboot: 25/25
+  valid_detections: 177
+  landing_target_sent: 177
+  duration_s: 15
+  packet_span_s: 14.060488
+  rate_hz: 12.517346
+  distance_mean_m: 0.369593991
+  distance_min_m: 0.369584097
+  distance_max_m: 0.369609837
+  x_mean_m: 0.025391880
+  y_mean_m: -0.007223798
+  z_mean_m: 0.368649952
+  decision_margin_mean: 59.463710
+  hamming: 0
+  frame_id: 12
+  position_valid: true
+  jsonl: imx296_debug/landing_target_body_frd_plnd_enabled_final_20260806.jsonl
+  annotated_image: imx296_debug/landing_target_body_frd_plnd_enabled_final_20260806.jpg
+  armed_during_test: false
+  control_commands_sent: false
+  flight_use_approved: false
+
+real_command_bench_evidence:
+  authorization: user_explicit_propellers_removed_and_motor_area_clear
+  force_arm_used: false
+  mode_before_arm: STABILIZE
+  armed_confirmed_by_real_fc_heartbeat: true
+  armed_hold_s_max: 2
+  motor_output_samples: 5
+  motor_outputs_1_to_4_us: [1100, 1100, 1100, 1100]
+  physical_motor_rotation_confirmed: false
+  disarm_ack: 0
+  disarm_confirmed: true
+  takeoff_command_while_disarmed_ack: 4
+  land_command_while_disarmed_ack: 0
+  land_mode_observed_then_restored: true
+  final_mode: STABILIZE
+  final_armed: false
+  final_disarmed_heartbeat_samples: 8
+  takeoff_or_land_command_while_armed: false
+  evidence: config/pixhawk_command_bench_20260806.json
+  flight_use_approved: false

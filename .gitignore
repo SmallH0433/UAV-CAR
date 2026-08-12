@@ -1,0 +1,46 @@
+# ============================================
+# 1. 忽略符号链接和构建产物（解决 fatal 错误）
+# ============================================
+UAV/simulation/air_ground_sim_ws/log/latest
+UAV/simulation/air_ground_sim_ws/log/latest_build
+UAV/simulation/air_ground_sim_ws/build/
+UAV/simulation/air_ground_sim_ws/install/
+UAV/simulation/air_ground_sim_ws/log/
+
+# ============================================
+# 2. 忽略嵌套的 Git 仓库（解决 embedded repo 警告）
+# ============================================
+UAV/air_ground_open_source/01_flight_stack/ardupilot/
+UAV/air_ground_open_source/06_simulation/ardupilot_gazebo/
+
+# ============================================
+# 3. 忽略临时文件和日志
+# ============================================
+*.log
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ============================================
+# 4. 忽略 ROS/Colcon 构建产物
+# ============================================
+build/
+install/
+log/
+devel/
+.catkin_workspace
+.colcon/
+
+# ============================================
+# 5. 忽略其他大文件/二进制
+# ============================================
+*.pdf
+*.pgm
+*.png
+*.jpg
+*.jpeg

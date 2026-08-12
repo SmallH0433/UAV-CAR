@@ -1,0 +1,93 @@
+{
+  "scope": "disarmed_bench_command_preview_only",
+  "duration_s": 20.686862975999986,
+  "frames": 351,
+  "records": 351,
+  "valid_detections": 351,
+  "rejected_detections": 0,
+  "valid_rate_hz": 16.96728984028246,
+  "state_counts": {
+    "ACQUIRE": 4,
+    "PREVIEW_FOLLOW": 347
+  },
+  "distance_m": {
+    "count": 351,
+    "min": 0.7357017932831876,
+    "mean": 0.7358608764577074,
+    "median": 0.7358440476145905,
+    "max": 0.736353096323028,
+    "stddev": 6.819016133571282e-05
+  },
+  "target_body_frd_x_m": {
+    "count": 351,
+    "min": 0.04198425748993232,
+    "mean": 0.04201881497230302,
+    "median": 0.04201782293100184,
+    "max": 0.04204641525195335,
+    "stddev": 9.199398979226277e-06
+  },
+  "target_body_frd_y_m": {
+    "count": 351,
+    "min": -0.004763702534202964,
+    "mean": -0.004733577188919193,
+    "median": -0.004730822345080462,
+    "max": -0.004716751633135952,
+    "stddev": 7.918558119774468e-06
+  },
+  "proposed_forward_mps": {
+    "count": 351,
+    "min": -2.459820195917936e-05,
+    "mean": 1.9650817839449022e-06,
+    "median": -1.7643679798985092e-06,
+    "max": 7.053629892942156e-05,
+    "stddev": 1.3981891590200104e-05
+  },
+  "proposed_right_mps": {
+    "count": 351,
+    "min": -4.5255043003007215e-05,
+    "mean": -5.499242051766838e-07,
+    "median": 2.420155785797812e-06,
+    "max": 2.328078168684335e-05,
+    "stddev": 1.2056682201270878e-05
+  },
+  "max_proposed_horizontal_speed_mps": 7.131909389863107e-05,
+  "speed_limit_mps": 0.2,
+  "incoming_message_counts": {
+    "TERRAIN_REPORT": 52,
+    "OPTICAL_FLOW": 1719,
+    "DISTANCE_SENSOR": 1598,
+    "EKF_STATUS_REPORT": 52,
+    "VIBRATION": 52,
+    "SERVO_OUTPUT_RAW": 46,
+    "RC_CHANNELS": 46,
+    "AHRS2": 41,
+    "ATTITUDE": 41,
+    "AHRS": 51,
+    "GLOBAL_POSITION_INT": 51,
+    "VFR_HUD": 51,
+    "SYSTEM_TIME": 51,
+    "SYS_STATUS": 42,
+    "POWER_STATUS": 42,
+    "MEMINFO": 42,
+    "NAV_CONTROLLER_OUTPUT": 42,
+    "MISSION_CURRENT": 42,
+    "GPS_RAW_INT": 41,
+    "HEARTBEAT": 42,
+    "AUTOPILOT_VERSION_REQUEST": 4,
+    "REQUEST_DATA_STREAM": 14,
+    "STATUSTEXT": 1,
+    "TIMESYNC": 4
+  },
+  "disarmed_heartbeat_samples": 26,
+  "armed_heartbeat_samples": 0,
+  "serial_link_receive_only": true,
+  "mavlink_packets_encoded_offline": 351,
+  "mavlink_packets_transmitted": 0,
+  "parameter_write": false,
+  "mode_change": false,
+  "arm_command": false,
+  "motor_command": false,
+  "takeoff_command": false,
+  "land_command": false,
+  "flight_use_approved": false
+}

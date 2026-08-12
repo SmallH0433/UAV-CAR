@@ -1,0 +1,115 @@
+{
+  "input": "D:\\Codex\\UAV\\output\\follow_readiness_monitor_from_pi_20260807.jsonl",
+  "rows": 1198,
+  "bad_lines": 4,
+  "first_time": "2026-08-07T18:36:40.074844+08:00",
+  "last_time": "2026-08-07T19:26:38.900465+08:00",
+  "armed_samples": 30,
+  "armed_intervals": [
+    {
+      "start": "2026-08-07T19:02:30.554437+08:00",
+      "end": "2026-08-07T19:02:37.763252+08:00",
+      "sample_span_s": 7.208815813064575,
+      "samples": 8,
+      "modes": [
+        "STABILIZE"
+      ],
+      "rc7_pwm": {
+        "count": 8,
+        "min": 1000.0,
+        "mean": 1000.0,
+        "median": 1000.0,
+        "max": 1000.0
+      },
+      "range_m": {
+        "count": 8,
+        "min": 0.14,
+        "mean": 0.1525,
+        "median": 0.16,
+        "max": 0.16
+      },
+      "flow_quality": {
+        "count": 8,
+        "min": 110.0,
+        "mean": 113.375,
+        "median": 113.0,
+        "max": 118.0
+      },
+      "battery_voltage_v": {
+        "count": 8,
+        "min": 22.54,
+        "mean": 22.7675,
+        "median": 22.808,
+        "max": 22.848
+      },
+      "target_visible_samples": 0,
+      "target_acquired_samples": 0,
+      "ready_samples": 0,
+      "blockers": [
+        "APRILTAG_NOT_ACQUIRED",
+        "ENTRY_MODE_NOT_LOITER",
+        "HEIGHT_OUTSIDE_FOLLOW_GATE"
+      ],
+      "mavlink_transmitted_samples": 0,
+      "velocity_setpoint_sent_samples": 0
+    },
+    {
+      "start": "2026-08-07T19:05:23.581031+08:00",
+      "end": "2026-08-07T19:05:45.382080+08:00",
+      "sample_span_s": 21.801048517227173,
+      "samples": 22,
+      "modes": [
+        "STABILIZE"
+      ],
+      "rc7_pwm": {
+        "count": 22,
+        "min": 1000.0,
+        "mean": 1000.0,
+        "median": 1000.0,
+        "max": 1000.0
+      },
+      "range_m": {
+        "count": 22,
+        "min": 0.14,
+        "mean": 0.4186363636363637,
+        "median": 0.16,
+        "max": 1.28
+      },
+      "flow_quality": {
+        "count": 22,
+        "min": 104.0,
+        "mean": 109.4090909090909,
+        "median": 108.5,
+        "max": 116.0
+      },
+      "battery_voltage_v": {
+        "count": 22,
+        "min": 21.796,
+        "mean": 22.360772727272728,
+        "median": 22.409999999999997,
+        "max": 22.841
+      },
+      "target_visible_samples": 0,
+      "target_acquired_samples": 0,
+      "ready_samples": 0,
+      "blockers": [
+        "APRILTAG_NOT_ACQUIRED",
+        "ENTRY_MODE_NOT_LOITER",
+        "FLIGHT_CONTROLLER_HEARTBEAT_STALE",
+        "HEIGHT_OUTSIDE_FOLLOW_GATE"
+      ],
+      "mavlink_transmitted_samples": 0,
+      "velocity_setpoint_sent_samples": 0
+    }
+  ],
+  "all_modes": [
+    "LOITER",
+    "None",
+    "STABILIZE"
+  ],
+  "max_range_m_all": 1.28,
+  "target_acquired_samples_all": 0,
+  "ch7_high_samples_all": 0,
+  "mavlink_transmitted_any": false,
+  "velocity_setpoint_sent_any": false
+}

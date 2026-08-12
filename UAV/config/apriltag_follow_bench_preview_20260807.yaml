@@ -1,0 +1,175 @@
+version: 1
+date: 2026-08-07
+scope: disarmed_bench_command_preview_only
+flight_use_approved: false
+
+safety:
+  propellers_removed: user_confirmed
+  real_fc_disarmed_gate_samples: 5
+  real_fc_disarmed_heartbeats_total: 138
+  real_fc_armed_heartbeats: 0
+  serial_link_receive_only: true
+  mavlink_packets_transmitted: 0
+  parameter_write: false
+  mode_change: false
+  arm_command: false
+  motor_command: false
+  takeoff_command: false
+  land_command: false
+
+rc_authorization:
+  transmitter: RadioLink_AT9S_Pro
+  receiver: RadioLink_R9DS_SBUS
+  physical_switch: SwD
+  channel: 7
+  switch_up_pwm: 1000
+  switch_up_action: follow_disabled
+  switch_down_pwm: 2000
+  switch_down_action: follow_permitted
+  enable_pwm_min: 1800
+  disable_pwm_max: 1200
+  ambiguous_pwm_action: follow_disabled
+  stale_timeout_s: 0.5
+  stale_action: follow_disabled
+  pixhawk_rc7_option: 0
+  flight_mode_channel: 5
+  flight_mode_switch: SwC
+  fail_closed: true
+
+camera:
+  model: IMX296
+  resolution: [1456, 1088]
+  requested_fps: 30
+  detector_threads: 4
+  quad_decimate: 3.0
+  calibration: imx296_debug/imx296_calibration_run4_17mm.yaml
+  range_correction: imx296_debug/range_correction_20260806.json
+  nominal_extrinsics: imx296_debug/imx296_body_extrinsics_20260806.json
+
+target:
+  family: tag36h11
+  id: 0
+  size_m: 0.135
+
+controller:
+  coordinate_preview: BODY_FRD_and_LOCAL_NED
+  kp_xy: 0.4
+  deadband_m: 0.05
+  max_speed_mps: 0.20
+  max_accel_mps2: 0.20
+  hold_policy: immediate_zero_after_target_age_gt_0.70_s
+  proposed_only: true
+
+static_result:
+  duration_s: 20.686863
+  frames: 351
+  valid_detections: 351
+  rejected_detections: 0
+  valid_rate_hz: 16.967290
+  state_counts:
+    ACQUIRE: 4
+    PREVIEW_FOLLOW: 347
+  distance_mean_m: 0.735860876
+  distance_stddev_m: 0.000068190
+  target_body_frd_x_mean_m: 0.042018815
+  target_body_frd_y_mean_m: -0.004733577
+  max_proposed_horizontal_speed_mps: 0.000071319
+  result: static_centered_preview_passed
+
+dynamic_result:
+  duration_s_total: 100.965884
+  frames_total: 1747
+  valid_detections_total: 1406
+  rejected_detections_total: 0
+  forward_direction:
+    target_body_frd_x_max_m: 0.113914224
+    proposed_forward_max_mps: 0.047154509
+    result: positive_forward_sign_passed
+  right_direction:
+    target_body_frd_y_max_m: 0.099909430
+    proposed_right_max_mps: 0.079681140
+    result: positive_right_sign_passed
+  target_loss:
+    loss_segments: 3
+    max_target_age_s: 7.758228
+    preview_hold_records: 249
+    final_lost_speed_mps: 0.0
+    captured_boundary_residual_mps: 0.030276972
+    boundary_fix: acquire_and_hold_bypass_accel_limiter_and_force_exact_zero
+    regression_tests_passed: 15
+  max_proposed_horizontal_speed_mps: 0.099271034
+  speed_limit_mps: 0.20
+  result: dynamic_disarmed_preview_passed_after_hold_boundary_fix
+
+integrated_rc_gate_result:
+  scope: real_camera_real_rc_real_fc_receive_only_props_off_disarmed
+  switch_up_centered:
+    frames: 279
+    valid_detections: 279
+    rc_pwm: 1000
+    rc_disabled_records: 279
+    max_proposed_horizontal_speed_mps: 0.0
+  switch_down_centered:
+    frames: 280
+    valid_detections: 280
+    rc_pwm: 2000
+    preview_follow_records: 276
+    max_proposed_horizontal_speed_mps: 0.000094674
+  switch_down_offset:
+    frames: 277
+    valid_detections: 277
+    rc_pwm: 2000
+    target_body_frd_x_mean_m: 0.035907852
+    target_body_frd_y_mean_m: -0.062373677
+    proposed_forward_max_mps: 0.014401016
+    proposed_right_min_mps: -0.024989935
+    max_proposed_horizontal_speed_mps: 0.028814544
+  switch_up_same_offset:
+    frames: 275
+    valid_detections: 275
+    rc_pwm: 1000
+    rc_disabled_records: 275
+    proposed_forward_mps: 0.0
+    proposed_right_mps: 0.0
+    max_proposed_horizontal_speed_mps: 0.0
+  disarmed_heartbeats_total: 84
+  armed_heartbeats_total: 0
+  mavlink_packets_transmitted: 0
+  result: integrated_receive_only_rc_gate_passed
+
+flight_prerequisites_pending:
+  - configure_and_validate_battery_monitor
+  - establish_valid_horizontal_position_and_velocity_source
+  - correct_mtf01p_mavlink_system_id_and_telem2_forwarding
+  - measure_and_approve_camera_extrinsics_for_flight
+  - perform_stage_4_only_at_a_suitable_flight_site
+
+evidence:
+  static_log: output/follow_command_preview_20260807.jsonl
+  static_summary: output/follow_command_preview_20260807_summary.json
+  static_annotated_image: output/follow_command_preview_20260807.jpg
+  forward_dynamic_log: output/follow_command_preview_dynamic_20260807.jsonl
+  forward_dynamic_summary: output/follow_command_preview_dynamic_20260807_summary.json
+  forward_dynamic_annotated_image: output/follow_command_preview_dynamic_20260807.jpg
+  right_loss_dynamic_log: output/follow_command_preview_dynamic_right_loss_20260807.jsonl
+  right_loss_dynamic_summary: output/follow_command_preview_dynamic_right_loss_20260807_summary.json
+  right_loss_dynamic_annotated_image: output/follow_command_preview_dynamic_right_loss_20260807.jpg
+  dynamic_analysis: output/follow_command_preview_dynamic_analysis_20260807.json
+  rc_gate_authorization: config/rc_follow_authorization_20260807.json
+  rc_gate_off_centered: output/follow_rc_gate_off_20260807_summary.json
+  rc_gate_on_centered: output/follow_rc_gate_on_static_20260807_summary.json
+  rc_gate_on_offset: output/follow_rc_gate_on_forward_offset_retry_20260807_summary.json
+  rc_gate_off_same_offset: output/follow_rc_gate_off_offset_20260807_summary.json
+
+deployment:
+  raspberry_pi_script_sha256: 31c09cc9d15a03c6f0169deae439b92bca44750853ee35f2f1a3d1008348eb94
+  local_remote_hash_match: true
+  rc_gate_local_implementation:
+    status: deployed_and_real_rc_receive_only_validated
+    rc_follow_gate_sha256: 7065cc303413be3d51fcafcad546bfa037300b4383d37c4551b083de54161aff
+    follow_command_preview_sha256: 8a641cc2a22483badc1bbd5f1953561652cd3fdee4266104b5efb1f5778eef9c
+    tests_passed: 20
+    raspberry_pi_reachable_at_deployment_attempt: true
+    windows_pi_hash_match: true
+    real_rc_evidence: config/rc_follow_authorization_20260807.json
+    final_switch_state: SwD_up_pwm_1000_follow_disabled

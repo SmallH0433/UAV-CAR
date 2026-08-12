@@ -1,0 +1,18 @@
+{
+  "duration_s": 10.0,
+  "rate_hz": 10.0,
+  "records": 101,
+  "state_counts": {
+    "ACQUIRE": 4,
+    "FOLLOW_XY": 81,
+    "PREDICT_DECEL": 4,
+    "HOLD": 9,
+    "DISABLED": 3
+  },
+  "max_command_speed_mps": 0.15318394300458116,
+  "max_horizontal_error_m": 0.17575636652300117,
+  "target_outage_s": 1.0,
+  "hold_observed": true,
+  "rc_reenable_observed": true,
+  "real_mavlink_sent": false
+}

@@ -1,0 +1,26 @@
+{
+  "scope": "local_arducopter_sitl_only",
+  "endpoint": "udpin:127.0.0.1:14550",
+  "physical_vehicle_connected": false,
+  "duration_s": 32.0,
+  "rate_hz": 10.0,
+  "records": 321,
+  "state_counts": {
+    "ACQUIRE": 4,
+    "FOLLOW_XY": 265,
+    "PREDICT_DECEL": 5,
+    "HOLD": 23,
+    "DISABLED": 4,
+    "PILOT_OVERRIDE": 20
+  },
+  "max_command_speed_mps": 0.20000000000000004,
+  "max_follow_error_m": 0.2904730931282014,
+  "speed_limit_mps": 0.2,
+  "follow_error_limit_m": 0.3,
+  "target_loss_hold_observed": true,
+  "rc_disable_observed": true,
+  "pilot_mode_override_observed": true,
+  "follow_resumed_after_rc_cycle": true,
+  "landed_and_disarmed": true,
+  "passed": true
+}
