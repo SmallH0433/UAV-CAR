@@ -24,7 +24,7 @@ uav_mavlink_bridge:
     telemetry_stream_max_attempts: 3
     # Read back the safety-critical FCU parameters before declaring flight
     # readiness. Parameter drift blocks arming; the companion never writes it.
-    required_parameters_json: '{"ARMING_CHECK": 1.0, "DISARM_DELAY": 5.0}'
+    required_parameters_json: '{"ARMING_SKIPCHK": 0.0, "DISARM_DELAY": 5.0}'
     required_parameter_tolerance: 0.001
     parameter_attestation_retry_s: 1.0
     parameter_attestation_period_s: 10.0
