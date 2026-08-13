@@ -90,9 +90,13 @@ ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
 
 ## 实机待办
 
-- 用真实 `motor_driver`（WHEELTEC 串口协议）替换 `sim_motor_bridge`，话题契约不变：
-  订阅 `/wheel_speeds`（float32[4] rad/s，左前/右前/左后/右后），发布 `/motor_feedback`
-  （同序轮速 + 电压）。chassis_controller 里程计自动切到真实反馈。
+- ~~用真实 `motor_driver`（WHEELTEC 串口协议）替换 `sim_motor_bridge`~~ 已完成：
+  协议编解码在 `car_nodes/wheeltec_protocol.py`（0x7B/0x7D 帧、BCC 异或校验），
+  话题契约不变——订阅 `/wheel_speeds`（float32[4] rad/s，左前/右前/左后/右后），
+  发布 `/motor_feedback`（同序轮速 + 电压），并附带发布板载 IMU `/imu/data`。
+  实机以 `simulate:=false`、`port:=/dev/ttyACM0`（按实际串口）启动即可，
+  chassis_controller 里程计自动切到真实反馈。协议细节见
+  [docs/HARDWARE_RESERVED.md](docs/HARDWARE_RESERVED.md)。
+- 待实机联调：确认串口设备名、用厂商串口助手核对首帧数据，再开电机使能。
 - `lidar_driver`（RPLIDAR C1）替换 gz 桥接的 `/scan`；`camera_driver`（CSI 摄像头）替换
   桥接的 `/camera/image_raw`。
-- 详见 [docs/HARDWARE_RESERVED.md](docs/HARDWARE_RESERVED.md)。
