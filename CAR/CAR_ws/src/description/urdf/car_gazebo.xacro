@@ -1,0 +1,116 @@
+<?xml version="1.0"?>
+<!--
+  R680 4WD Gazebo 仿真封装
+
+  在 CAR_description.urdf 的基础上追加 Gazebo classic 插件（不改原 URDF）：
+  - 四轮滑移转向驱动：订阅 /car/cmd_vel，发布 /car/odom 与 odom->base_link TF
+  - 车头单目相机：/car/front_camera/image_raw + camera_info
+  - 顶部 360° 激光雷达：/car/scan
+
+  用法（由 CAR_pkg/launch/gazebo_sim.launch.py 自动调用）：
+    xacro car_gazebo.xacro
+-->
+<robot name="r680_4wd" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:include filename="CAR_description.urdf"/>
+
+  <!-- ======================== 四轮滑移转向驱动 ======================== -->
+  <gazebo>
+    <plugin name="skid_steer_drive" filename="libgazebo_ros_skid_steer_drive.so">
+      <ros>
+        <namespace>/car</namespace>
+      </ros>
+
+      <!-- 左右两侧车轮关节（前后各一），正速度对应车辆前进，与 URDF 关节轴向一致 -->
+      <left_joint>front_left_wheel_joint</left_joint>
+      <left_joint>rear_left_wheel_joint</left_joint>
+      <right_joint>front_right_wheel_joint</right_joint>
+      <right_joint>rear_right_wheel_joint</right_joint>
+
+      <!-- 轮距 0.32 m、轮径 0.152 m，与 URDF 几何一致 -->
+      <wheel_separation>0.32</wheel_separation>
+      <wheel_diameter>0.152</wheel_diameter>
+
+      <!-- 与 URDF 关节 limit effort=8.0 对应 -->
+      <max_wheel_torque>8.0</max_wheel_torque>
+      <max_wheel_acceleration>10.0</max_wheel_acceleration>
+
+      <command_topic>cmd_vel</command_topic>
+      <odometry_topic>odom</odometry_topic>
+      <odometry_frame>odom</odometry_frame>
+      <robot_base_frame>base_link</robot_base_frame>
+
+      <publish_odometry>true</publish_odometry>
+      <publish_odometry_tf>true</publish_odometry_tf>
+      <!-- 车轮为 continuous 关节且本插件不发布 joint_states，
+           由插件直接广播车轮 TF，避免与 robot_state_publisher 冲突 -->
+      <publish_wheel_tf>true</publish_wheel_tf>
+      <update_rate>50</update_rate>
+    </plugin>
+  </gazebo>
+
+  <!-- ======================== 车头单目相机 ======================== -->
+  <gazebo reference="camera_link">
+    <sensor name="front_camera" type="camera">
+      <always_on>true</always_on>
+      <update_rate>30.0</update_rate>
+      <camera>
+        <horizontal_fov>1.0472</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.05</near>
+          <far>10.0</far>
+        </clip>
+      </camera>
+      <plugin name="front_camera_controller" filename="libgazebo_ros_camera.so">
+        <ros>
+          <namespace>/car</namespace>
+        </ros>
+        <camera_name>front_camera</camera_name>
+        <frame_name>camera_optical_frame</frame_name>
+      </plugin>
+    </sensor>
+  </gazebo>
+
+  <!-- ======================== 顶部 360° 激光雷达 ======================== -->
+  <gazebo reference="laser_frame">
+    <sensor name="lidar" type="ray">
+      <always_on>true</always_on>
+      <update_rate>10.0</update_rate>
+      <visualize>false</visualize>
+      <ray>
+        <scan>
+          <horizontal>
+            <samples>360</samples>
+            <resolution>1</resolution>
+            <min_angle>-3.14159265</min_angle>
+            <max_angle>3.14159265</max_angle>
+          </horizontal>
+        </scan>
+        <range>
+          <min>0.12</min>
+          <max>12.0</max>
+          <resolution>0.01</resolution>
+        </range>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.01</stddev>
+        </noise>
+      </ray>
+      <plugin name="lidar_controller" filename="libgazebo_ros_ray_sensor.so">
+        <ros>
+          <namespace>/car</namespace>
+          <remapping>~/out:=scan</remapping>
+        </ros>
+        <output_type>sensor_msgs/LaserScan</output_type>
+        <frame_name>laser_frame</frame_name>
+      </plugin>
+    </sensor>
+  </gazebo>
+
+</robot>
