@@ -77,12 +77,14 @@ ros2 launch car_sim teleop_test.launch.py
 网页遥控：浏览器打开 <http://localhost:8765>（WSL 内运行时用 Windows 浏览器同样可访问）。
 方向键按钮 / WASD / 方向键控制，按住行驶、松开停车；页面显示位姿、速度、控制权与前视相机。
 
-自主避障：默认 `enable_cruise:=false`，车原地待命。设定目标后避障节点输出 `/cmd_vel`：
+自主避障：默认 `enable_cruise:=false`，车原地待命。可直接点网页遥控页的
+**「开启巡航」**按钮（一键开关，经 `/api/ugv/cruise` 动态设置避障节点参数），
+或设定目标后由避障节点输出 `/cmd_vel`：
 
 ```bash
 ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
   "{header: {frame_id: 'odom'}, pose: {position: {x: 2.0, y: 1.0, z: 0.0}}}"
-# 或定速巡航：ros2 param set /avoidance_node enable_cruise true
+# 或命令行定速巡航：ros2 param set /avoidance_node enable_cruise true
 ```
 
 遥控优先：网页按住方向键时 operator heartbeat 新鲜（0.6s 内），teleop 覆盖避障指令；松手

@@ -24,6 +24,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry
+from rcl_interfaces.msg import SetParametersResult
 
 from car_interfaces.msg import ObstacleArray
 from car_interfaces.srv import SetGoal
@@ -66,9 +67,21 @@ class AvoidanceNode(Node):
         self.create_subscription(PoseStamped, '/goal_pose', self.goal_cb, 10)
         self.pub_cmd = self.create_publisher(Twist, '/cmd_vel', 10)
         self.create_service(SetGoal, '/avoidance/set_goal', self.set_goal_cb)
+        # enable_cruise 支持运行时动态修改（网页巡航开关 / ros2 param set）
+        self.add_on_set_parameters_callback(self.on_set_params)
 
         # 10Hz 控制循环
         self.timer = self.create_timer(0.1, self.control_loop)
+
+    def on_set_params(self, params):
+        for p in params:
+            if p.name == 'enable_cruise' and p.type_ == p.Type.BOOL:
+                self.enable_cruise = bool(p.value)
+                self.get_logger().info(
+                    f'定速巡航：{"开启" if self.enable_cruise else "关闭"}')
+            elif p.name == 'cruise_speed' and p.type_ == p.Type.DOUBLE:
+                self.cruise_speed = float(p.value)
+        return SetParametersResult(successful=True)
 
     # ---------- 回调 ----------
     def obstacles_cb(self, msg):
@@ -161,6 +174,15 @@ class AvoidanceNode(Node):
 
     def _select_sector(self, desired_angle):
         """前方 180° 扇区代价评估，返回最佳扇区中心角；全堵返回 None"""
+        # 期望方向本身可通行时直接采用：否则扇区中心量化（±π/72）会在
+        # 无障碍时产生恒定小角速度，导致车辆持续向一侧缓慢偏转
+        nearest_desired = float('inf')
+        for o in self.obstacles:
+            half_width = math.atan2(o.radius, max(o.distance, 0.05))
+            if abs(self._normalize_angle(o.angle - desired_angle)) <= half_width:
+                nearest_desired = min(nearest_desired, o.distance)
+        if nearest_desired >= self.safety_distance:
+            return desired_angle
         best_angle = None
         best_cost = float('inf')
         for k in range(self.num_sectors):

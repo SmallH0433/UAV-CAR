@@ -187,7 +187,7 @@
     <child link="front_left_wheel_link"/>
     <origin xyz="0.155 0.160 0" rpy="0 0 0"/>
     <!-- 正速度对应车辆向前运动 -->
-    <axis xyz="0 -1 0"/>
+    <axis xyz="0 1 0"/>
     <limit effort="8.0" velocity="15.0"/>
     <dynamics damping="0.05" friction="0.10"/>
   </joint>
@@ -238,7 +238,7 @@
     <parent link="base_link"/>
     <child link="front_right_wheel_link"/>
     <origin xyz="0.155 -0.160 0" rpy="0 0 0"/>
-    <axis xyz="0 -1 0"/>
+    <axis xyz="0 1 0"/>
     <limit effort="8.0" velocity="15.0"/>
     <dynamics damping="0.05" friction="0.10"/>
   </joint>
@@ -289,7 +289,7 @@
     <parent link="base_link"/>
     <child link="rear_left_wheel_link"/>
     <origin xyz="-0.155 0.160 0" rpy="0 0 0"/>
-    <axis xyz="0 -1 0"/>
+    <axis xyz="0 1 0"/>
     <limit effort="8.0" velocity="15.0"/>
     <dynamics damping="0.05" friction="0.10"/>
   </joint>
@@ -340,7 +340,7 @@
     <parent link="base_link"/>
     <child link="rear_right_wheel_link"/>
     <origin xyz="-0.155 -0.160 0" rpy="0 0 0"/>
-    <axis xyz="0 -1 0"/>
+    <axis xyz="0 1 0"/>
     <limit effort="8.0" velocity="15.0"/>
     <dynamics damping="0.05" friction="0.10"/>
   </joint>

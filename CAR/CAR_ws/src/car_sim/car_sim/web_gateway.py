@@ -28,6 +28,8 @@ from urllib.parse import urlparse
 
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
+from rcl_interfaces.srv import GetParameters, SetParameters
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -110,6 +112,7 @@ class WebGateway(Node):
         self.declare_parameter("camera_max_rate_hz", 5.0)
         self.declare_parameter("camera_stale_after_s", 3.0)
         self.declare_parameter("jpeg_quality", 72)
+        self.declare_parameter("avoidance_node_name", "/avoidance_node")
 
         self.bind_address = str(self.get_parameter("bind_address").value)
         self.port = int(self.get_parameter("port").value)
@@ -175,6 +178,16 @@ class WebGateway(Node):
             )
 
         self.watchdog_timer = create_steady_timer(self, 0.1, self._teleop_watchdog)
+
+        # 避障节点 enable_cruise 参数客户端（网页巡航开关）
+        avoidance = str(self.get_parameter("avoidance_node_name").value)
+        self.cruise_set_client = self.create_client(
+            SetParameters, f"{avoidance}/set_parameters")
+        self.cruise_get_client = self.create_client(
+            GetParameters, f"{avoidance}/get_parameters")
+        self.cruise_state = None  # True/False；None=避障节点不在线
+        self.cruise_poll_timer = create_steady_timer(
+            self, 2.0, self._poll_cruise_state)
 
         self.http_server = ThreadingHTTPServer(
             (self.bind_address, self.port), self._handler_class()
@@ -249,6 +262,64 @@ class WebGateway(Node):
         heartbeat.data = active
         self.heartbeat_publisher.publish(heartbeat)
 
+    # ---------------- cruise switch ----------------
+    def _poll_cruise_state(self) -> None:
+        """2s 轮询避障节点 enable_cruise 现值（外部 ros2 param set 也能反映）。"""
+        if not self.cruise_get_client.service_is_ready():
+            with self.lock:
+                self.cruise_state = None
+            return
+        request = GetParameters.Request()
+        request.names = ["enable_cruise"]
+        future = self.cruise_get_client.call_async(request)
+
+        def on_done(fut):
+            try:
+                response = fut.result()
+                if response.values:
+                    with self.lock:
+                        self.cruise_state = bool(response.values[0].bool_value)
+            except Exception:
+                pass
+
+        future.add_done_callback(on_done)
+
+    def set_cruise(self, enable: bool):
+        """HTTP 线程调用：设置 enable_cruise。返回 (ok, error)。"""
+        if not self.cruise_set_client.service_is_ready():
+            return False, "avoidance_unavailable"
+        parameter = Parameter(
+            name="enable_cruise",
+            value=ParameterValue(
+                type=ParameterType.PARAMETER_BOOL, bool_value=bool(enable)),
+        )
+        request = SetParameters.Request()
+        request.parameters = [parameter]
+        future = self.cruise_set_client.call_async(request)
+        done = threading.Event()
+        outcome = {}
+
+        def on_done(fut):
+            try:
+                response = fut.result()
+                outcome["ok"] = bool(
+                    response.results and response.results[0].successful)
+                if response.results:
+                    outcome["reason"] = response.results[0].reason
+            except Exception as error:
+                outcome["ok"] = False
+                outcome["reason"] = str(error)
+            done.set()
+
+        future.add_done_callback(on_done)
+        if not done.wait(2.0):
+            return False, "set_timeout"
+        if outcome.get("ok"):
+            with self.lock:
+                self.cruise_state = bool(enable)
+            return True, ""
+        return False, outcome.get("reason") or "set_rejected"
+
     # ---------------- HTTP ----------------
     def _handler_class(self):
         gateway = self
@@ -301,7 +372,7 @@ class WebGateway(Node):
 
             def do_POST(self):
                 path = urlparse(self.path).path
-                if path != "/api/ugv/teleop":
+                if path not in ("/api/ugv/teleop", "/api/ugv/cruise"):
                     self._json(HTTPStatus.NOT_FOUND, {"error": "unknown_command"})
                     return
                 try:
@@ -323,6 +394,9 @@ class WebGateway(Node):
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid_json"})
                     return
+                if path == "/api/ugv/cruise":
+                    self._handle_cruise(payload)
+                    return
                 try:
                     linear, angular = clamped_teleop(
                         payload, gateway.max_linear, gateway.max_angular
@@ -339,6 +413,25 @@ class WebGateway(Node):
                         "linear": linear,
                         "angular": angular,
                     },
+                )
+
+            def _handle_cruise(self, payload: dict):
+                enable = payload.get("enable") if isinstance(payload, dict) else None
+                if not isinstance(enable, bool):
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "enable_bool_required"})
+                    return
+                ok, error = gateway.set_cruise(enable)
+                if not ok:
+                    status = (
+                        HTTPStatus.SERVICE_UNAVAILABLE
+                        if error == "avoidance_unavailable"
+                        else HTTPStatus.BAD_GATEWAY
+                    )
+                    self._json(status, {"error": error})
+                    return
+                self._json(
+                    HTTPStatus.ACCEPTED,
+                    {"accepted": True, "cruise_enabled": enable},
                 )
 
         return Handler
@@ -394,6 +487,7 @@ class WebGateway(Node):
             gateway_status = dict(self.latest["ugv_command_gateway"])
             pose = list(self.pose) if self.pose is not None else None
             speed = self.speed_mps
+            cruise_state = self.cruise_state
             topic_ages = {
                 key: round(now - timestamp, 2)
                 for key, timestamp in self.topic_times.items()
@@ -404,6 +498,10 @@ class WebGateway(Node):
             "server_time_ms": int(time.time() * 1000),
             "ugv_control_mux": mux,
             "ugv_command_gateway": gateway_status,
+            "avoidance": {
+                "available": cruise_state is not None,
+                "cruise_enabled": cruise_state,
+            },
             "odom": {"pose": pose, "speed_mps": speed},
             "battery_voltage": None,  # reserved for the real motor driver
             "camera": {

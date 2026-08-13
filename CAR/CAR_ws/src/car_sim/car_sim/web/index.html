@@ -34,6 +34,13 @@
   .hint { font-size: 12px; color: #7486a0; margin-top: 10px; line-height: 1.6; }
   .slider-row { margin-top: 10px; font-size: 13px; }
   input[type=range] { width: 100%; }
+  #cruiseBtn {
+    width: 100%; padding: 8px 0; font-size: 15px; border: 1px solid #3b4a63;
+    border-radius: 8px; background: #273142; color: #e6ecf5; cursor: pointer;
+  }
+  #cruiseBtn.on { background: #2e7d46; border-color: #3da35f; }
+  #cruiseBtn.off { background: #273142; }
+  #cruiseBtn.na { background: #3a3a32; color: #8a8a7a; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -57,6 +64,10 @@
     <div class="slider-row">
       角速度 <span id="angLabel">0.50</span> rad/s
       <input type="range" id="ang" min="0.10" max="0.70" step="0.05" value="0.50">
+    </div>
+    <div class="slider-row">
+      <button id="cruiseBtn" class="cruise" title="自动避障定速巡航">开启巡航</button>
+      <span class="hint" style="margin-top:4px">开启后小车自主巡航避障；遥控按键可随时接管</span>
     </div>
     <div class="hint">
       键盘：WASD / 方向键，按住行驶，松开或空格停车。<br>
@@ -86,6 +97,26 @@
   var angLabel = document.getElementById("angLabel");
   linInput.oninput = function () { linLabel.textContent = Number(linInput.value).toFixed(2); };
   angInput.oninput = function () { angLabel.textContent = Number(angInput.value).toFixed(2); };
+
+  // 定速巡航开关（自动避障验证）
+  var cruiseBtn = document.getElementById("cruiseBtn");
+  var cruiseOn = false, cruiseAvail = false;
+  function renderCruise() {
+    if (!cruiseAvail) { cruiseBtn.textContent = "巡航不可用（避障节点离线）"; cruiseBtn.className = "na"; return; }
+    cruiseBtn.textContent = cruiseOn ? "■ 关闭巡航（巡航中）" : "▶ 开启巡航";
+    cruiseBtn.className = cruiseOn ? "on" : "off";
+  }
+  cruiseBtn.addEventListener("click", function () {
+    if (!cruiseAvail) { return; }
+    fetch("/api/ugv/cruise", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enable: !cruiseOn })
+    }).then(function (r) { return r.json(); }).then(function (resp) {
+      if (resp.accepted) { cruiseOn = !cruiseOn; renderCruise(); }
+    }).catch(function () { /* 状态轮询会纠正显示 */ });
+  });
+  renderCruise();
 
   var CMDS = {
     forward:  function () { return { linear: +Number(linInput.value), angular: 0 }; },
@@ -178,6 +209,12 @@
         (gw.output_linear_mps !== undefined)
           ? gw.output_linear_mps.toFixed(2) + " / " + gw.output_angular_rps.toFixed(2)
           : "-";
+      var av = s.avoidance || {};
+      cruiseAvail = !!av.available;
+      if (av.cruise_enabled !== null && av.cruise_enabled !== undefined) {
+        cruiseOn = !!av.cruise_enabled;
+      }
+      renderCruise();
     }).catch(function () {
       conn.textContent = "断开";
       conn.classList.add("bad");
