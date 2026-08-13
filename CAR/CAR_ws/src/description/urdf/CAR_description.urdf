@@ -1,0 +1,518 @@
+<?xml version="1.0"?>
+<!--
+  R680 4WD 四驱机器人简化 URDF 模型
+
+  已知参数：
+  - 整车尺寸：465 × 385 × 218 mm
+  - 车轮直径：152 mm
+  - 驱动形式：4WD
+
+  图片未给出的参数采用工程估算，可按实物修改：
+  - 轮宽：65 mm
+  - 轮距：320 mm
+  - 轴距：310 mm
+  - 底盘质量：16 kg
+  - 单个车轮质量：1.2 kg
+
+  坐标约定：
+  - base_footprint 位于地面投影中心，Z=0 为地面；
+  - base_link 位于轮轴高度；
+  - X 轴指向车头，Y 轴指向车体左侧，Z 轴向上；
+  - 车轮关节正方向定义为使车辆向前运动。
+-->
+<robot name="r680_4wd">
+
+  <!-- ======================== 材质 ======================== -->
+  <material name="aluminum">
+    <color rgba="0.72 0.75 0.78 1.0"/>
+  </material>
+  <material name="dark_metal">
+    <color rgba="0.10 0.11 0.12 1.0"/>
+  </material>
+  <material name="tire_black">
+    <color rgba="0.015 0.015 0.015 1.0"/>
+  </material>
+  <material name="hub_white">
+    <color rgba="0.86 0.86 0.82 1.0"/>
+  </material>
+  <material name="sensor_black">
+    <color rgba="0.03 0.04 0.05 1.0"/>
+  </material>
+  <material name="camera_blue">
+    <color rgba="0.02 0.20 0.45 1.0"/>
+  </material>
+
+  <!-- ======================== 地面投影坐标系 ======================== -->
+  <link name="base_footprint"/>
+
+  <joint name="base_footprint_to_base_link" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <!-- 轮半径 0.076 m，base_link 与轮轴同高 -->
+    <origin xyz="0 0 0.076" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ======================== 底盘主体 ======================== -->
+  <link name="base_link">
+    <inertial>
+      <!-- 空车质量未知，16 kg 为包含电池的结构估算值 -->
+      <mass value="16.0"/>
+      <origin xyz="0 0 0.070" rpy="0 0 0"/>
+      <inertia
+        ixx="0.104700"
+        ixy="0.0"
+        ixz="0.0"
+        iyy="0.144033"
+        iyz="0.0"
+        izz="0.233733"/>
+    </inertial>
+
+    <!-- 下部电控/电池仓 -->
+    <visual>
+      <origin xyz="0 0 0.065" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.300 0.240 0.075"/>
+      </geometry>
+      <material name="dark_metal"/>
+    </visual>
+
+    <!-- 左右侧向摆臂/侧梁的简化外观 -->
+    <visual>
+      <origin xyz="0 0.128 0.015" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.300 0.018 0.028"/>
+      </geometry>
+      <material name="aluminum"/>
+    </visual>
+    <visual>
+      <origin xyz="0 -0.128 0.015" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.300 0.018 0.028"/>
+      </geometry>
+      <material name="aluminum"/>
+    </visual>
+
+    <!-- 上层安装铝板 -->
+    <visual>
+      <origin xyz="0 0 0.136" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.340 0.285 0.012"/>
+      </geometry>
+      <material name="aluminum"/>
+    </visual>
+
+    <!-- 四根立柱，圆柱默认沿 Z 轴 -->
+    <visual>
+      <origin xyz="0.130 0.115 0.100" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.007" length="0.070"/>
+      </geometry>
+      <material name="aluminum"/>
+    </visual>
+    <visual>
+      <origin xyz="0.130 -0.115 0.100" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.007" length="0.070"/>
+      </geometry>
+      <material name="aluminum"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.130 0.115 0.100" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.007" length="0.070"/>
+      </geometry>
+      <material name="aluminum"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.130 -0.115 0.100" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.007" length="0.070"/>
+      </geometry>
+      <material name="aluminum"/>
+    </visual>
+
+    <!-- 简化碰撞体：底部距地约 81 mm，宽度和长度不覆盖车轮 -->
+    <collision>
+      <origin xyz="0 0 0.070" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.320 0.270 0.130"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- ======================== 左前轮 ======================== -->
+  <link name="front_left_wheel_link">
+    <inertial>
+      <mass value="1.2"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia
+        ixx="0.0021553"
+        ixy="0.0"
+        ixz="0.0"
+        iyy="0.0034656"
+        iyz="0.0"
+        izz="0.0021553"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.076" length="0.065"/>
+      </geometry>
+      <material name="tire_black"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.032" length="0.067"/>
+      </geometry>
+      <material name="hub_white"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.012" length="0.069"/>
+      </geometry>
+      <material name="dark_metal"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.076" length="0.065"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="front_left_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="front_left_wheel_link"/>
+    <origin xyz="0.155 0.160 0" rpy="0 0 0"/>
+    <!-- 正速度对应车辆向前运动 -->
+    <axis xyz="0 -1 0"/>
+    <limit effort="8.0" velocity="15.0"/>
+    <dynamics damping="0.05" friction="0.10"/>
+  </joint>
+
+  <!-- ======================== 右前轮 ======================== -->
+  <link name="front_right_wheel_link">
+    <inertial>
+      <mass value="1.2"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia
+        ixx="0.0021553"
+        ixy="0.0"
+        ixz="0.0"
+        iyy="0.0034656"
+        iyz="0.0"
+        izz="0.0021553"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.076" length="0.065"/>
+      </geometry>
+      <material name="tire_black"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.032" length="0.067"/>
+      </geometry>
+      <material name="hub_white"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.012" length="0.069"/>
+      </geometry>
+      <material name="dark_metal"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.076" length="0.065"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="front_right_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="front_right_wheel_link"/>
+    <origin xyz="0.155 -0.160 0" rpy="0 0 0"/>
+    <axis xyz="0 -1 0"/>
+    <limit effort="8.0" velocity="15.0"/>
+    <dynamics damping="0.05" friction="0.10"/>
+  </joint>
+
+  <!-- ======================== 左后轮 ======================== -->
+  <link name="rear_left_wheel_link">
+    <inertial>
+      <mass value="1.2"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia
+        ixx="0.0021553"
+        ixy="0.0"
+        ixz="0.0"
+        iyy="0.0034656"
+        iyz="0.0"
+        izz="0.0021553"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.076" length="0.065"/>
+      </geometry>
+      <material name="tire_black"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.032" length="0.067"/>
+      </geometry>
+      <material name="hub_white"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.012" length="0.069"/>
+      </geometry>
+      <material name="dark_metal"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.076" length="0.065"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="rear_left_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="rear_left_wheel_link"/>
+    <origin xyz="-0.155 0.160 0" rpy="0 0 0"/>
+    <axis xyz="0 -1 0"/>
+    <limit effort="8.0" velocity="15.0"/>
+    <dynamics damping="0.05" friction="0.10"/>
+  </joint>
+
+  <!-- ======================== 右后轮 ======================== -->
+  <link name="rear_right_wheel_link">
+    <inertial>
+      <mass value="1.2"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia
+        ixx="0.0021553"
+        ixy="0.0"
+        ixz="0.0"
+        iyy="0.0034656"
+        iyz="0.0"
+        izz="0.0021553"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.076" length="0.065"/>
+      </geometry>
+      <material name="tire_black"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.032" length="0.067"/>
+      </geometry>
+      <material name="hub_white"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.012" length="0.069"/>
+      </geometry>
+      <material name="dark_metal"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry>
+        <cylinder radius="0.076" length="0.065"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="rear_right_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="rear_right_wheel_link"/>
+    <origin xyz="-0.155 -0.160 0" rpy="0 0 0"/>
+    <axis xyz="0 -1 0"/>
+    <limit effort="8.0" velocity="15.0"/>
+    <dynamics damping="0.05" friction="0.10"/>
+  </joint>
+
+  <!-- ======================== 车头摄像头 ======================== -->
+  <link name="camera_link">
+    <inertial>
+      <mass value="0.080"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia
+        ixx="0.000015"
+        ixy="0.0"
+        ixz="0.0"
+        iyy="0.000020"
+        iyz="0.0"
+        izz="0.000020"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.040 0.032 0.026"/>
+      </geometry>
+      <material name="camera_blue"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.040 0.032 0.026"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_link"/>
+    <!-- 车头上方，按实际安装孔位修改 -->
+    <origin xyz="0.185 0 0.105" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ROS 光学坐标系：Z 朝前、X 朝右、Y 朝下 -->
+  <link name="camera_optical_frame">
+    <inertial>
+      <mass value="0.001"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="0.000001" ixy="0" ixz="0" iyy="0.000001" iyz="0" izz="0.000001"/>
+    </inertial>
+  </link>
+
+  <joint name="camera_optical_joint" type="fixed">
+    <parent link="camera_link"/>
+    <child link="camera_optical_frame"/>
+    <origin xyz="0 0 0" rpy="-1.57079632679 0 -1.57079632679"/>
+  </joint>
+
+  <!-- ======================== 顶部激光雷达 ======================== -->
+  <link name="laser_frame">
+    <inertial>
+      <mass value="0.220"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia
+        ixx="0.000125"
+        ixy="0.0"
+        ixz="0.0"
+        iyy="0.000125"
+        iyz="0.0"
+        izz="0.000135"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.035" length="0.040"/>
+      </geometry>
+      <material name="sensor_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.035" length="0.040"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="lidar_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="laser_frame"/>
+    <!-- 雷达底部与顶板上表面齐平，按实际雷达型号修改 -->
+    <origin xyz="0.100 0 0.162" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ======================== 传统 URDF 传动接口 ======================== -->
+  <!-- 使用 ros2_control 时，通常还会在 xacro 中增加 ros2_control 标签。 -->
+  <transmission name="front_left_wheel_transmission">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="front_left_wheel_joint">
+      <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="front_left_motor">
+      <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
+      <mechanicalReduction>30</mechanicalReduction>
+    </actuator>
+  </transmission>
+
+  <transmission name="front_right_wheel_transmission">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="front_right_wheel_joint">
+      <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="front_right_motor">
+      <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
+      <mechanicalReduction>30</mechanicalReduction>
+    </actuator>
+  </transmission>
+
+  <transmission name="rear_left_wheel_transmission">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="rear_left_wheel_joint">
+      <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="rear_left_motor">
+      <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
+      <mechanicalReduction>30</mechanicalReduction>
+    </actuator>
+  </transmission>
+
+  <transmission name="rear_right_wheel_transmission">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="rear_right_wheel_joint">
+      <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="rear_right_motor">
+      <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
+      <mechanicalReduction>30</mechanicalReduction>
+    </actuator>
+  </transmission>
+
+  <!-- ======================== Gazebo 材质和摩擦参数 ======================== -->
+  <gazebo reference="base_link">
+    <material>Gazebo/Grey</material>
+  </gazebo>
+  <gazebo reference="front_left_wheel_link">
+    <material>Gazebo/Black</material>
+    <mu1>1.0</mu1>
+    <mu2>1.0</mu2>
+    <kp>1000000.0</kp>
+    <kd>100.0</kd>
+  </gazebo>
+  <gazebo reference="front_right_wheel_link">
+    <material>Gazebo/Black</material>
+    <mu1>1.0</mu1>
+    <mu2>1.0</mu2>
+    <kp>1000000.0</kp>
+    <kd>100.0</kd>
+  </gazebo>
+  <gazebo reference="rear_left_wheel_link">
+    <material>Gazebo/Black</material>
+    <mu1>1.0</mu1>
+    <mu2>1.0</mu2>
+    <kp>1000000.0</kp>
+    <kd>100.0</kd>
+  </gazebo>
+  <gazebo reference="rear_right_wheel_link">
+    <material>Gazebo/Black</material>
+    <mu1>1.0</mu1>
+    <mu2>1.0</mu2>
+    <kp>1000000.0</kp>
+    <kd>100.0</kd>
+  </gazebo>
+  <gazebo reference="camera_link">
+    <material>Gazebo/Blue</material>
+  </gazebo>
+  <gazebo reference="laser_frame">
+    <material>Gazebo/Black</material>
+  </gazebo>
+
+</robot>
