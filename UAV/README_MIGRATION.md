@@ -30,6 +30,13 @@
 - `printables/`：200 mm AprilTag打印文件。
 - 根目录脚本：Pixhawk、Pi、SITL和MAVLink调试工具。
 
+## 关联项目
+
+- `../CAR/`：R680 4WD 小车独立项目（树莓派4B + STM32）。其 `car_sim` 仿真包
+  （Gazebo 世界/桥接/控制权 mux/指令网关/网页遥控）移植自本项目的
+  `simulation/air_ground_sim_ws/src/air_ground_sim`（仅 UGV 部分，不含 Nav2 与无人机）。
+  CAR 运行仿真时需 source 本工作区的 install（提供 `ros_gz_bridge`）。
+
 ## 未包含的内容
 
 为保证可以稳定压缩、传输和解压，本包没有包含：

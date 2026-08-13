@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>R680 仿真遥控</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px; background: #14171c; color: #d7dde6;
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: flex; flex-wrap: wrap; gap: 16px; justify-content: center;
+  }
+  .panel {
+    background: #1d222b; border: 1px solid #2c3442; border-radius: 10px;
+    padding: 16px; min-width: 300px;
+  }
+  h1 { font-size: 18px; margin: 0 0 12px; }
+  h2 { font-size: 14px; margin: 0 0 8px; color: #8fa3bf; }
+  #pad { display: grid; grid-template-columns: repeat(3, 72px); grid-auto-rows: 56px; gap: 8px; justify-content: center; }
+  #pad button {
+    font-size: 20px; border: 1px solid #3b4a63; border-radius: 8px;
+    background: #273142; color: #e6ecf5; cursor: pointer; user-select: none;
+    touch-action: none;
+  }
+  #pad button:active, #pad button.active { background: #3f6db3; }
+  #pad .stop { background: #5a2730; }
+  #pad .stop:active { background: #a03a48; }
+  .row { display: flex; justify-content: space-between; margin: 4px 0; font-size: 14px; }
+  .row span:last-child { font-family: Consolas, monospace; color: #9fd3a8; }
+  #conn.bad { color: #e08080; }
+  #camera { width: 320px; height: 180px; background: #000; border-radius: 6px; display: block; }
+  .hint { font-size: 12px; color: #7486a0; margin-top: 10px; line-height: 1.6; }
+  .slider-row { margin-top: 10px; font-size: 13px; }
+  input[type=range] { width: 100%; }
+</style>
+</head>
+<body>
+  <div class="panel">
+    <h1>R680 仿真遥控</h1>
+    <div id="pad">
+      <span></span>
+      <button data-cmd="forward" title="W / ↑">▲</button>
+      <span></span>
+      <button data-cmd="left" title="A / ←">◀</button>
+      <button class="stop" data-cmd="stop" title="空格">■</button>
+      <button data-cmd="right" title="D / →">▶</button>
+      <span></span>
+      <button data-cmd="backward" title="S / ↓">▼</button>
+      <span></span>
+    </div>
+    <div class="slider-row">
+      线速度 <span id="linLabel">0.30</span> m/s
+      <input type="range" id="lin" min="0.05" max="0.50" step="0.05" value="0.30">
+    </div>
+    <div class="slider-row">
+      角速度 <span id="angLabel">0.50</span> rad/s
+      <input type="range" id="ang" min="0.10" max="0.70" step="0.05" value="0.50">
+    </div>
+    <div class="hint">
+      键盘：WASD / 方向键，按住行驶，松开或空格停车。<br>
+      指令 ~10Hz 持续发送；网关 350ms 看门狗会自动停车。
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>状态</h2>
+    <div class="row"><span>连接</span><span id="conn" class="bad">断开</span></div>
+    <div class="row"><span>位姿 x / y / yaw</span><span id="pose">-</span></div>
+    <div class="row"><span>速度</span><span id="speed">-</span></div>
+    <div class="row"><span>控制权</span><span id="authority">-</span></div>
+    <div class="row"><span>mux 原因</span><span id="reason">-</span></div>
+    <div class="row"><span>网关输出 v / w</span><span id="gw">-</span></div>
+    <h2 style="margin-top:14px">前视相机</h2>
+    <img id="camera" alt="camera">
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  var linInput = document.getElementById("lin");
+  var angInput = document.getElementById("ang");
+  var linLabel = document.getElementById("linLabel");
+  var angLabel = document.getElementById("angLabel");
+  linInput.oninput = function () { linLabel.textContent = Number(linInput.value).toFixed(2); };
+  angInput.oninput = function () { angLabel.textContent = Number(angInput.value).toFixed(2); };
+
+  var CMDS = {
+    forward:  function () { return { linear: +Number(linInput.value), angular: 0 }; },
+    backward: function () { return { linear: -Number(linInput.value), angular: 0 }; },
+    left:     function () { return { linear: 0, angular: +Number(angInput.value) }; },
+    right:    function () { return { linear: 0, angular: -Number(angInput.value) }; },
+    stop:     function () { return { linear: 0, angular: 0 }; }
+  };
+
+  var activeCmd = null;
+  var sendTimer = null;
+
+  function sendOnce(cmd) {
+    fetch("/api/ugv/teleop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cmd)
+    }).catch(function () { /* 状态轮询会反映连接状态 */ });
+  }
+
+  function startCommand(name) {
+    if (activeCmd === name) { return; }
+    stopCommand();
+    activeCmd = name;
+    sendOnce(CMDS[name]());
+    sendTimer = setInterval(function () { sendOnce(CMDS[name]()); }, 100);
+  }
+
+  function stopCommand() {
+    if (sendTimer) { clearInterval(sendTimer); sendTimer = null; }
+    if (activeCmd && activeCmd !== "stop") { sendOnce({ linear: 0, angular: 0 }); }
+    activeCmd = null;
+    document.querySelectorAll("#pad button").forEach(function (b) { b.classList.remove("active"); });
+  }
+
+  document.querySelectorAll("#pad button").forEach(function (button) {
+    var name = button.dataset.cmd;
+    button.addEventListener("pointerdown", function (event) {
+      event.preventDefault();
+      button.classList.add("active");
+      if (name === "stop") { stopCommand(); sendOnce({ linear: 0, angular: 0 }); return; }
+      startCommand(name);
+    });
+    button.addEventListener("pointerup", function () { stopCommand(); });
+    button.addEventListener("pointerleave", function () {
+      if (activeCmd === name) { stopCommand(); }
+    });
+  });
+
+  var KEYMAP = {
+    KeyW: "forward", ArrowUp: "forward",
+    KeyS: "backward", ArrowDown: "backward",
+    KeyA: "left", ArrowLeft: "left",
+    KeyD: "right", ArrowRight: "right"
+  };
+  document.addEventListener("keydown", function (event) {
+    if (event.repeat) { return; }
+    if (event.code === "Space") { event.preventDefault(); stopCommand(); sendOnce({ linear: 0, angular: 0 }); return; }
+    var name = KEYMAP[event.code];
+    if (name) {
+      event.preventDefault();
+      var button = document.querySelector('#pad button[data-cmd="' + name + '"]');
+      if (button) { button.classList.add("active"); }
+      startCommand(name);
+    }
+  });
+  document.addEventListener("keyup", function (event) {
+    var name = KEYMAP[event.code];
+    if (name && activeCmd === name) { stopCommand(); }
+  });
+  window.addEventListener("blur", stopCommand);
+
+  // 状态轮询（2Hz）
+  var conn = document.getElementById("conn");
+  function pollStatus() {
+    fetch("/api/status").then(function (resp) { return resp.json(); }).then(function (s) {
+      conn.textContent = "已连接";
+      conn.classList.remove("bad");
+      var pose = s.odom && s.odom.pose;
+      document.getElementById("pose").textContent = pose
+        ? pose[0].toFixed(2) + " / " + pose[1].toFixed(2) + " / " + pose[2].toFixed(2)
+        : "-";
+      document.getElementById("speed").textContent =
+        s.odom ? s.odom.speed_mps.toFixed(2) + " m/s" : "-";
+      var mux = s.ugv_control_mux || {};
+      document.getElementById("authority").textContent = mux.authority || "-";
+      document.getElementById("reason").textContent = mux.reason || "-";
+      var gw = s.ugv_command_gateway || {};
+      document.getElementById("gw").textContent =
+        (gw.output_linear_mps !== undefined)
+          ? gw.output_linear_mps.toFixed(2) + " / " + gw.output_angular_rps.toFixed(2)
+          : "-";
+    }).catch(function () {
+      conn.textContent = "断开";
+      conn.classList.add("bad");
+    });
+  }
+  pollStatus();
+  setInterval(pollStatus, 500);
+
+  // 相机刷新（约 4Hz，附带随机参数防缓存）
+  var camera = document.getElementById("camera");
+  setInterval(function () {
+    camera.src = "/api/camera.jpg?t=" + Date.now();
+  }, 250);
+})();
+</script>
+</body>
+</html>

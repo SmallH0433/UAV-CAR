@@ -1,0 +1,98 @@
+# CAR — R680 4WD 差速小车
+
+树莓派 4B + STM32 下位机（WHEELTEC R680 底盘）的 ROS 2 Humble 项目。
+主控制架构为 `car_nodes` 自定义轻量节点；Gazebo 仿真设施（`car_sim`）移植自
+`UAV/simulation/air_ground_sim_ws/src/air_ground_sim`，不含 Nav2。
+
+## 包结构
+
+- `car_interfaces` — 自定义 msg/srv（WheelSpeeds / MotorFeedback / Obstacle(Array) / UavCommand / UavStatus / SetGoal）
+- `car_nodes` — 7 个功能节点 + `sim_motor_bridge`（仿真电机桥）
+- `car_description` — R680 URDF + Gazebo 模型 `models/r680_4wd`
+- `car_sim` — gz 世界、ros_gz_bridge 配置、控制权 mux、指令网关、网页遥控
+
+## 架构（仿真话题链）
+
+```
+[浏览器] POST /api/ugv/teleop ──→ /ugv/teleop/cmd_vel + /ugv/operator/heartbeat
+[avoidance_node] ──→ /cmd_vel（避障/导航指令）
+        │
+        ▼
+ugv_control_mux            （teleop 优先；无 operator heartbeat 时放行 /cmd_vel）
+  订阅: /cmd_vel, /ugv/teleop/cmd_vel, /ugv/operator/heartbeat, /system/emergency_stop
+  发布: /ugv/control/cmd_vel, /ugv/speed_scale, /ugv/control_mux/status
+        ▼
+ugv_command_gateway        （限幅 ±1.0 m/s、±1.0 rad/s；0.5s 超时停车；20Hz 重发）
+  输入 input_topic:=/ugv/control/cmd_vel（参数覆盖默认值 /ugv/cmd_vel）
+  输出 output_topic:=/ugv/gateway/cmd_vel（参数覆盖默认值 /ugv/sim/cmd_vel）
+        ▼
+chassis_controller         （其 /cmd_vel 输入 remap 自 /ugv/gateway/cmd_vel）
+  → /wheel_speeds（四轮 rad/s，左前/右前/左后/右后）
+  → /odom + TF(odom→base_footprint)（优先走 /motor_feedback 真实反馈）
+        ▼
+sim_motor_bridge           （仿真里替代实机 motor_driver）
+  /wheel_speeds → 左右平均 (v,w) → /ugv/sim/cmd_vel ──[ros_gz_bridge]──→ gz /model/ground_vehicle/cmd_vel
+  gz /model/ground_vehicle/odometry ──[桥]──→ /ugv/wheel/odometry → 反算四轮 rad/s → /motor_feedback
+```
+
+传感器桥（gz → ROS）：`/model/ground_vehicle/scan` → `/scan`（→ perception_node →
+`/perception/obstacles` → avoidance_node）；`/model/ground_vehicle/front_camera` →
+`/camera/image_raw`（+`camera_info`，lazy）；`/model/ground_vehicle/imu` → `/imu/data`（备用）。
+
+### 话题名冲突处理（最终 remap 方案）
+
+- `/cmd_vel` 只有 avoidance_node 一个发布者；mux 的 `navigation_topic` 保持默认 `/cmd_vel`，无需 remap。
+- mux 输出 `/ugv/control/cmd_vel` → gateway 用**参数** `input_topic:=/ugv/control/cmd_vel` 对接（不用 remap）。
+- gateway 默认输出 `/ugv/sim/cmd_vel` 与 sim_motor_bridge 的 gz 下发话题同名，会短路掉
+  chassis_controller；因此 gateway 用**参数** `output_topic:=/ugv/gateway/cmd_vel` 改名。
+- chassis_controller 的 `/cmd_vel` 输入**remap** 到 `/ugv/gateway/cmd_vel`。
+- `/ugv/sim/cmd_vel` 仅由 sim_motor_bridge 发布，经 ros_gz_bridge（ROS_TO_GZ）送入 gz。
+
+## 构建（WSL2，Ubuntu + ROS 2 Humble + Gazebo Harmonic）
+
+```bash
+wsl -e bash -lc "cd /mnt/d/Codex/CAR/CAR_ws && source /opt/ros/humble/setup.bash && colcon build"
+```
+
+> **依赖说明**：`ros_gz_bridge` 不在 apt 源（Humble+Harmonic 需源码构建）。
+> 本机已编译于 `UAV/simulation/air_ground_sim_ws`（src 下有 vendored `ros_gz`），
+> 运行前需先 source 该工作区（见下）。换机器时把 `ros_gz` 源码复制进本工作区
+> 一起 `colcon build` 即可。
+
+## 仿真启动
+
+```bash
+source /opt/ros/humble/setup.bash
+source /mnt/d/Codex/UAV/simulation/air_ground_sim_ws/install/setup.bash   # 提供 ros_gz_bridge
+source /mnt/d/Codex/CAR/CAR_ws/install/setup.bash
+
+# 带避障全链路（GUI）
+ros2 launch car_sim car_sim.launch.py
+# 无头
+ros2 launch car_sim car_sim.launch.py headless:=true
+# 纯遥控链路（不起 perception/avoidance）
+ros2 launch car_sim teleop_test.launch.py
+```
+
+网页遥控：浏览器打开 <http://localhost:8765>（WSL 内运行时用 Windows 浏览器同样可访问）。
+方向键按钮 / WASD / 方向键控制，按住行驶、松开停车；页面显示位姿、速度、控制权与前视相机。
+
+自主避障：默认 `enable_cruise:=false`，车原地待命。设定目标后避障节点输出 `/cmd_vel`：
+
+```bash
+ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
+  "{header: {frame_id: 'odom'}, pose: {position: {x: 2.0, y: 1.0, z: 0.0}}}"
+# 或定速巡航：ros2 param set /avoidance_node enable_cruise true
+```
+
+遥控优先：网页按住方向键时 operator heartbeat 新鲜（0.6s 内），teleop 覆盖避障指令；松手
+350ms 后网关看门狗自动停车，600ms 后 mux 把控制权交还避障。
+
+## 实机待办
+
+- 用真实 `motor_driver`（WHEELTEC 串口协议）替换 `sim_motor_bridge`，话题契约不变：
+  订阅 `/wheel_speeds`（float32[4] rad/s，左前/右前/左后/右后），发布 `/motor_feedback`
+  （同序轮速 + 电压）。chassis_controller 里程计自动切到真实反馈。
+- `lidar_driver`（RPLIDAR C1）替换 gz 桥接的 `/scan`；`camera_driver`（CSI 摄像头）替换
+  桥接的 `/camera/image_raw`。
+- 详见 [docs/HARDWARE_RESERVED.md](docs/HARDWARE_RESERVED.md)。

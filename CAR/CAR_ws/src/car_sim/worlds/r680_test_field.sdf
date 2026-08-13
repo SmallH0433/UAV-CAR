@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <!-- R680 纯 UGV 测试场地：24x18 m 围墙 + 静态障碍。
+       蓝本：air_ground_sim worlds/hunter_navigation_test.sdf（无人机内容已删除）。 -->
+  <world name="r680_test_field">
+    <physics name="1ms" type="ignore"><max_step_size>0.001</max_step_size><real_time_factor>1.0</real_time_factor></physics>
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors"><render_engine>ogre2</render_engine></plugin>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+    <scene><ambient>0.85 0.85 0.85 1</ambient><background>0.56 0.72 0.88 1</background><sky/></scene>
+    <light type="directional" name="sun"><pose>0 0 20 0 0 0</pose><cast_shadows>true</cast_shadows><diffuse>0.9 0.9 0.9 1</diffuse><direction>-0.45 0.25 -0.86</direction></light>
+
+    <model name="ground_plane"><static>true</static><link name="link"><pose>0 0 -0.05 0 0 0</pose><collision name="collision"><geometry><box><size>24 18 0.10</size></box></geometry></collision><visual name="visual"><geometry><box><size>24 18 0.10</size></box></geometry><material><ambient>0.42 0.46 0.42 1</ambient><diffuse>0.48 0.52 0.48 1</diffuse></material></visual></link></model>
+    <model name="west_wall"><static>true</static><pose>-11.75 0 0.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>0.5 18 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.5 18 1</size></box></geometry></visual></link></model>
+    <model name="east_wall"><static>true</static><pose>11.75 0 0.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>0.5 18 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.5 18 1</size></box></geometry></visual></link></model>
+    <model name="north_wall"><static>true</static><pose>0 8.75 0.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>24 0.5 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>24 0.5 1</size></box></geometry></visual></link></model>
+    <model name="south_wall"><static>true</static><pose>0 -8.75 0.5 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>24 0.5 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>24 0.5 1</size></box></geometry></visual></link></model>
+    <model name="mapped_block_a"><static>true</static><pose>-3 -1 0.75 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>2 2 1.5</size></box></geometry></collision><visual name="visual"><geometry><box><size>2 2 1.5</size></box></geometry><material><ambient>0.55 0.28 0.10 1</ambient><diffuse>0.70 0.36 0.12 1</diffuse></material></visual></link></model>
+    <model name="mapped_block_b"><static>true</static><pose>3.5 3 0.75 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>1.5 4 1.5</size></box></geometry></collision><visual name="visual"><geometry><box><size>1.5 4 1.5</size></box></geometry></visual></link></model>
+    <model name="mapped_block_c"><static>true</static><pose>6 -4 0.75 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>2 1.5 1.5</size></box></geometry></collision><visual name="visual"><geometry><box><size>2 1.5 1.5</size></box></geometry></visual></link></model>
+    <model name="mapped_block_d"><static>true</static><pose>-6 4 0.6 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>3 1 1.2</size></box></geometry></collision><visual name="visual"><geometry><box><size>3 1 1.2</size></box></geometry></visual></link></model>
+    <model name="unmapped_temporary_obstacle"><static>true</static><pose>0 -4 0.65 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>1 1 1.3</size></box></geometry></collision><visual name="visual"><geometry><box><size>1 1 1.3</size></box></geometry><material><ambient>0.70 0.08 0.08 1</ambient><diffuse>0.90 0.10 0.10 1</diffuse></material></visual></link></model>
+
+    <!-- 实例名固定 ground_vehicle：gz topic 前缀 /model/ground_vehicle/... -->
+    <include><uri>model://r680_4wd</uri><name>ground_vehicle</name><pose>-8 -5 0 0 0 0</pose></include>
+  </world>
+</sdf>
