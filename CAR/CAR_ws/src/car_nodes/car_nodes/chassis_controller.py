@@ -1,21 +1,27 @@
-"""底盘控制器节点（4WD 滑移转向）
+"""底盘控制器节点（阿克曼转向：前轮舵机转向 + 后轮双电机驱动）
 
 订阅：
   /cmd_vel        (geometry_msgs/Twist)
   /motor_feedback (car_interfaces/MotorFeedback)
 发布：
-  /wheel_speeds (car_interfaces/WheelSpeeds)
+  /ackermann_cmd (car_interfaces/AckermannCommand)
   /odom         (nav_msgs/Odometry)
   tf: odom -> base_footprint
 服务：
   /chassis/emergency_stop (std_srvs/SetBool)  true=急停锁存 false=解除
 参数：
-  wheel_radius    (float, 0.076)  轮半径 m
-  track_width     (float, 0.32)   轮距 m
-  cmd_timeout     (float, 0.5)    cmd_vel 超时自动停车 s
-  max_wheel_speed (float, 15.0)   轮角速度限幅 rad/s
-  odom_frame      (str, 'odom')
-  base_frame      (str, 'base_footprint')
+  wheel_radius       (float, 0.076) 轮半径 m
+  track_width        (float, 0.32)  后轮距 m
+  wheelbase          (float, 0.31)  轴距 m（实机联调时实测修正）
+  max_steering_angle (float, 0.5)   前轮最大转向角 rad（联调校准）
+  cmd_timeout        (float, 0.5)   cmd_vel 超时自动停车 s
+  max_wheel_speed    (float, 15.0)  轮角速度限幅 rad/s
+  odom_frame         (str, 'odom')
+  base_frame         (str, 'base_footprint')
+
+运动学为自行车模型：转向角 δ = atan2(ω·L, v)，后轮速 v ± ω·track/2。
+注意阿克曼底盘不能原地自旋：|v| ≈ 0 时后轮速强制为 0，转向角按 ω
+方向打满（预打方向，车一动即转弯）。
 """
 
 import math
@@ -27,7 +33,8 @@ from nav_msgs.msg import Odometry
 from std_srvs.srv import SetBool
 from tf2_ros import TransformBroadcaster
 
-from car_interfaces.msg import MotorFeedback, WheelSpeeds
+from car_interfaces.msg import AckermannCommand, MotorFeedback
+from car_nodes.sim_motor_bridge import twist_to_ackermann, ackermann_to_twist
 
 
 class ChassisControllerNode(Node):
@@ -36,6 +43,8 @@ class ChassisControllerNode(Node):
         # 声明参数
         self.declare_parameter('wheel_radius', 0.076)
         self.declare_parameter('track_width', 0.32)
+        self.declare_parameter('wheelbase', 0.31)
+        self.declare_parameter('max_steering_angle', 0.5)
         self.declare_parameter('cmd_timeout', 0.5)
         self.declare_parameter('max_wheel_speed', 15.0)
         self.declare_parameter('odom_frame', 'odom')
@@ -43,6 +52,8 @@ class ChassisControllerNode(Node):
 
         self.wheel_radius = self.get_parameter('wheel_radius').value
         self.track_width = self.get_parameter('track_width').value
+        self.wheelbase = self.get_parameter('wheelbase').value
+        self.max_steering_angle = self.get_parameter('max_steering_angle').value
         self.cmd_timeout = self.get_parameter('cmd_timeout').value
         self.max_wheel_speed = self.get_parameter('max_wheel_speed').value
         self.odom_frame = self.get_parameter('odom_frame').value
@@ -51,7 +62,8 @@ class ChassisControllerNode(Node):
         # 状态
         self.last_cmd = Twist()
         self.last_cmd_time = None
-        self.feedback_speeds = None      # 实际轮速（有反馈时用于里程计）
+        self.feedback_rear = None        # 实际后轮速 [左后, 右后] rad/s
+        self.feedback_steering = 0.0     # 实际转向角 rad
         self.emergency_stopped = False
         # 里程计积分状态
         self.x = 0.0
@@ -62,7 +74,8 @@ class ChassisControllerNode(Node):
         self.create_subscription(Twist, '/cmd_vel', self.cmd_cb, 10)
         self.create_subscription(
             MotorFeedback, '/motor_feedback', self.feedback_cb, 10)
-        self.pub_wheels = self.create_publisher(WheelSpeeds, '/wheel_speeds', 10)
+        self.pub_cmd = self.create_publisher(
+            AckermannCommand, '/ackermann_cmd', 10)
         self.pub_odom = self.create_publisher(Odometry, '/odom', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
         self.create_service(
@@ -76,7 +89,8 @@ class ChassisControllerNode(Node):
         self.last_cmd_time = self.get_clock().now()
 
     def feedback_cb(self, msg):
-        self.feedback_speeds = list(msg.speeds)
+        self.feedback_rear = list(msg.rear_speeds)
+        self.feedback_steering = float(msg.steering_angle)
 
     def emergency_cb(self, request, response):
         self.emergency_stopped = bool(request.data)
@@ -101,26 +115,22 @@ class ChassisControllerNode(Node):
                 cmd = Twist()
             v, w = cmd.linear.x, cmd.angular.z
 
-        # 逆运动学：差速 → 四轮角速度（左前=左后，右前=右后）
-        v_left = v - w * self.track_width / 2.0
-        v_right = v + w * self.track_width / 2.0
-        w_left = self._clamp_wheel(v_left / self.wheel_radius)
-        w_right = self._clamp_wheel(v_right / self.wheel_radius)
+        # 逆运动学：自行车模型 → 后轮速 + 转向角（含 v≈0 保护）
+        rear_speeds, steering = twist_to_ackermann(
+            v, w, self.wheel_radius, self.wheelbase, self.track_width,
+            self.max_steering_angle)
+        rear_speeds = [self._clamp_wheel(s) for s in rear_speeds]
 
-        ws = WheelSpeeds()
-        # 顺序：左前、右前、左后、右后
-        ws.speeds = [w_left, w_right, w_left, w_right]
-        self.pub_wheels.publish(ws)
+        cmd_msg = AckermannCommand()
+        cmd_msg.rear_speeds = rear_speeds
+        cmd_msg.steering_angle = steering
+        self.pub_cmd.publish(cmd_msg)
 
         # 里程计：优先用电机反馈，无反馈时用当前指令值
-        if self.feedback_speeds is not None:
-            s = self.feedback_speeds
-            odom_v = (s[0] + s[2]) / 2.0 * self.wheel_radius  # 左侧平均
-            odom_v += (s[1] + s[3]) / 2.0 * self.wheel_radius  # 右侧平均
-            odom_v /= 2.0
-            left_v = (s[0] + s[2]) / 2.0 * self.wheel_radius
-            right_v = (s[1] + s[3]) / 2.0 * self.wheel_radius
-            odom_w = (right_v - left_v) / self.track_width
+        if self.feedback_rear is not None:
+            odom_v, odom_w = ackermann_to_twist(
+                self.feedback_rear, self.feedback_steering,
+                self.wheel_radius, self.wheelbase)
         else:
             odom_v, odom_w = v, w
 

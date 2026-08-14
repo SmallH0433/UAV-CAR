@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <sdf version="1.9">
-  <!-- R680 4WD 滑移转向小车（WHEELTEC 底盘）
+  <!-- R680 阿克曼转向小车（WHEELTEC 底盘：前轮舵机转向 + 后轮双电机驱动）
        几何/惯性按 car_description/urdf/CAR_description.urdf 换算：
        整车 465x385x218 mm，轮半径 0.076 m，轮距 0.32 m，轴距 0.31 m，底盘 16 kg。
        世界文件中以 <name>ground_vehicle</name> 包含，故 gz topic 前缀为
@@ -42,18 +42,36 @@
       </visual>
     </link>
 
+    <!-- 前轮转向节（kingpin）：垂直轴 revolute 关节挂在 base_link 下，
+         前轮滚转关节再挂到转向节下。转向角限位 ±0.5 rad（约 28.6°），
+         正转向角 = 左转（绕 +Z 逆时针）。 -->
+    <link name="front_left_steer_link">
+      <pose>0.155 0.160 0.076 0 0 0</pose>
+      <inertial><mass>0.3</mass><inertia><ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz></inertia></inertial>
+      <visual name="visual">
+        <geometry><box><size>0.030 0.030 0.060</size></box></geometry>
+        <material><ambient>0.30 0.30 0.32 1</ambient><diffuse>0.45 0.45 0.48 1</diffuse></material>
+      </visual>
+    </link>
+    <link name="front_right_steer_link">
+      <pose>0.155 -0.160 0.076 0 0 0</pose>
+      <inertial><mass>0.3</mass><inertia><ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz></inertia></inertial>
+      <visual name="visual">
+        <geometry><box><size>0.030 0.030 0.060</size></box></geometry>
+        <material><ambient>0.30 0.30 0.32 1</ambient><diffuse>0.45 0.45 0.48 1</diffuse></material>
+      </visual>
+    </link>
+
     <!-- 车轮 link 滚转 +90 度，关节局部 Z 轴即轮轴（指向车体 -Y 右侧）；
          取关节轴 -Z（即车体 +Y），使正关节速度驱动车辆向 +X 前进。
-         实测：轴向为 +Z 时 DiffDrive 正指令使车辆后退。 -->
-    <!-- 滑移转向需要低横向摩擦：fdir1 沿轮子滚动方向（link 局部 X），
-         mu 为滚动/牵引摩擦，mu2 为横向滑动摩擦。mu2 过大（如 1.0）会
-         使四轮侧滑被锁死，车辆无法原地转向（实测 yaw≈0）。 -->
+         阿克曼底盘车轮纯滚动无侧滑，mu/mu2 均为 1.0（不再需要滑移转向的
+         低横向摩擦）。 -->
     <link name="front_left_wheel_link">
       <pose>0.155 0.160 0.076 1.57079632679 0 0</pose>
       <inertial><mass>1.2</mass><inertia><ixx>0.0021553</ixx><iyy>0.0021553</iyy><izz>0.0034656</izz></inertia></inertial>
       <collision name="collision">
         <geometry><cylinder><radius>0.076</radius><length>0.065</length></cylinder></geometry>
-        <surface><friction><ode><mu>1.0</mu><mu2>0.1</mu2><fdir1>1 0 0</fdir1></ode></friction></surface>
+        <surface><friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction></surface>
       </collision>
       <visual name="visual">
         <geometry><cylinder><radius>0.076</radius><length>0.065</length></cylinder></geometry>
@@ -65,7 +83,7 @@
       <inertial><mass>1.2</mass><inertia><ixx>0.0021553</ixx><iyy>0.0021553</iyy><izz>0.0034656</izz></inertia></inertial>
       <collision name="collision">
         <geometry><cylinder><radius>0.076</radius><length>0.065</length></cylinder></geometry>
-        <surface><friction><ode><mu>1.0</mu><mu2>0.1</mu2><fdir1>1 0 0</fdir1></ode></friction></surface>
+        <surface><friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction></surface>
       </collision>
       <visual name="visual">
         <geometry><cylinder><radius>0.076</radius><length>0.065</length></cylinder></geometry>
@@ -77,7 +95,7 @@
       <inertial><mass>1.2</mass><inertia><ixx>0.0021553</ixx><iyy>0.0021553</iyy><izz>0.0034656</izz></inertia></inertial>
       <collision name="collision">
         <geometry><cylinder><radius>0.076</radius><length>0.065</length></cylinder></geometry>
-        <surface><friction><ode><mu>1.0</mu><mu2>0.1</mu2><fdir1>1 0 0</fdir1></ode></friction></surface>
+        <surface><friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction></surface>
       </collision>
       <visual name="visual">
         <geometry><cylinder><radius>0.076</radius><length>0.065</length></cylinder></geometry>
@@ -89,7 +107,7 @@
       <inertial><mass>1.2</mass><inertia><ixx>0.0021553</ixx><iyy>0.0021553</iyy><izz>0.0034656</izz></inertia></inertial>
       <collision name="collision">
         <geometry><cylinder><radius>0.076</radius><length>0.065</length></cylinder></geometry>
-        <surface><friction><ode><mu>1.0</mu><mu2>0.1</mu2><fdir1>1 0 0</fdir1></ode></friction></surface>
+        <surface><friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction></surface>
       </collision>
       <visual name="visual">
         <geometry><cylinder><radius>0.076</radius><length>0.065</length></cylinder></geometry>
@@ -97,12 +115,20 @@
       </visual>
     </link>
 
+    <joint name="front_left_steer_joint" type="revolute">
+      <parent>base_link</parent><child>front_left_steer_link</child>
+      <axis><xyz>0 0 1</xyz><limit><lower>-0.5</lower><upper>0.5</upper><effort>10.0</effort><velocity>5.0</velocity></limit></axis>
+    </joint>
+    <joint name="front_right_steer_joint" type="revolute">
+      <parent>base_link</parent><child>front_right_steer_link</child>
+      <axis><xyz>0 0 1</xyz><limit><lower>-0.5</lower><upper>0.5</upper><effort>10.0</effort><velocity>5.0</velocity></limit></axis>
+    </joint>
     <joint name="front_left_wheel_joint" type="revolute">
-      <parent>base_link</parent><child>front_left_wheel_link</child>
+      <parent>front_left_steer_link</parent><child>front_left_wheel_link</child>
       <axis><xyz>0 0 -1</xyz><limit><lower>-1.0e16</lower><upper>1.0e16</upper></limit></axis>
     </joint>
     <joint name="front_right_wheel_joint" type="revolute">
-      <parent>base_link</parent><child>front_right_wheel_link</child>
+      <parent>front_right_steer_link</parent><child>front_right_wheel_link</child>
       <axis><xyz>0 0 -1</xyz><limit><lower>-1.0e16</lower><upper>1.0e16</upper></limit></axis>
     </joint>
     <joint name="rear_left_wheel_joint" type="revolute">
@@ -171,11 +197,16 @@
     </link>
     <joint name="imu_mount" type="fixed"><parent>base_link</parent><child>imu_link</child></joint>
 
-    <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
-      <left_joint>front_left_wheel_joint</left_joint>
+    <!-- 阿克曼转向插件：收 Twist cmd_vel，内部解算左右前轮转向角（满足
+         阿克曼几何）与后轮驱动速度；话题与里程计契约与原差速插件一致。 -->
+    <plugin filename="gz-sim-ackermann-steering-system" name="gz::sim::systems::AckermannSteering">
+      <left_steering_joint>front_left_steer_joint</left_steering_joint>
+      <right_steering_joint>front_right_steer_joint</right_steering_joint>
       <left_joint>rear_left_wheel_joint</left_joint>
-      <right_joint>front_right_wheel_joint</right_joint>
       <right_joint>rear_right_wheel_joint</right_joint>
+      <steering_limit>0.5</steering_limit>
+      <wheel_base>0.31</wheel_base>
+      <kingpin_width>0.32</kingpin_width>
       <wheel_separation>0.32</wheel_separation>
       <wheel_radius>0.076</wheel_radius>
       <topic>/model/ground_vehicle/cmd_vel</topic>

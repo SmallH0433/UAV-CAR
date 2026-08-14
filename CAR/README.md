@@ -1,12 +1,14 @@
-# CAR — R680 4WD 差速小车
+# CAR — R680 阿克曼转向小车
 
-树莓派 4B + STM32 下位机（WHEELTEC R680 底盘）的 ROS 2 Humble 项目。
+树莓派 4B + STM32 下位机（WHEELTEC R680 阿克曼底盘：前轮舵机转向 +
+后轮双编码器电机驱动）的 ROS 2 Humble 项目。注意阿克曼底盘**不能横移、
+不能原地自旋**，最小转弯半径由轴距和最大转向角决定。
 主控制架构为 `car_nodes` 自定义轻量节点；Gazebo 仿真设施（`car_sim`）移植自
 `UAV/simulation/air_ground_sim_ws/src/air_ground_sim`，不含 Nav2。
 
 ## 包结构
 
-- `car_interfaces` — 自定义 msg/srv（WheelSpeeds / MotorFeedback / Obstacle(Array) / UavCommand / UavStatus / SetGoal）
+- `car_interfaces` — 自定义 msg/srv（AckermannCommand / MotorFeedback / Obstacle(Array) / UavCommand / UavStatus / SetGoal）
 - `car_nodes` — 7 个功能节点 + `sim_motor_bridge`（仿真电机桥）
 - `car_description` — R680 URDF + Gazebo 模型 `models/r680_4wd`
 - `car_sim` — gz 世界、ros_gz_bridge 配置、控制权 mux、指令网关、网页遥控
@@ -27,12 +29,12 @@ ugv_command_gateway        （限幅 ±1.0 m/s、±1.0 rad/s；0.5s 超时停车
   输出 output_topic:=/ugv/gateway/cmd_vel（参数覆盖默认值 /ugv/sim/cmd_vel）
         ▼
 chassis_controller         （其 /cmd_vel 输入 remap 自 /ugv/gateway/cmd_vel）
-  → /wheel_speeds（四轮 rad/s，左前/右前/左后/右后）
+  → /ackermann_cmd（自行车模型：后轮速[左后/右后] rad/s + 前轮转向角 rad）
   → /odom + TF(odom→base_footprint)（优先走 /motor_feedback 真实反馈）
         ▼
 sim_motor_bridge           （仿真里替代实机 motor_driver）
-  /wheel_speeds → 左右平均 (v,w) → /ugv/sim/cmd_vel ──[ros_gz_bridge]──→ gz /model/ground_vehicle/cmd_vel
-  gz /model/ground_vehicle/odometry ──[桥]──→ /ugv/wheel/odometry → 反算四轮 rad/s → /motor_feedback
+  /ackermann_cmd → (v,w) → /ugv/sim/cmd_vel ──[ros_gz_bridge]──→ gz /model/ground_vehicle/cmd_vel
+  gz /model/ground_vehicle/odometry ──[桥]──→ /ugv/wheel/odometry → 反算后轮速+转向角 → /motor_feedback
 ```
 
 传感器桥（gz → ROS）：`/model/ground_vehicle/scan` → `/scan`（→ perception_node →
@@ -94,11 +96,16 @@ ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
 
 - ~~用真实 `motor_driver`（WHEELTEC 串口协议）替换 `sim_motor_bridge`~~ 已完成：
   协议编解码在 `car_nodes/wheeltec_protocol.py`（0x7B/0x7D 帧、BCC 异或校验），
-  话题契约不变——订阅 `/wheel_speeds`（float32[4] rad/s，左前/右前/左后/右后），
-  发布 `/motor_feedback`（同序轮速 + 电压），并附带发布板载 IMU `/imu/data`。
+  话题契约不变——订阅 `/ackermann_cmd`（AckermannCommand：后轮速[左后/右后] rad/s +
+  前轮转向角 rad），发布 `/motor_feedback`（后轮速 + 转向角 + 电压），并附带发布
+  板载 IMU `/imu/data`。下发帧只含车体 (vx, vz)，转向角→舵机、后轮差速由 STM32
+  固件内部完成。
   实机以 `simulate:=false`、`port:=/dev/ttyACM0`（按实际串口）启动即可，
   chassis_controller 里程计自动切到真实反馈。协议细节见
   [docs/HARDWARE_RESERVED.md](docs/HARDWARE_RESERVED.md)。
 - 待实机联调：确认串口设备名、用厂商串口助手核对首帧数据，再开电机使能。
+  **实测修正 `wheelbase`（默认 0.31 m）与 `max_steering_angle`（默认 0.5 rad）**
+  （chassis_controller / sim_motor_bridge / motor_driver 三处参数保持一致）；
+  刷写 STM32 固件前先用蓝牙 APP 备份舵机零点参数（见 HARDWARE_RESERVED）。
 - `lidar_driver`（RPLIDAR C1）替换 gz 桥接的 `/scan`；`camera_driver`（CSI 摄像头）替换
   桥接的 `/camera/image_raw`。

@@ -70,7 +70,8 @@
       <span class="hint" style="margin-top:4px">开启后小车自主巡航避障；遥控按键可随时接管</span>
     </div>
     <div class="hint">
-      键盘：WASD / 方向键，按住行驶，松开或空格停车。<br>
+      键盘：WASD / 方向键，按住行驶，可组合（W+A 弧线转弯），松开或空格停车。<br>
+      阿克曼底盘不能原地自旋：单独按 A/D 只会原地预打方向，叠加 W/S 才会转弯。<br>
       指令 ~10Hz 持续发送；网关 350ms 看门狗会自动停车。
     </div>
   </div>
@@ -118,16 +119,23 @@
   });
   renderCruise();
 
-  var CMDS = {
-    forward:  function () { return { linear: +Number(linInput.value), angular: 0 }; },
-    backward: function () { return { linear: -Number(linInput.value), angular: 0 }; },
-    left:     function () { return { linear: 0, angular: +Number(angInput.value) }; },
-    right:    function () { return { linear: 0, angular: -Number(angInput.value) }; },
-    stop:     function () { return { linear: 0, angular: 0 }; }
-  };
-
-  var activeCmd = null;
+  // 组合按键状态：阿克曼转向需要 v 与 ω 同时下发（弧线行驶），
+  // 因此 W/S 与 A/D 可叠加，而不是单指令互斥。
+  var keys = { forward: false, backward: false, left: false, right: false };
   var sendTimer = null;
+
+  function currentCmd() {
+    var lin = 0, ang = 0;
+    if (keys.forward) { lin += Number(linInput.value); }
+    if (keys.backward) { lin -= Number(linInput.value); }
+    if (keys.left) { ang += Number(angInput.value); }
+    if (keys.right) { ang -= Number(angInput.value); }
+    return { linear: lin, angular: ang };
+  }
+
+  function anyActive() {
+    return keys.forward || keys.backward || keys.left || keys.right;
+  }
 
   function sendOnce(cmd) {
     fetch("/api/ugv/teleop", {
@@ -137,32 +145,44 @@
     }).catch(function () { /* 状态轮询会反映连接状态 */ });
   }
 
-  function startCommand(name) {
-    if (activeCmd === name) { return; }
-    stopCommand();
-    activeCmd = name;
-    sendOnce(CMDS[name]());
-    sendTimer = setInterval(function () { sendOnce(CMDS[name]()); }, 100);
+  function refreshSending() {
+    if (anyActive()) {
+      if (!sendTimer) {
+        sendOnce(currentCmd());
+        sendTimer = setInterval(function () { sendOnce(currentCmd()); }, 100);
+      }
+    } else if (sendTimer) {
+      clearInterval(sendTimer);
+      sendTimer = null;
+      sendOnce({ linear: 0, angular: 0 });
+    }
+  }
+
+  function press(name, on) {
+    keys[name] = on;
+    var button = document.querySelector('#pad button[data-cmd="' + name + '"]');
+    if (button) { button.classList.toggle("active", on); }
+    refreshSending();
   }
 
   function stopCommand() {
-    if (sendTimer) { clearInterval(sendTimer); sendTimer = null; }
-    if (activeCmd && activeCmd !== "stop") { sendOnce({ linear: 0, angular: 0 }); }
-    activeCmd = null;
+    keys.forward = keys.backward = keys.left = keys.right = false;
     document.querySelectorAll("#pad button").forEach(function (b) { b.classList.remove("active"); });
+    refreshSending();
   }
 
   document.querySelectorAll("#pad button").forEach(function (button) {
     var name = button.dataset.cmd;
     button.addEventListener("pointerdown", function (event) {
       event.preventDefault();
-      button.classList.add("active");
       if (name === "stop") { stopCommand(); sendOnce({ linear: 0, angular: 0 }); return; }
-      startCommand(name);
+      press(name, true);
     });
-    button.addEventListener("pointerup", function () { stopCommand(); });
+    button.addEventListener("pointerup", function () {
+      if (name !== "stop") { press(name, false); }
+    });
     button.addEventListener("pointerleave", function () {
-      if (activeCmd === name) { stopCommand(); }
+      if (name !== "stop" && keys[name]) { press(name, false); }
     });
   });
 
@@ -178,14 +198,12 @@
     var name = KEYMAP[event.code];
     if (name) {
       event.preventDefault();
-      var button = document.querySelector('#pad button[data-cmd="' + name + '"]');
-      if (button) { button.classList.add("active"); }
-      startCommand(name);
+      press(name, true);
     }
   });
   document.addEventListener("keyup", function (event) {
     var name = KEYMAP[event.code];
-    if (name && activeCmd === name) { stopCommand(); }
+    if (name) { press(name, false); }
   });
   window.addEventListener("blur", stopCommand);
 

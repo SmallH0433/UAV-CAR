@@ -3,7 +3,7 @@
 <package format="3">
   <name>car_description</name>
   <version>0.1.0</version>
-  <description>R680 4WD 小车描述包：URDF 与 Gazebo (gz-sim) 模型</description>
+  <description>R680 阿克曼转向小车描述包：URDF 与 Gazebo (gz-sim) 模型</description>
   <maintainer email="yoimiya@todo.todo">yoimiya</maintainer>
   <license>MIT</license>
 

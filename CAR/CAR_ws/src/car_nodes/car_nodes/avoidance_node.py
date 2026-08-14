@@ -9,11 +9,12 @@
 服务：
   /avoidance/set_goal (car_interfaces/SetGoal)
 参数：
-  safety_distance    (float, 0.5)  安全距离，小于该值停车/原地转向
+  safety_distance    (float, 0.5)  安全距离，小于该值停车（阿克曼不能原地转向）
   slow_down_distance (float, 1.2)  开始减速的距离
   max_linear         (float, 0.6)  最大线速度 m/s
   max_angular        (float, 1.0)  最大角速度 rad/s
   cruise_speed       (float, 0.3)  巡航速度 m/s
+  turn_speed         (float, 0.25) 掉头/脱困时的前进速度 m/s（带速转向）
   enable_cruise      (bool,  False) 无目标时是否巡航
   num_sectors        (int,   36)    前方 180° 划分的扇区数
 """
@@ -46,6 +47,7 @@ class AvoidanceNode(Node):
         self.declare_parameter('max_linear', 0.6)
         self.declare_parameter('max_angular', 1.0)
         self.declare_parameter('cruise_speed', 0.3)
+        self.declare_parameter('turn_speed', 0.25)
         self.declare_parameter('enable_cruise', False)
         self.declare_parameter('num_sectors', 36)
 
@@ -54,6 +56,7 @@ class AvoidanceNode(Node):
         self.max_linear = self.get_parameter('max_linear').value
         self.max_angular = self.get_parameter('max_angular').value
         self.cruise_speed = self.get_parameter('cruise_speed').value
+        self.turn_speed = self.get_parameter('turn_speed').value
         self.enable_cruise = self.get_parameter('enable_cruise').value
         self.num_sectors = self.get_parameter('num_sectors').value
 
@@ -130,8 +133,10 @@ class AvoidanceNode(Node):
             self.pub_cmd.publish(cmd)
             return
 
-        # 目标方向在正后方等超出可通行扇区范围时，先原地转向
+        # 目标方向在正后方等超出可通行扇区范围时，带速弧线掉头
+        # （阿克曼底盘不能原地自旋，必须保持前进速度）
         if abs(desired_angle) > math.pi / 2.0:
+            cmd.linear.x = self.turn_speed
             cmd.angular.z = self._clamp(
                 1.5 * desired_angle, -self.max_angular, self.max_angular)
             self.pub_cmd.publish(cmd)
@@ -140,7 +145,8 @@ class AvoidanceNode(Node):
         # 扇区避障：前方 180° 分扇区，选代价最低的可通过扇区
         best_angle = self._select_sector(desired_angle)
         if best_angle is None:
-            # 全部扇区不可通行：原地转向（朝障碍较少的一侧）
+            # 全部扇区不可通行：带速转向脱困（朝障碍较少的一侧）
+            cmd.linear.x = self.turn_speed
             cmd.angular.z = self.max_angular if desired_angle >= 0 else -self.max_angular
             self.pub_cmd.publish(cmd)
             return

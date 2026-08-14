@@ -14,7 +14,7 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Obstacle.msg"
   "msg/ObstacleArray.msg"
-  "msg/WheelSpeeds.msg"
+  "msg/AckermannCommand.msg"
   "msg/MotorFeedback.msg"
   "msg/UavStatus.msg"
   "msg/UavCommand.msg"

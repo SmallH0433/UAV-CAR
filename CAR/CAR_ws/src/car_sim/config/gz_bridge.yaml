@@ -8,14 +8,14 @@
   direction: GZ_TO_ROS
   qos_profile: CLOCK
 
-# 仿真电机桥输出的整车速度指令 → gz 差速驱动插件
+# 仿真电机桥输出的整车速度指令 → gz 阿克曼转向插件
 - ros_topic_name: /ugv/sim/cmd_vel
   gz_topic_name: /model/ground_vehicle/cmd_vel
   ros_type_name: geometry_msgs/msg/Twist
   gz_type_name: gz.msgs.Twist
   direction: ROS_TO_GZ
 
-# gz 差速里程计 → 仿真电机桥（反算 /motor_feedback）
+# gz 整车里程计 → 仿真电机桥（反算 /motor_feedback）
 - ros_topic_name: /ugv/wheel/odometry
   gz_topic_name: /model/ground_vehicle/odometry
   ros_type_name: nav_msgs/msg/Odometry

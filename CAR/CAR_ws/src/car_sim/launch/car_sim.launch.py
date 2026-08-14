@@ -6,7 +6,7 @@ gz sim（r680_test_field 世界）
   → ugv_control_mux（teleop 优先，无 heartbeat 放行避障指令）
   → ugv_command_gateway（限幅 + 0.5s 超时停车）
   → chassis_controller（/cmd_vel remap 自 /ugv/gateway/cmd_vel）
-  → sim_motor_bridge（/wheel_speeds ↔ gz，/motor_feedback 闭环）
+  → sim_motor_bridge（/ackermann_cmd ↔ gz，/motor_feedback 闭环）
   → web_gateway（http://127.0.0.1:8765 遥控页）
 
 headless:=true 时以 `gz sim -r -s` 无头运行。
