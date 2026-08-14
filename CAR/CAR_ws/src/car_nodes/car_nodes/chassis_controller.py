@@ -19,7 +19,7 @@
   odom_frame         (str, 'odom')
   base_frame         (str, 'base_footprint')
 
-运动学为自行车模型：转向角 δ = atan2(ω·L, v)，后轮速 v ± ω·track/2。
+运动学为自行车模型：转向角 δ = atan(ω·L/v)，后轮速 v ± ω·track/2。
 注意阿克曼底盘不能原地自旋：|v| ≈ 0 时后轮速强制为 0，转向角按 ω
 方向打满（预打方向，车一动即转弯）。
 """

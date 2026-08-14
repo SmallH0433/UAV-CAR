@@ -47,6 +47,18 @@ def test_steering_clamped_and_consistent():
     assert w == pytest.approx(v_in * math.tan(MAX_STEER) / WHEELBASE)
 
 
+def test_reverse_turn_roundtrip():
+    # 倒车转弯：v<0 时 δ 必须与 v 异号才能得到正确的 ω 方向
+    # （atan2 会错误地把 δ 映射到限幅值另一侧，这里回归验证 atan 方案）
+    v_in, w_in = -0.3, 0.5
+    speeds, steering = twist_to_ackermann(
+        v_in, w_in, R, WHEELBASE, TRACK, MAX_STEER)
+    assert steering < 0.0  # 倒车左转（ω>0）需要负转向角
+    v, w = ackermann_to_twist(speeds, steering, R, WHEELBASE)
+    assert v == pytest.approx(v_in)
+    assert w == pytest.approx(w_in)
+
+
 def test_standstill_no_wheel_spin():
     # v=0, w≠0：阿克曼不能原地自旋——后轮速必须为 0，δ 按 w 方向打满（预打方向）
     speeds, steering = twist_to_ackermann(0.0, 1.0, R, WHEELBASE, TRACK, MAX_STEER)

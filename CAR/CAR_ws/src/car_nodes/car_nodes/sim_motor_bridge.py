@@ -35,9 +35,12 @@ def twist_to_ackermann(v, w, wheel_radius, wheelbase, track_width,
                        max_steering_angle):
     """(线速度 v, 角速度 w) → ([左后, 右后] 轮角速度 rad/s, 转向角 δ rad)。
 
-    自行车模型：δ = atan2(w·L, v)，后轮速 = (v ∓ w_eff·track/2) / r，
+    自行车模型：δ = atan(w·L / v)，后轮速 = (v ∓ w_eff·track/2) / r，
     其中 w_eff 为转向角限幅后实际可达的角速度，保证 δ 被限幅时
     后轮差速与实际转弯半径一致。
+    注意必须用 atan 而非 atan2：倒车（v<0）时 ω = v·tanδ/L 要求 δ
+    与 v 异号，atan 的值域 ±π/2 正好给出正确符号，atan2 会把倒车
+    转向角映射到 ±π/2 之外再被限幅，导致倒车转向反向。
     v≈0 时不能原地转向：后轮速为 0，δ 按 w 方向打满（预打方向）。
     """
     if abs(v) < V_EPS:
@@ -45,7 +48,7 @@ def twist_to_ackermann(v, w, wheel_radius, wheelbase, track_width,
             return [0.0, 0.0], 0.0
         steering = math.copysign(max_steering_angle, w)
         return [0.0, 0.0], steering
-    steering = math.atan2(w * wheelbase, v)
+    steering = math.atan(w * wheelbase / v)
     steering = max(-max_steering_angle, min(max_steering_angle, steering))
     w_eff = v * math.tan(steering) / wheelbase
     left = (v - w_eff * track_width / 2.0) / wheel_radius
