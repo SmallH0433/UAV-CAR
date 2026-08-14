@@ -1,0 +1,81 @@
+# CAR_ws — R680 阿克曼小车实机部署版（树莓派 4B + Ubuntu）
+
+从主仓 `D:/Codex/CAR` 摘出的实机运行子集，去掉了所有 Gazebo 仿真设施
+（gz 世界、ros_gz_bridge、仿真 launch、URDF 模型）。本目录内容对应
+树莓派上的 `~/CAR_ws` 工作区。
+
+对应主仓版本：提交 `5ee4f4e`（release 2.0，优化避障逻辑）。
+
+## 目录结构
+
+- `src/car_interfaces` — 自定义 msg/srv
+- `src/car_nodes` — 实机全部节点：motor_driver（WHEELTEC 串口协议）、
+  chassis_controller（自行车模型）、perception、avoidance（自主绕行）、
+  lidar_driver（RPLIDAR C1）、camera_driver（V4L2）、uav_bridge、
+  sim_motor_bridge（承载运动学函数 + 空载测试用）
+- `src/car_sim` — 运行基础设施（包名沿用主仓）：控制权 mux、指令网关、
+  网页遥控、`real_bringup.launch.py`
+- `config/99-car-devices.rules` — udev 固定设备名（/dev/wheeltec、/dev/rplidar）
+- `scripts/setup_pi.sh` — 树莓派一键环境配置
+- `scripts/sync_to_pi.sh` — PC（WSL）侧 rsync 同步到树莓派
+- `docs/HARDWARE_RESERVED.md` — 硬件接线/串口协议/舵机零点备份注意事项
+
+## 部署流程
+
+### 1. 树莓派系统
+
+Ubuntu Server 22.04 arm64（ROS 2 Humble 有官方 arm64 apt 源，
+**切勿在 Pi 上源码编译 ROS**）。
+
+### 2. 拷贝到树莓派
+
+方式 A（PC 的 WSL 里一键同步，推荐）：
+
+```bash
+cd /mnt/d/CAR_deploy
+bash scripts/sync_to_pi.sh <树莓派IP> <用户名>
+```
+
+方式 B（U盘/scp 手动拷贝）：把整个目录拷到树莓派 `~/CAR_ws`。
+
+### 3. 树莓派上配置环境 + 编译
+
+```bash
+cd ~/CAR_ws
+bash scripts/setup_pi.sh     # 装 ROS/依赖、配 dialout 组、装 udev 规则
+# 注销重新登录（dialout 生效）后：
+source /opt/ros/humble/setup.bash
+colcon build                 # Pi 4B 约 2~5 分钟
+echo "source ~/CAR_ws/install/setup.bash" >> ~/.bashrc
+```
+
+## 运行
+
+```bash
+# 实机全链路（装了 udev 规则可用 /dev/wheeltec /dev/rplidar）
+ros2 launch car_sim real_bringup.launch.py \
+  motor_port:=/dev/wheeltec lidar_port:=/dev/rplidar
+
+# 空载链路自检（不接任何硬件）
+ros2 launch car_sim real_bringup.launch.py \
+  motor_simulate:=true lidar_simulate:=true camera_simulate:=true
+```
+
+网页控制台：同一局域网的电脑/手机浏览器打开 `http://<树莓派IP>:8765`
+（默认监听 0.0.0.0；WASD 组合按键弧线遥控，遥控优先于避障）。
+
+## 实机联调顺序（重要）
+
+1. **先备份舵机零点**（蓝牙 APP「获取设备参数」倒数 2/3/4 行，见 docs），再动固件。
+2. 电机使能开关保持关闭，先跑空载自检确认链路通畅。
+3. 接 STM32 串口 3（**不要用串口 1**，上电帧会被当烧录包卡死），
+   `simulate:=false` 启动后用 `ros2 topic echo /motor_feedback` 核对电压/轮速。
+4. 架空小车使能电机，网页低速遥控验证转向方向与轮速方向。
+5. **实测修正参数**：`wheelbase`（默认 0.31 m）、`max_steering_angle`
+   （默认 0.5 rad）——chassis_controller / motor_driver 两处保持一致。
+6. 落地测试避障绕行；需要巡航时网页点「开启巡航」或 `enable_cruise:=true`。
+
+## 与主仓的关系
+
+本目录是发布快照，日常开发在主仓 `D:/Codex/CAR`（含仿真）进行；
+实机节点有更新时重新从主仓拷贝对应包，用 `sync_to_pi.sh` 增量同步到树莓派。

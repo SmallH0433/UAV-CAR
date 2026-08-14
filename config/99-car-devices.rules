@@ -1,0 +1,15 @@
+# R680 阿克曼小车设备固定命名规则（树莓派 4B，Ubuntu 22.04）
+# 安装：sudo cp 99-car-devices.rules /etc/udev/rules.d/ && sudo udevadm control --reload && sudo udevadm trigger
+# 生效后启动参数可用：motor_port:=/dev/wheeltec lidar_port:=/dev/rplidar
+#
+# 注意：VID:PID 需按实际设备核对（lsusb 查看）：
+# - WHEELTEC 控制板串口 3 用 CH9102/CH340 芯片（WCH 厂商 1a86）
+# - RPLIDAR C1 一般用 CP210x（10c4:ea60）或 CH340
+# 若两个设备芯片型号相同（如都是 CH340），需改用序列号区分：
+# udevadm info -a -n /dev/ttyUSB0 | grep serial 取 ATTRS{serial} 填入
+
+# WHEELTEC STM32 控制板（CH9102，WCH 1a86）
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", SYMLINK+="wheeltec", MODE="0660", GROUP="dialout"
+
+# RPLIDAR C1（CP210x）
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="rplidar", MODE="0660", GROUP="dialout"
