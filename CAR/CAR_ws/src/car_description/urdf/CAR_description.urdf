@@ -41,6 +41,9 @@
   <material name="camera_blue">
     <color rgba="0.02 0.20 0.45 1.0"/>
   </material>
+  <material name="rear_camera_orange">
+    <color rgba="0.60 0.18 0.05 1.0"/>
+  </material>
 
   <!-- ======================== 地面投影坐标系 ======================== -->
   <link name="base_footprint"/>
@@ -446,6 +449,56 @@
     <origin xyz="0 0 0" rpy="-1.57079632679 0 -1.57079632679"/>
   </joint>
 
+  <!-- ======================== 车尾摄像头 ======================== -->
+  <link name="rear_camera_link">
+    <inertial>
+      <mass value="0.080"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia
+        ixx="0.000015"
+        ixy="0.0"
+        ixz="0.0"
+        iyy="0.000020"
+        iyz="0.0"
+        izz="0.000020"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.040 0.032 0.026"/>
+      </geometry>
+      <material name="rear_camera_orange"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.040 0.032 0.026"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="rear_camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="rear_camera_link"/>
+    <!-- 车尾上方，与车头相机同高对称，绕 Z 转 π 朝车尾；按实际安装孔位修改 -->
+    <origin xyz="-0.185 0 0.105" rpy="0 0 3.14159265359"/>
+  </joint>
+
+  <!-- 后摄 ROS 光学坐标系：Z 朝后、X 朝右、Y 朝下 -->
+  <link name="rear_camera_optical_frame">
+    <inertial>
+      <mass value="0.001"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="0.000001" ixy="0" ixz="0" iyy="0.000001" iyz="0" izz="0.000001"/>
+    </inertial>
+  </link>
+
+  <joint name="rear_camera_optical_joint" type="fixed">
+    <parent link="rear_camera_link"/>
+    <child link="rear_camera_optical_frame"/>
+    <origin xyz="0 0 0" rpy="-1.57079632679 0 -1.57079632679"/>
+  </joint>
+
   <!-- ======================== 顶部激光雷达 ======================== -->
   <link name="laser_frame">
     <inertial>
@@ -561,6 +614,9 @@
   </gazebo>
   <gazebo reference="camera_link">
     <material>Gazebo/Blue</material>
+  </gazebo>
+  <gazebo reference="rear_camera_link">
+    <material>Gazebo/Orange</material>
   </gazebo>
   <gazebo reference="laser_frame">
     <material>Gazebo/Black</material>

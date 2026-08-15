@@ -12,6 +12,7 @@
 - `car_nodes` — 7 个功能节点 + `sim_motor_bridge`（仿真电机桥）
 - `car_description` — R680 URDF + Gazebo 模型 `models/r680_4wd`
 - `car_sim` — gz 世界、ros_gz_bridge 配置、控制权 mux、指令网关、网页遥控
+- `vendor/lslidar_ros2` — 镭神 N10P 雷达厂商 ROS2 SDK（lslidar_driver + lslidar_msgs，实机用）
 
 ## 架构（仿真话题链）
 
@@ -39,7 +40,9 @@ sim_motor_bridge           （仿真里替代实机 motor_driver）
 
 传感器桥（gz → ROS）：`/model/ground_vehicle/scan` → `/scan`（→ perception_node →
 `/perception/obstacles` → avoidance_node）；`/model/ground_vehicle/front_camera` →
-`/camera/image_raw`（+`camera_info`，lazy）；`/model/ground_vehicle/imu` → `/imu/data`（备用）。
+`/camera/image_raw`、`/model/ground_vehicle/rear_camera` → `/camera/rear/image_raw`
+（+各自 `camera_info`，lazy）；`/model/ground_vehicle/imu` → `/imu/data`（备用）。
+网页遥控页前后双画面：`/api/camera.jpg`（前视）与 `/api/camera_rear.jpg`（后视）。
 
 ### 话题名冲突处理（最终 remap 方案）
 
@@ -77,7 +80,19 @@ ros2 launch car_sim teleop_test.launch.py
 ```
 
 网页遥控：浏览器打开 <http://localhost:8765>（WSL 内运行时用 Windows 浏览器同样可访问）。
-方向键按钮 / WASD / 方向键控制，按住行驶、松开停车；页面显示位姿、速度、控制权与前视相机。
+方向键按钮 / WASD / 方向键控制，按住行驶、松开停车；页面显示位姿、速度、控制权与前后视相机。
+
+### 一键启停脚本
+
+`scripts/sim.sh`（WSL 内）封装了仿真的一键启动/停止/状态查询；Windows 侧可双击
+`scripts/sim_start.bat` / `scripts/sim_stop.bat`（start 支持 `headless` 参数无头运行）。
+stop 会先杀 launch 进程组，再按本项目特征兜底清理 gz/桥/节点残留并校验：
+
+```bash
+bash /mnt/d/Codex/CAR/scripts/sim.sh start [headless]
+bash /mnt/d/Codex/CAR/scripts/sim.sh status
+bash /mnt/d/Codex/CAR/scripts/sim.sh stop
+```
 
 自主避障：默认 `enable_cruise:=false`，车原地待命。可直接点网页遥控页的
 **「开启巡航」**按钮（一键开关，经 `/api/ugv/cruise` 动态设置避障节点参数），
@@ -91,6 +106,11 @@ ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
 
 遥控优先：网页按住方向键时 operator heartbeat 新鲜（0.6s 内），teleop 覆盖避障指令；松手
 350ms 后网关看门狗自动停车，600ms 后 mux 把控制权交还避障。
+
+巡航转向辅助：巡航开启时 web_gateway 自动把 mux 的 `steering_assist` 置 true（关巡航即复位）。
+此时按住 A/D 只接管方向（angular 用遥控值），线速度保持巡航速度；若遥控给了非零线速度
+（W/S 加速/刹车）则以遥控线速度为准。松手后恢复全自主避障。mux 状态中该模式
+authority 为 `operator_steering`。
 
 ## 实机待办
 
@@ -107,5 +127,9 @@ ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
   **实测修正 `wheelbase`（默认 0.31 m）与 `max_steering_angle`（默认 0.5 rad）**
   （chassis_controller / sim_motor_bridge / motor_driver 三处参数保持一致）；
   刷写 STM32 固件前先用蓝牙 APP 备份舵机零点参数（见 HARDWARE_RESERVED）。
-- `lidar_driver`（RPLIDAR C1）替换 gz 桥接的 `/scan`；`camera_driver`（CSI 摄像头）替换
-  桥接的 `/camera/image_raw`。
+- `lidar_driver`（镭神 N10P 串口版）替换 gz 桥接的 `/scan`：厂商 ROS2 SDK 已 vendored 在
+  `CAR_ws/src/vendor/lslidar_ros2`，实机 `ros2 launch car_nodes n10p_lidar.launch.py`
+  （详见 docs/HARDWARE_RESERVED.md），自带节点仅空载仿真用；
+  `camera_driver`（CSI 摄像头）替换桥接的 `/camera/image_raw`；后置 USB 摄像头以
+  `camera_driver` 第二实例（`device:=/dev/video1`、`image_topic:=/camera/rear/image_raw` 等，
+  见节点 docstring）替换桥接的 `/camera/rear/image_raw`。

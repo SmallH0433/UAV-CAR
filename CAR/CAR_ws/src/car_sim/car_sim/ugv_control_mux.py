@@ -6,6 +6,13 @@ require ``/mission/status`` and ``/ugv/mission_gate``; arbitration is then a
 simple teleop-over-autonomy scheme — a fresh operator heartbeat (0.6 s) lets
 ``/ugv/teleop/cmd_vel`` override the autonomous ``/cmd_vel`` input, and
 without a heartbeat the autonomous command (avoidance node) passes through.
+
+Optional ``steering_assist`` parameter (default ``false``, dynamically
+settable): when true and both operator and autonomous inputs are fresh, the
+mux blends instead of overriding — angular (steering) comes from teleop while
+linear keeps the autonomous cruise speed, unless the operator explicitly
+commands a non-zero linear (then teleop linear wins, allowing braking).
+The web gateway flips this on while avoidance cruise is enabled.
 """
 
 import json
@@ -41,6 +48,7 @@ class UgvControlMux(Node):
         self.declare_parameter("mission_status_timeout_s", 0.75)
         self.declare_parameter("mission_gate_timeout_s", 0.50)
         self.declare_parameter("operator_timeout_s", 0.60)
+        self.declare_parameter("steering_assist", False)
         self.declare_parameter("publish_rate_hz", 30.0)
 
         self.command_enabled = bool(self.get_parameter("command_enabled").value)
@@ -250,7 +258,19 @@ class UgvControlMux(Node):
         )
 
         if operator_fresh:
-            if teleop_fresh:
+            steering_assist = bool(self.get_parameter("steering_assist").value)
+            if steering_assist and teleop_fresh and navigation_fresh:
+                # 定速巡航转向辅助：方向听操作员，速度保持巡航；
+                # 操作员明确给非零线速度（刹车/加速）时以遥控为准。
+                blended = Twist()
+                blended.linear.x = (
+                    self.teleop_command.linear.x
+                    if abs(self.teleop_command.linear.x) > 1e-3
+                    else self.navigation_command.linear.x
+                )
+                blended.angular.z = self.teleop_command.angular.z
+                self._publish(blended, True, "operator_steering", "cruise_steering_assist")
+            elif teleop_fresh:
                 self._publish(self.teleop_command, True, "operator_teleop", "operator_teleop")
             elif navigation_fresh:
                 self._publish(self.navigation_command, True, "operator_nav2", "operator_navigation")
