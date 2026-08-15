@@ -8,7 +8,8 @@ default and exposes:
   GET  /api/health       liveness probe
   GET  /api/status       mux/gateway status + /odom pose + camera state
   POST /api/ugv/teleop   {"linear": m/s, "angular": rad/s} operator command
-  GET  /api/camera.jpg   latest gz-bridge camera frame as JPEG (503 if absent)
+  GET  /api/camera.jpg   latest gz-bridge front camera frame as JPEG (503 if absent)
+  GET  /api/camera_rear.jpg  latest gz-bridge rear camera frame as JPEG (503 if absent)
 
 Teleop is fail-closed: commands older than ``teleop_watchdog_s`` are replaced
 by a zero command, and the operator heartbeat published alongside teleop is
@@ -106,6 +107,7 @@ class WebGateway(Node):
         self.declare_parameter("heartbeat_topic", "/ugv/operator/heartbeat")
         self.declare_parameter("odom_topic", "/odom")
         self.declare_parameter("camera_topic", "/camera/image_raw")
+        self.declare_parameter("rear_camera_topic", "/camera/rear/image_raw")
         self.declare_parameter("teleop_watchdog_s", 0.35)
         self.declare_parameter("max_linear_mps", 0.5)
         self.declare_parameter("max_angular_rps", 0.7)
@@ -113,6 +115,7 @@ class WebGateway(Node):
         self.declare_parameter("camera_stale_after_s", 3.0)
         self.declare_parameter("jpeg_quality", 72)
         self.declare_parameter("avoidance_node_name", "/avoidance_node")
+        self.declare_parameter("mux_node_name", "/ugv_control_mux")
 
         self.bind_address = str(self.get_parameter("bind_address").value)
         self.port = int(self.get_parameter("port").value)
@@ -139,6 +142,8 @@ class WebGateway(Node):
         self.speed_mps = 0.0
         self.image_jpeg: Optional[bytes] = None
         self.image_time = 0.0
+        self.rear_image_jpeg: Optional[bytes] = None
+        self.rear_image_time = 0.0
         self.bridge = CvBridge() if _CAMERA_AVAILABLE else None
 
         self.teleop_publisher = self.create_publisher(
@@ -169,12 +174,18 @@ class WebGateway(Node):
             self.create_subscription(
                 Image,
                 str(self.get_parameter("camera_topic").value),
-                self._on_image,
+                lambda msg: self._on_image(msg, rear=False),
+                qos_profile_sensor_data,
+            )
+            self.create_subscription(
+                Image,
+                str(self.get_parameter("rear_camera_topic").value),
+                lambda msg: self._on_image(msg, rear=True),
                 qos_profile_sensor_data,
             )
         else:
             self.get_logger().warning(
-                "cv2/cv_bridge unavailable: /api/camera.jpg will return 503"
+                "cv2/cv_bridge unavailable: camera JPEG endpoints will return 503"
             )
 
         self.watchdog_timer = create_steady_timer(self, 0.1, self._teleop_watchdog)
@@ -188,6 +199,12 @@ class WebGateway(Node):
         self.cruise_state = None  # True/False；None=避障节点不在线
         self.cruise_poll_timer = create_steady_timer(
             self, 2.0, self._poll_cruise_state)
+
+        # 巡航转向辅助联动：巡航开关状态变化时推送到 mux 的 steering_assist
+        mux = str(self.get_parameter("mux_node_name").value)
+        self.assist_set_client = self.create_client(
+            SetParameters, f"{mux}/set_parameters")
+        self._assist_pushed = None  # 已成功推送的 steering_assist 值
 
         self.http_server = ThreadingHTTPServer(
             (self.bind_address, self.port), self._handler_class()
@@ -220,9 +237,10 @@ class WebGateway(Node):
             )
             self.topic_times["odom"] = time.monotonic()
 
-    def _on_image(self, message: Image) -> None:
+    def _on_image(self, message: Image, rear: bool = False) -> None:
         now = time.monotonic()
-        if now - self.image_time < self.camera_interval:
+        image_time = self.rear_image_time if rear else self.image_time
+        if now - image_time < self.camera_interval:
             return
         try:
             frame = self.bridge.imgmsg_to_cv2(message, desired_encoding="bgr8")
@@ -234,9 +252,14 @@ class WebGateway(Node):
             return
         if success:
             with self.lock:
-                self.image_jpeg = encoded.tobytes()
-                self.image_time = now
-                self.topic_times["camera"] = now
+                if rear:
+                    self.rear_image_jpeg = encoded.tobytes()
+                    self.rear_image_time = now
+                    self.topic_times["camera_rear"] = now
+                else:
+                    self.image_jpeg = encoded.tobytes()
+                    self.image_time = now
+                    self.topic_times["camera"] = now
 
     # ---------------- teleop safety ----------------
     def publish_teleop(self, linear: float, angular: float) -> None:
@@ -279,6 +302,36 @@ class WebGateway(Node):
                 if response.values:
                     with self.lock:
                         self.cruise_state = bool(response.values[0].bool_value)
+                    self._sync_steering_assist(self.cruise_state)
+            except Exception:
+                pass
+
+        future.add_done_callback(on_done)
+
+    def _sync_steering_assist(self, cruise_enabled) -> None:
+        """巡航状态变化时同步 mux 的 steering_assist 参数（失败则下轮重试）。"""
+        if not isinstance(cruise_enabled, bool):
+            return
+        if cruise_enabled == self._assist_pushed:
+            return
+        if not self.assist_set_client.service_is_ready():
+            return
+        parameter = Parameter(
+            name="steering_assist",
+            value=ParameterValue(
+                type=ParameterType.PARAMETER_BOOL, bool_value=cruise_enabled),
+        )
+        request = SetParameters.Request()
+        request.parameters = [parameter]
+        future = self.assist_set_client.call_async(request)
+
+        def on_done(fut):
+            try:
+                response = fut.result()
+                if response.results and response.results[0].successful:
+                    self._assist_pushed = cruise_enabled
+                    self.get_logger().info(
+                        f"mux steering_assist <- {cruise_enabled}")
             except Exception:
                 pass
 
@@ -317,6 +370,7 @@ class WebGateway(Node):
         if outcome.get("ok"):
             with self.lock:
                 self.cruise_state = bool(enable)
+            self._sync_steering_assist(self.cruise_state)
             return True, ""
         return False, outcome.get("reason") or "set_rejected"
 
@@ -366,7 +420,10 @@ class WebGateway(Node):
                     self._json(HTTPStatus.OK, gateway.status_snapshot())
                     return
                 if path == "/api/camera.jpg":
-                    gateway._serve_camera(self)
+                    gateway._serve_camera(self, rear=False)
+                    return
+                if path == "/api/camera_rear.jpg":
+                    gateway._serve_camera(self, rear=True)
                     return
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
@@ -451,14 +508,14 @@ class WebGateway(Node):
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             pass
 
-    def _serve_camera(self, handler) -> None:
+    def _serve_camera(self, handler, rear: bool = False) -> None:
         if not _CAMERA_AVAILABLE:
             handler._json(
                 HTTPStatus.SERVICE_UNAVAILABLE, {"error": "camera_backend_unavailable"}
             )
             return
         with self.lock:
-            image = self.image_jpeg
+            image = self.rear_image_jpeg if rear else self.image_jpeg
         if image is None:
             handler._json(
                 HTTPStatus.SERVICE_UNAVAILABLE, {"error": "camera_not_ready"}
@@ -493,6 +550,9 @@ class WebGateway(Node):
                 for key, timestamp in self.topic_times.items()
             }
             image_age = None if not self.image_time else round(now - self.image_time, 2)
+            rear_image_age = (
+                None if not self.rear_image_time else round(now - self.rear_image_time, 2)
+            )
         return {
             "gateway": self.health_snapshot(),
             "server_time_ms": int(time.time() * 1000),
@@ -509,6 +569,13 @@ class WebGateway(Node):
                     image_age is not None and image_age <= self.camera_stale_after
                 ),
                 "age_s": image_age,
+            },
+            "camera_rear": {
+                "ready": bool(
+                    rear_image_age is not None
+                    and rear_image_age <= self.camera_stale_after
+                ),
+                "age_s": rear_image_age,
             },
             "topic_ages_s": topic_ages,
         }

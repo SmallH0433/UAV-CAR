@@ -4,18 +4,22 @@
 （gz 世界、ros_gz_bridge、仿真 launch、URDF 模型）。本目录内容对应
 树莓派上的 `~/CAR_ws` 工作区。
 
-对应主仓版本：提交 `5ee4f4e`（release 2.0，优化避障逻辑）。
+对应主仓版本：提交 `33ff700`（release 3.0，后置双摄像头 + 巡航转向辅助 + N10P 雷达适配）。
 
 ## 目录结构
 
 - `src/car_interfaces` — 自定义 msg/srv
 - `src/car_nodes` — 实机全部节点：motor_driver（WHEELTEC 串口协议）、
   chassis_controller（自行车模型）、perception、avoidance（自主绕行）、
-  lidar_driver（RPLIDAR C1）、camera_driver（V4L2）、uav_bridge、
-  sim_motor_bridge（承载运动学函数 + 空载测试用）
-- `src/car_sim` — 运行基础设施（包名沿用主仓）：控制权 mux、指令网关、
-  网页遥控、`real_bringup.launch.py`
-- `config/99-car-devices.rules` — udev 固定设备名（/dev/wheeltec、/dev/rplidar）
+  lidar_driver（仅空载仿真用；实机雷达为镭神 N10P，用厂商驱动 lslidar_driver）、
+  camera_driver（V4L2，支持前摄 + USB 后摄双实例）、uav_bridge、
+  sim_motor_bridge（承载运动学函数 + 空载测试用）；
+  `launch/n10p_lidar.launch.py` + `config/lslidar_n10p_uart.yaml` 为雷达单独启动入口
+- `src/car_sim` — 运行基础设施（包名沿用主仓）：控制权 mux（含巡航转向辅助
+  steering_assist）、指令网关、网页遥控（前后双画面）、`real_bringup.launch.py`
+- `src/vendor/lslidar_ros2` — 镭神 N10P 厂商 ROS2 SDK（lslidar_driver + lslidar_msgs +
+  wheeltec_udev.sh），随工作区一起 colcon build，无需再从 GitHub 拉取
+- `config/99-car-devices.rules` — udev 固定设备名（/dev/wheeltec、/dev/wheeltec_lidar）
 - `scripts/setup_pi.sh` — 树莓派一键环境配置
 - `scripts/sync_to_pi.sh` — PC（WSL）侧 rsync 同步到树莓派
 - `docs/HARDWARE_RESERVED.md` — 硬件接线/串口协议/舵机零点备份注意事项
@@ -52,17 +56,36 @@ echo "source ~/CAR_ws/install/setup.bash" >> ~/.bashrc
 ## 运行
 
 ```bash
-# 实机全链路（装了 udev 规则可用 /dev/wheeltec /dev/rplidar）
+# 实机全链路（装了 udev 规则可用 /dev/wheeltec /dev/wheeltec_lidar）
 ros2 launch car_sim real_bringup.launch.py \
-  motor_port:=/dev/wheeltec lidar_port:=/dev/rplidar
+  motor_port:=/dev/wheeltec lidar_port:=/dev/wheeltec_lidar
 
-# 空载链路自检（不接任何硬件）
+# 接了 USB 后置摄像头时（遥控页显示后视画面）
+ros2 launch car_sim real_bringup.launch.py rear_camera_device:=/dev/video1
+
+# 空载链路自检（不接任何硬件，模拟雷达/电机/相机）
 ros2 launch car_sim real_bringup.launch.py \
-  motor_simulate:=true lidar_simulate:=true camera_simulate:=true
+  lidar_mode:=sim motor_simulate:=true camera_simulate:=true
 ```
 
+雷达说明：实机雷达为**镭神 N10P 串口版**（双回波，默认单回波），厂商 ROS2 SDK
+已 vendored 在 `src/vendor/lslidar_ros2`，随工作区一起编译即可（驱动编译期依赖
+PCL/pcap，`setup_pi.sh` 已含）：
+
+```bash
+sudo apt install libpcl-dev ros-humble-pcl-conversions libpcap-dev
+cd ~/CAR_ws && colcon build && source install/setup.bash
+```
+
+launch 用 `src/car_nodes/config/lslidar_n10p_uart.yaml`（话题 `/scan`、
+frame_id `laser_frame`、串口默认 `/dev/wheeltec_lidar`、10Hz、高精度、单回波）。
+N10P 电机上电即转，**无需开工令**；停转/恢复用
+`ros2 topic pub --once /x10/motor_control std_msgs/msg/Int8 "{data: 0}"`（1 转 0 停）。
+自带 `lidar_driver` 节点仅用于 `lidar_mode:=sim` 空载自检。
+
 网页控制台：同一局域网的电脑/手机浏览器打开 `http://<树莓派IP>:8765`
-（默认监听 0.0.0.0；WASD 组合按键弧线遥控，遥控优先于避障）。
+（默认监听 0.0.0.0；WASD 组合按键弧线遥控，遥控优先于避障；前视画面，
+接了后摄时前后双画面；巡航开启后可用 A/D 手动微调方向，即转向辅助）。
 
 ## 实机联调顺序（重要）
 

@@ -1,14 +1,24 @@
 """相机驱动节点
 
-发布：
+默认发布（前视）：
   /camera/image_raw   (sensor_msgs/Image)      frame_id=camera_optical_frame
   /camera/camera_info (sensor_msgs/CameraInfo)
 参数：
-  device (str,  '/dev/video0')  摄像头设备路径
-  width  (int,  640)            图像宽度
-  height (int,  480)            图像高度
-  fps    (int,  15)             发布帧率
-  simulate (bool, True)         True=生成渐变测试图；False=cv2 读真实摄像头
+  device     (str,  '/dev/video0')           摄像头设备路径
+  width      (int,  640)                     图像宽度
+  height     (int,  480)                     图像高度
+  fps        (int,  15)                      发布帧率
+  simulate   (bool, True)                    True=生成渐变测试图；False=cv2 读真实摄像头
+  image_topic(str,  '/camera/image_raw')     图像话题
+  info_topic (str,  '/camera/camera_info')   CameraInfo 话题
+  frame_id   (str,  'camera_optical_frame')  图像与 CameraInfo 的 frame_id
+
+后置摄像头（USB，如 /dev/video1）以第二实例运行：
+  ros2 run car_nodes camera_driver_node --ros-args \
+    -p device:=/dev/video1 -p simulate:=false \
+    -p image_topic:=/camera/rear/image_raw \
+    -p info_topic:=/camera/rear/camera_info \
+    -p frame_id:=rear_camera_optical_frame
 """
 
 import numpy as np
@@ -27,15 +37,21 @@ class CameraDriverNode(Node):
         self.declare_parameter('height', 480)
         self.declare_parameter('fps', 15)
         self.declare_parameter('simulate', True)
+        self.declare_parameter('image_topic', '/camera/image_raw')
+        self.declare_parameter('info_topic', '/camera/camera_info')
+        self.declare_parameter('frame_id', 'camera_optical_frame')
 
         self.device = self.get_parameter('device').value
         self.width = self.get_parameter('width').value
         self.height = self.get_parameter('height').value
         fps = self.get_parameter('fps').value
         self.simulate = self.get_parameter('simulate').value
+        self.frame_id = self.get_parameter('frame_id').value
 
-        self.pub_image = self.create_publisher(Image, '/camera/image_raw', 10)
-        self.pub_info = self.create_publisher(CameraInfo, '/camera/camera_info', 10)
+        self.pub_image = self.create_publisher(
+            Image, self.get_parameter('image_topic').value, 10)
+        self.pub_info = self.create_publisher(
+            CameraInfo, self.get_parameter('info_topic').value, 10)
 
         self.cap = None
         if not self.simulate:
@@ -70,7 +86,7 @@ class CameraDriverNode(Node):
 
         msg = Image()
         msg.header.stamp = stamp
-        msg.header.frame_id = 'camera_optical_frame'
+        msg.header.frame_id = self.frame_id
         msg.height = self.height
         msg.width = self.width
         msg.encoding = 'rgb8'
@@ -92,7 +108,7 @@ class CameraDriverNode(Node):
         """按 640x480 简单针孔模型填 CameraInfo"""
         info = CameraInfo()
         info.header.stamp = stamp
-        info.header.frame_id = 'camera_optical_frame'
+        info.header.frame_id = self.frame_id
         info.width = self.width
         info.height = self.height
         fx = fy = 0.5 * self.width  # 简单估计：视场角约 90°

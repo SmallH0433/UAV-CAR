@@ -11,7 +11,10 @@ sudo apt install -y \
   python3-colcon-common-extensions \
   python3-serial \
   python3-numpy \
-  python3-opencv
+  python3-opencv \
+  libpcl-dev \
+  ros-humble-pcl-conversions \
+  libpcap-dev
 
 echo "==> 串口权限（dialout 组）"
 sudo usermod -aG dialout "$USER"
