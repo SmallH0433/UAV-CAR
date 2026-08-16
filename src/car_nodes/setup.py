@@ -30,6 +30,7 @@ setup(
             'avoidance_node = car_nodes.avoidance_node:main',
             'chassis_controller_node = car_nodes.chassis_controller:main',
             'motor_driver_node = car_nodes.motor_driver:main',
+            'k210_camera_driver_node = car_nodes.k210_camera_driver:main',
             'sim_motor_bridge_node = car_nodes.sim_motor_bridge:main',
             'uav_bridge_node = car_nodes.uav_bridge:main',
         ],

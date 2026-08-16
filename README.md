@@ -4,7 +4,7 @@
 （gz 世界、ros_gz_bridge、仿真 launch、URDF 模型）。本目录内容对应
 树莓派上的 `~/CAR_ws` 工作区。
 
-对应主仓版本：提交 `3866058`（release 4.0，WHEELTEC G60 GPS 适配；含 3.0 的后置双摄像头 + 巡航转向辅助 + N10P 雷达适配）。
+对应主仓版本：提交 `a45a45f`（release 4.1，K210 前视摄像头适配；含 4.0 的 WHEELTEC G60 GPS 适配、3.0 的后置双摄像头 + 巡航转向辅助 + N10P 雷达适配）。
 
 ## 目录结构
 
@@ -12,7 +12,8 @@
 - `src/car_nodes` — 实机全部节点：motor_driver（WHEELTEC 串口协议）、
   chassis_controller（自行车模型）、perception、avoidance（自主绕行）、
   lidar_driver（仅空载仿真用；实机雷达为镭神 N10P，用厂商驱动 lslidar_driver）、
-  camera_driver（V4L2，支持前摄 + USB 后摄双实例）、uav_bridge、
+  camera_driver（V4L2，支持前摄 + USB 后摄双实例）、
+  k210_camera_driver（K210 串口推流前摄）、uav_bridge、
   sim_motor_bridge（承载运动学函数 + 空载测试用）；
   `launch/n10p_lidar.launch.py` + `config/lslidar_n10p_uart.yaml` 为雷达单独启动入口；
   `launch/g60_gps.launch.py` + `config/g60_gps.yaml` 为 GPS 单独启动入口
@@ -26,6 +27,7 @@
 - `config/99-car-devices.rules` — udev 固定设备名（/dev/wheeltec、/dev/wheeltec_lidar）
 - `scripts/setup_pi.sh` — 树莓派一键环境配置
 - `scripts/sync_to_pi.sh` — PC（WSL）侧 rsync 同步到树莓派
+- `scripts/k210_firmware.py` — K210 前摄固件（MaixPy IDE 烧录为 K210 的 main.py）
 - `docs/HARDWARE_RESERVED.md` — 硬件接线/串口协议/舵机零点备份注意事项
 
 ## 部署流程
@@ -66,6 +68,9 @@ ros2 launch car_sim real_bringup.launch.py \
 
 # 接了 USB 后置摄像头时（遥控页显示后视画面）
 ros2 launch car_sim real_bringup.launch.py rear_camera_device:=/dev/video1
+
+# 用 K210 作前摄（先烧录 scripts/k210_firmware.py 为 K210 的 main.py，USB 直连）
+ros2 launch car_sim real_bringup.launch.py front_camera:=k210 k210_port:=/dev/ttyUSB0
 
 # 空载链路自检（不接任何硬件，模拟雷达/电机/相机）
 ros2 launch car_sim real_bringup.launch.py \

@@ -9,6 +9,7 @@
 | 镭神 N10P 激光雷达 + 串口转接模块 | 已备 | **双回波雷达**（默认单回波，建图导航建议保持单回波）。厂商 ROS2 SDK 已收进本工作区 `src/vendor/lslidar_ros2`（`lslidar_driver` + `lslidar_msgs` + `wheeltec_udev.sh`）；启动入口 `car_nodes/launch/n10p_lidar.launch.py` + `car_nodes/config/lslidar_n10p_uart.yaml`；自带 `lidar_driver` 节点仅用于空载仿真 |
 | WHEELTEC G60 GPS 模块 | 已备 | ATGM336H + **CH9102F** USB 转串口（出厂串口序列号 **0005**），波特率 **9600**，上电即输出 NMEA（GN 系语句）。厂商 ROS2 SDK 已收进本工作区 `src/vendor/wheeltec_gps`（`nmea_msgs` + `nmea_navsat_driver` + `wheeltec_gps_path` + `wheeltec_udev.sh`）；启动入口 `car_nodes/launch/g60_gps.launch.py` + `car_nodes/config/g60_gps.yaml`，real_bringup 默认随车启动（`gps_port` 参数） |
 | CSI 摄像头 | 待购 | 对应 `camera_driver` 节点（当前仅渐变测试图） |
+| K210 开发板（MaixPy） | 已备 | **实机前视摄像头**：烧录 `scripts/k210_firmware.py`（QVGA JPEG 串口推流 + LCD 本地预览，921600 波特），USB 线直连树莓派（同时供电，识别为 /dev/ttyUSB*）；real_bringup 用 `front_camera:=k210 k210_port:=/dev/ttyUSB0` 启用，发布契约与 `camera_driver` 相同可直接替换 |
 | USB 后置摄像头 | 待购 | Pi 4B 只有一个 CSI 口，后摄走 USB（如 `/dev/video1`）；以 `camera_driver` 第二实例发布 `/camera/rear/image_raw`（real_bringup 加 `rear_camera_device:=/dev/video1` 启动） |
 | 24V→5V 5A 降压模块 | 待购 | 树莓派供电 |
 | 4G 模块 | 暂缓 | 远程链路，后期评估 |
@@ -87,8 +88,13 @@ Linux 上设备一般为 `/dev/ttyACM*`（节点默认 `/dev/ttyACM0`，参数 `
     （`setup_pi.sh` 已含）。
   - NavSatFix 是全球坐标不依赖 TF；URDF 无 gps_link，后续定位融合时再补。
   - `wheeltec_gps_path`（/fix → rviz 轨迹）为可选可视化工具，常规运行不需要。
-- `/camera/image_raw` + `/camera/camera_info`（frame_id `camera_optical_frame`）：实机由
-  `camera_driver`（CSI，`simulate:=false`）发布。
+- `/camera/image_raw` + `/camera/camera_info`（frame_id `camera_optical_frame`）：实机前摄
+  二选一——`camera_driver`（CSI/USB，`simulate:=false`，real_bringup 默认
+  `front_camera:=v4l2`），或 **K210**（MaixPy 固件 `scripts/k210_firmware.py`：QVGA JPEG
+  串口推流，921600 波特，帧按 FFD8/FFD9 标记切分；real_bringup 用
+  `front_camera:=k210 k210_port:=/dev/ttyUSB0` 启用 `k210_camera_driver` 节点，
+  图像编码 rgb8 与 camera_driver 一致，web 画面/感知链路无需改动）。
+  K210 未配固定 udev 名（各型号板子 USB 芯片不同），与其他串口设备同插时按 lsusb 核对。
 - `/camera/rear/image_raw` + `/camera/rear/camera_info`（frame_id `rear_camera_optical_frame`）：
   后置相机，USB 摄像头以 `camera_driver` 第二实例发布（real_bringup 参数
   `rear_camera_device`）。遥控页前后双画面（`/api/camera.jpg` / `/api/camera_rear.jpg`）。
