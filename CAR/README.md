@@ -132,7 +132,10 @@ authority 为 `operator_steering`。
 - `lidar_driver`（镭神 N10P 串口版）替换 gz 桥接的 `/scan`：厂商 ROS2 SDK 已 vendored 在
   `CAR_ws/src/vendor/lslidar_ros2`，实机 `ros2 launch car_nodes n10p_lidar.launch.py`
   （详见 docs/HARDWARE_RESERVED.md），自带节点仅空载仿真用；
-  `camera_driver`（CSI 摄像头）替换桥接的 `/camera/image_raw`；后置 USB 摄像头以
+  `camera_driver`（CSI 摄像头）替换桥接的 `/camera/image_raw`——**或用 K210 作前摄**
+  （固件 `scripts/k210_firmware.py` 烧录到 K210，USB 直连树莓派；
+  `ros2 run car_nodes k210_camera_driver_node --ros-args -p port:=/dev/ttyUSB0`，
+  发布契约与 camera_driver 相同）；后置 USB 摄像头以
   `camera_driver` 第二实例（`device:=/dev/video1`、`image_topic:=/camera/rear/image_raw` 等，
   见节点 docstring）替换桥接的 `/camera/rear/image_raw`。
 - GPS（WHEELTEC G60，ATGM336H + CH9102F，9600 波特）发布 `/fix`（NavSatFix）：厂商 ROS2

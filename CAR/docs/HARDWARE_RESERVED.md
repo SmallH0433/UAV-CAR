@@ -9,6 +9,7 @@
 | 镭神 N10P 激光雷达 + 串口转接模块 | 已备 | **双回波雷达**（默认单回波，建图导航建议保持单回波）。厂商 ROS2 SDK 已收进项目 `CAR_ws/src/vendor/lslidar_ros2`（`lslidar_driver` + `lslidar_msgs` + `wheeltec_udev.sh`，源自 `D:\资料\N10系列激光雷达附送资料\...\2.ROS2_SDK`）；项目侧启动入口 `car_nodes/launch/n10p_lidar.launch.py` + `car_nodes/config/lslidar_n10p_uart.yaml`；自带 `lidar_driver` 节点仅用于空载仿真 |
 | WHEELTEC G60 GPS 模块 | 已备 | ATGM336H + **CH9102F** USB 转串口（出厂串口序列号 **0005**，与雷达 CH9102 的 0001 不冲突），波特率 **9600**，上电即输出 NMEA（GN 系语句）。厂商 ROS2 SDK 已收进项目 `CAR_ws/src/vendor/wheeltec_gps`（`nmea_msgs` + `nmea_navsat_driver` + `wheeltec_gps_path` + `wheeltec_udev.sh`，源自 `D:\资料\WHEELTEC G60模块附送资料\...\2.Linux解析例程`）；项目侧启动入口 `car_nodes/launch/g60_gps.launch.py` + `car_nodes/config/g60_gps.yaml` |
 | CSI 摄像头 | 待购 | 对应 `camera_driver` 节点（当前仅渐变测试图） |
+| K210 开发板（MaixPy） | 已备 | **实机前视摄像头**：烧录 `scripts/k210_firmware.py`（QVGA JPEG 串口推流 + LCD 本地预览，921600 波特），USB 线直连树莓派（同时供电，识别为 /dev/ttyUSB*），Pi 侧 `k210_camera_driver_node` 发布 `/camera/image_raw`，发布契约与 `camera_driver` 相同可直接替换 |
 | USB 后置摄像头 | 待购 | Pi 4B 只有一个 CSI 口，后摄走 USB（如 `/dev/video1`）；以 `camera_driver` 第二实例发布 `/camera/rear/image_raw`（参数 `device`/`image_topic`/`info_topic`/`frame_id`，见节点 docstring） |
 | 24V→5V 5A 降压模块 | 待购 | 树莓派供电 |
 | 4G 模块 | 暂缓 | 远程链路，后期评估 |
@@ -90,8 +91,12 @@ Linux 上设备一般为 `/dev/ttyACM*`（节点默认 `/dev/ttyACM0`，参数 `
   - NavSatFix 是全球坐标不依赖 TF；URDF 暂无 gps_link（天线安装位置未实测），
     后续定位融合（robot_localization）时再补。仿真无 GPS 传感器。
   - `wheeltec_gps_path`（/fix → rviz 轨迹）为可选可视化工具，常规运行不需要。
-- `/camera/image_raw` + `/camera/camera_info`（frame_id `camera_optical_frame`）：实机由
-  `camera_driver`（CSI，`simulate:=false`）发布；仿真桥接 gz 相机（frame_id `camera_link`）。
+- `/camera/image_raw` + `/camera/camera_info`（frame_id `camera_optical_frame`）：实机前摄
+  二选一——`camera_driver`（CSI/USB，`simulate:=false`），或 **K210**（MaixPy 固件
+  `scripts/k210_firmware.py`：QVGA JPEG 串口推流，921600 波特，帧按 FFD8/FFD9 标记切分；
+  Pi 侧 `ros2 run car_nodes k210_camera_driver_node --ros-args -p port:=/dev/ttyUSB0`，
+  图像尺寸/编码 rgb8 与 camera_driver 一致，web 画面/感知链路无需改动）。
+  仿真桥接 gz 相机（frame_id `camera_link`）。
 - `/camera/rear/image_raw` + `/camera/rear/camera_info`（frame_id `rear_camera_optical_frame`）：
   后置相机，实机为 USB 摄像头以 `camera_driver` 第二实例发布；仿真桥接 gz
   `rear_camera`（frame_id `rear_camera_link`）。遥控页前后双画面
