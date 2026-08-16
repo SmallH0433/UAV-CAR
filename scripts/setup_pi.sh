@@ -14,7 +14,8 @@ sudo apt install -y \
   python3-opencv \
   libpcl-dev \
   ros-humble-pcl-conversions \
-  libpcap-dev
+  libpcap-dev \
+  ros-humble-tf-transformations
 
 echo "==> 串口权限（dialout 组）"
 sudo usermod -aG dialout "$USER"

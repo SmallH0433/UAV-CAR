@@ -24,6 +24,9 @@ N10P 电机上电即转，无需开工令；如需停转/恢复：
 不上电机/雷达做空载链路测试：
   ros2 launch car_sim real_bringup.launch.py lidar_mode:=sim \
     motor_simulate:=true camera_simulate:=true
+
+GPS（WHEELTEC G60）：默认随车启动（gps_port:=/dev/wheeltec_gps），
+不需要时 gps_port:='' 关闭；定位输出 `ros2 topic echo /fix` 查看。
 """
 
 import os
@@ -46,13 +49,17 @@ def generate_launch_description():
     camera_simulate = LaunchConfiguration('camera_simulate')
     enable_cruise = LaunchConfiguration('enable_cruise')
     web_bind = LaunchConfiguration('web_bind')
+    gps_port = LaunchConfiguration('gps_port')
 
     n10p_params = os.path.join(
         get_package_share_directory('car_nodes'), 'config', 'lslidar_n10p_uart.yaml')
+    g60_params = os.path.join(
+        get_package_share_directory('car_nodes'), 'config', 'g60_gps.yaml')
     vendor_mode = IfCondition(PythonExpression(["'", lidar_mode, "' == 'vendor'"]))
     sim_mode = IfCondition(PythonExpression(["'", lidar_mode, "' == 'sim'"]))
     has_rear_camera = IfCondition(
         PythonExpression(["'", rear_camera_device, "' != ''"]))
+    has_gps = IfCondition(PythonExpression(["'", gps_port, "' != ''"]))
 
     # 镭神 N10P 厂商驱动（lidar_mode:=vendor，默认）；命名空间 x10 与 yaml 一致，勿改。
     # 电机上电即转（驱动内 motor_running 默认 true），无需启动命令。
@@ -161,6 +168,15 @@ def generate_launch_description():
         output='screen',
         parameters=[{'bind_address': web_bind}],
     )
+    # WHEELTEC G60 GPS（gps_port 非空时启动；上电即输出，无需启动命令）
+    gps = Node(
+        package='nmea_navsat_driver',
+        executable='nmea_serial_driver',
+        name='nmea_serial_driver',
+        output='screen',
+        parameters=[g60_params, {'port': gps_port}],
+        condition=has_gps,
+    )
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -190,6 +206,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'web_bind', default_value='0.0.0.0',
             description='网页控制台监听地址；0.0.0.0=允许局域网访问'),
+        DeclareLaunchArgument(
+            'gps_port', default_value='/dev/wheeltec_gps',
+            description="WHEELTEC G60 GPS 串口（udev 规则名）；留空 ''=不启动 GPS"),
         lidar_vendor,
         lidar_sim,
         camera,
@@ -201,4 +220,5 @@ def generate_launch_description():
         chassis_controller,
         motor_driver,
         web_gateway,
+        gps,
     ])

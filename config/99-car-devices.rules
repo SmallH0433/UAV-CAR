@@ -1,15 +1,18 @@
 # R680 阿克曼小车设备固定命名规则（树莓派 4B，Ubuntu 22.04）
 # 安装：sudo cp 99-car-devices.rules /etc/udev/rules.d/ && sudo udevadm control --reload && sudo udevadm trigger
-# 生效后启动参数可用：motor_port:=/dev/wheeltec lidar_port:=/dev/wheeltec_lidar
+# 生效后启动参数可用：motor_port:=/dev/wheeltec lidar_port:=/dev/wheeltec_lidar gps_port:=/dev/wheeltec_gps
 # （也可以用 vendor/lslidar_ros2/wheeltec_udev.sh 厂商脚本建雷达规则，同名）
 #
 # 注意：VID:PID 需按实际设备核对（lsusb 查看）：
 # - WHEELTEC 控制板串口 3 用 CH9102/CH340 芯片（WCH 厂商 1a86）
 # - 镭神 N10P 的串口转接模块常见为 CH340（1a86:7523）或 CP2102（10c4:ea60）
-# 若两个设备芯片型号相同（如都是 WCH 芯片），需改用序列号区分：
-# udevadm info -a -n /dev/ttyUSB0 | grep serial 取 ATTRS{serial} 填入
+# - WHEELTEC G60 GPS 为 CH9102F（1a86:55d4），出厂串口序列号 0005
+# ⚠ 控制板与 GPS 同为 1a86:55d4：GPS 规则已用 serial==0005 区分，但下面的
+#   控制板规则无 serial 过滤，插入 GPS 时 /dev/wheeltec 也可能指向 GPS！
+#   务必用 `udevadm info -a -n /dev/ttyACM0 | grep serial` 查控制板实际序列号，
+#   给控制板规则补上 ATTRS{serial}=="<实际值>"。
 
-# WHEELTEC STM32 控制板（CH9102，WCH 1a86）
+# WHEELTEC STM32 控制板（CH9102，WCH 1a86；⚠ 建议补 serial 过滤，见上方警告）
 SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", SYMLINK+="wheeltec", MODE="0660", GROUP="dialout"
 
 # 镭神 N10P 串口转接模块（按实际模块芯片二选一，删掉另一行）：
@@ -17,3 +20,6 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", SYMLINK+="w
 SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="wheeltec_lidar", MODE="0660", GROUP="dialout"
 # CP2102：
 SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="wheeltec_lidar", MODE="0660", GROUP="dialout"
+
+# WHEELTEC G60 GPS（CH9102F，1a86:55d4，出厂序列号 0005）
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", ATTRS{serial}=="0005", SYMLINK+="wheeltec_gps", MODE="0660", GROUP="dialout"
