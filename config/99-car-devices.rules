@@ -12,14 +12,19 @@
 #   务必用 `udevadm info -a -n /dev/ttyACM0 | grep serial` 查控制板实际序列号，
 #   给控制板规则补上 ATTRS{serial}=="<实际值>"。
 
-# WHEELTEC STM32 控制板（CH9102，WCH 1a86；⚠ 建议补 serial 过滤，见上方警告）
-SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", SYMLINK+="wheeltec", MODE="0660", GROUP="dialout"
+# WHEELTEC STM32 控制板（CH9102，WCH 1a86；本机实测序列号 0002）
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", ATTRS{serial}=="0002", SYMLINK+="wheeltec", MODE="0660", GROUP="dialout"
 
 # 镭神 N10P 串口转接模块（按实际模块芯片二选一，删掉另一行）：
 # CH340：
 SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="wheeltec_lidar", MODE="0660", GROUP="dialout"
 # CP2102：
 SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="wheeltec_lidar", MODE="0660", GROUP="dialout"
+# 本机实测：N10P 配的是 CH9102 转接（1a86:55d4，序列号 5B8E677903）
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", ATTRS{serial}=="5B8E677903", SYMLINK+="wheeltec_lidar", MODE="0660", GROUP="dialout"
 
-# WHEELTEC G60 GPS（CH9102F，1a86:55d4，出厂序列号 0005）
-SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", ATTRS{serial}=="0005", SYMLINK+="wheeltec_gps", MODE="0660", GROUP="dialout"
+# WHEELTEC G60 GPS（CH9102F，1a86:55d4；本机实测序列号 5B0B031719，非出厂 0005）
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", ATTRS{serial}=="5B0B031719", SYMLINK+="wheeltec_gps", MODE="0660", GROUP="dialout"
+
+# K210 前视摄像头（CanMV 板载 CH9102，1a86:55d4；本机实测序列号 558B018651）
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", ATTRS{serial}=="558B018651", SYMLINK+="wheeltec_k210", MODE="0660", GROUP="dialout"
