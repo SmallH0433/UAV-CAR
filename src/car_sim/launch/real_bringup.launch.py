@@ -21,9 +21,6 @@ N10P 电机上电即转，无需开工令；如需停转/恢复：
 接了 USB 后置摄像头时（如 /dev/video1，遥控页显示后视画面）：
   ros2 launch car_sim real_bringup.launch.py rear_camera_device:=/dev/video1
 
-用 K210 作前摄（固件 scripts/k210_firmware.py 烧录后 USB 直连，替代 V4L2 前摄）：
-  ros2 launch car_sim real_bringup.launch.py front_camera:=k210 k210_port:=/dev/ttyUSB0
-
 不上电机/雷达做空载链路测试：
   ros2 launch car_sim real_bringup.launch.py lidar_mode:=sim \
     motor_simulate:=true camera_simulate:=true
@@ -53,8 +50,6 @@ def generate_launch_description():
     enable_cruise = LaunchConfiguration('enable_cruise')
     web_bind = LaunchConfiguration('web_bind')
     gps_port = LaunchConfiguration('gps_port')
-    front_camera = LaunchConfiguration('front_camera')
-    k210_port = LaunchConfiguration('k210_port')
 
     n10p_params = os.path.join(
         get_package_share_directory('car_nodes'), 'config', 'lslidar_n10p_uart.yaml')
@@ -65,10 +60,6 @@ def generate_launch_description():
     has_rear_camera = IfCondition(
         PythonExpression(["'", rear_camera_device, "' != ''"]))
     has_gps = IfCondition(PythonExpression(["'", gps_port, "' != ''"]))
-    v4l2_front = IfCondition(
-        PythonExpression(["'", front_camera, "' == 'v4l2'"]))
-    k210_front = IfCondition(
-        PythonExpression(["'", front_camera, "' == 'k210'"]))
 
     # 镭神 N10P 厂商驱动（lidar_mode:=vendor，默认）；命名空间 x10 与 yaml 一致，勿改。
     # 电机上电即转（驱动内 motor_running 默认 true），无需启动命令。
@@ -100,16 +91,6 @@ def generate_launch_description():
             'device': camera_device,
             'simulate': camera_simulate,
         }],
-        condition=v4l2_front,
-    )
-    # K210 前摄（front_camera:=k210；固件 scripts/k210_firmware.py，USB 直连）
-    camera_k210 = Node(
-        package='car_nodes',
-        executable='k210_camera_driver_node',
-        name='k210_camera_driver_node',
-        output='screen',
-        parameters=[{'port': k210_port}],
-        condition=k210_front,
     )
     # 后置 USB 摄像头（rear_camera_device 非空时启动第二实例）
     camera_rear = Node(
@@ -228,16 +209,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'gps_port', default_value='/dev/wheeltec_gps',
             description="WHEELTEC G60 GPS 串口（udev 规则名）；留空 ''=不启动 GPS"),
-        DeclareLaunchArgument(
-            'front_camera', default_value='v4l2',
-            description="前摄类型：v4l2=camera_device 摄像头；k210=K210 串口推流摄像头"),
-        DeclareLaunchArgument(
-            'k210_port', default_value='/dev/ttyUSB0',
-            description='K210 USB 串口设备（front_camera:=k210 时生效）'),
         lidar_vendor,
         lidar_sim,
         camera,
-        camera_k210,
         camera_rear,
         perception,
         avoidance,
