@@ -7,6 +7,7 @@
 | 树莓派 4B | 已备 | 主控，运行 ROS 2 节点 |
 | WHEELTEC R680 底盘 + STM32 下位机 | 已备 | **阿克曼转向版**（卖家发错货，项目已适配）：前轮舵机转向 + 后轮双编码器电机，一块双路电机驱动板；轮径 152mm，轮距 0.32m，轴距约 0.31m（待实测） |
 | 镭神 N10P 激光雷达 + 串口转接模块 | 已备 | **双回波雷达**（默认单回波，建图导航建议保持单回波）。厂商 ROS2 SDK 已收进项目 `CAR_ws/src/vendor/lslidar_ros2`（`lslidar_driver` + `lslidar_msgs` + `wheeltec_udev.sh`，源自 `D:\资料\N10系列激光雷达附送资料\...\2.ROS2_SDK`）；项目侧启动入口 `car_nodes/launch/n10p_lidar.launch.py` + `car_nodes/config/lslidar_n10p_uart.yaml`；自带 `lidar_driver` 节点仅用于空载仿真 |
+| WHEELTEC G60 GPS 模块 | 已备 | ATGM336H + **CH9102F** USB 转串口（出厂串口序列号 **0005**，与雷达 CH9102 的 0001 不冲突），波特率 **9600**，上电即输出 NMEA（GN 系语句）。厂商 ROS2 SDK 已收进项目 `CAR_ws/src/vendor/wheeltec_gps`（`nmea_msgs` + `nmea_navsat_driver` + `wheeltec_gps_path` + `wheeltec_udev.sh`，源自 `D:\资料\WHEELTEC G60模块附送资料\...\2.Linux解析例程`）；项目侧启动入口 `car_nodes/launch/g60_gps.launch.py` + `car_nodes/config/g60_gps.yaml` |
 | CSI 摄像头 | 待购 | 对应 `camera_driver` 节点（当前仅渐变测试图） |
 | USB 后置摄像头 | 待购 | Pi 4B 只有一个 CSI 口，后摄走 USB（如 `/dev/video1`）；以 `camera_driver` 第二实例发布 `/camera/rear/image_raw`（参数 `device`/`image_topic`/`info_topic`/`frame_id`，见节点 docstring） |
 | 24V→5V 5A 降压模块 | 待购 | 树莓派供电 |
@@ -74,6 +75,21 @@ Linux 上设备一般为 `/dev/ttyACM*`（节点默认 `/dev/ttyACM0`，参数 `
     （驱动里 PCL 仅用于可选点云预处理，pcap 仅网口/离线回放用到，但编译期都需要）。
   自带 `lidar_driver` 节点仅作空载仿真占位，不用于实机（协议解析未实现）；
   仿真由 ros_gz_bridge 桥接 gz gpu_lidar。
+- `/fix`（sensor_msgs/NavSatFix，frame_id `gps`）：实机为 **WHEELTEC G60**（ATGM336H），
+  厂商 ROS2 SDK 已 vendored 在 `CAR_ws/src/vendor/wheeltec_gps`。一键启动：
+  `ros2 launch car_nodes g60_gps.launch.py`（配置 `car_nodes/config/g60_gps.yaml`：
+  `port: /dev/wheeltec_gps`、`baud: 9600`、`frame_id: gps`、`useRMC: false`）。
+  - **必须用 vendored 的 wheeltec 修改版 nmea_navsat_driver，不能 apt 装上游**：
+    G60 输出 `$GNxxx` 语句，上游旧版解析器只吃 `$GP`（vendored 版支持 GP/GN/GL/IN）。
+  - udev：模块为 **CH9102F**（`1a86:55d4`），出厂串口序列号 **0005**；用 vendor 目录里的
+    `wheeltec_udev.sh` 建规则得 `/dev/wheeltec_gps`（**坑**：zip 自带脚本只写了 CP2102
+    规则，与实物 CH9102F 不符，vendored 版已补上 CH9102 两条规则）。
+    与雷达（CH9102 serial 0001 → `/dev/wheeltec_lidar`）可同时插，序列号区分不冲突。
+  - GPS 上电即输出 NMEA，无需启动命令；依赖 `ros-humble-tf-transformations`
+    （手册 FAQ 同款报错 `No module named 'tf_transformations'` 即缺此包）。
+  - NavSatFix 是全球坐标不依赖 TF；URDF 暂无 gps_link（天线安装位置未实测），
+    后续定位融合（robot_localization）时再补。仿真无 GPS 传感器。
+  - `wheeltec_gps_path`（/fix → rviz 轨迹）为可选可视化工具，常规运行不需要。
 - `/camera/image_raw` + `/camera/camera_info`（frame_id `camera_optical_frame`）：实机由
   `camera_driver`（CSI，`simulate:=false`）发布；仿真桥接 gz 相机（frame_id `camera_link`）。
 - `/camera/rear/image_raw` + `/camera/rear/camera_info`（frame_id `rear_camera_optical_frame`）：

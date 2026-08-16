@@ -13,6 +13,8 @@
 - `car_description` — R680 URDF + Gazebo 模型 `models/r680_4wd`
 - `car_sim` — gz 世界、ros_gz_bridge 配置、控制权 mux、指令网关、网页遥控
 - `vendor/lslidar_ros2` — 镭神 N10P 雷达厂商 ROS2 SDK（lslidar_driver + lslidar_msgs，实机用）
+- `vendor/wheeltec_gps` — WHEELTEC G60 GPS 厂商 ROS2 SDK（nmea_msgs + nmea_navsat_driver
+  + wheeltec_gps_path + wheeltec_udev.sh，实机用；wheeltec 修改版，支持 $GN/$GL talker）
 
 ## 架构（仿真话题链）
 
@@ -133,3 +135,8 @@ authority 为 `operator_steering`。
   `camera_driver`（CSI 摄像头）替换桥接的 `/camera/image_raw`；后置 USB 摄像头以
   `camera_driver` 第二实例（`device:=/dev/video1`、`image_topic:=/camera/rear/image_raw` 等，
   见节点 docstring）替换桥接的 `/camera/rear/image_raw`。
+- GPS（WHEELTEC G60，ATGM336H + CH9102F，9600 波特）发布 `/fix`（NavSatFix）：厂商 ROS2
+  SDK 已 vendored 在 `CAR_ws/src/vendor/wheeltec_gps`，实机
+  `ros2 launch car_nodes g60_gps.launch.py`（配置 `car_nodes/config/g60_gps.yaml`，
+  串口默认 `/dev/wheeltec_gps`，详见 docs/HARDWARE_RESERVED.md）。GPS 上电即输出，
+  无需启动命令。
