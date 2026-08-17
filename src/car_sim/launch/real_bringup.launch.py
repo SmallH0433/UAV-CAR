@@ -51,6 +51,9 @@ def generate_launch_description():
     motor_simulate = LaunchConfiguration('motor_simulate')
     camera_simulate = LaunchConfiguration('camera_simulate')
     enable_cruise = LaunchConfiguration('enable_cruise')
+    safety_distance = LaunchConfiguration('safety_distance')
+    slow_down_distance = LaunchConfiguration('slow_down_distance')
+    creep_speed = LaunchConfiguration('creep_speed')
     web_bind = LaunchConfiguration('web_bind')
     gps_port = LaunchConfiguration('gps_port')
     front_camera = LaunchConfiguration('front_camera')
@@ -131,13 +134,23 @@ def generate_launch_description():
         executable='perception_node',
         name='perception_node',
         output='screen',
+        # 无前摄（front_camera:=none）时关闭视觉辅助，不再订阅图像话题
+        parameters=[{'enable_vision': PythonExpression(
+            ["'", front_camera, "' != 'none'"])}],
     )
     avoidance = Node(
         package='car_nodes',
         executable='avoidance_node',
         name='avoidance_node',
         output='screen',
-        parameters=[{'enable_cruise': enable_cruise}],
+        parameters=[{
+            'enable_cruise': enable_cruise,
+            # 实机调优：0.5m 才绕行太晚（转弯半径 0.57m 绕不开），提前到 0.9m；
+            # 蠕动提速让贴障转向角速度从 ~15°/s 提到 ~25°/s
+            'safety_distance': safety_distance,
+            'slow_down_distance': slow_down_distance,
+            'creep_speed': creep_speed,
+        }],
     )
     # teleop 优先：operator heartbeat 新鲜时 /ugv/teleop/cmd_vel 覆盖 /cmd_vel；
     # 无 heartbeat 时放行 avoidance 的 /cmd_vel（navigation_topic 默认值）。
@@ -223,6 +236,15 @@ def generate_launch_description():
             'enable_cruise', default_value='false',
             description='true=上电即开启自主巡航避障'),
         DeclareLaunchArgument(
+            'safety_distance', default_value='0.9',
+            description='扇区可通行阈值 m（实机调优：0.5 太晚，提前到 0.9）'),
+        DeclareLaunchArgument(
+            'slow_down_distance', default_value='1.8',
+            description='开始减速的距离 m（实机调优：原 1.2）'),
+        DeclareLaunchArgument(
+            'creep_speed', default_value='0.25',
+            description='贴障蠕动速度 m/s（实机调优：原 0.15，提速以加快贴障转向）'),
+        DeclareLaunchArgument(
             'web_bind', default_value='0.0.0.0',
             description='网页控制台监听地址；0.0.0.0=允许局域网访问'),
         DeclareLaunchArgument(
@@ -230,7 +252,7 @@ def generate_launch_description():
             description="WHEELTEC G60 GPS 串口（udev 规则名）；留空 ''=不启动 GPS"),
         DeclareLaunchArgument(
             'front_camera', default_value='v4l2',
-            description="前摄类型：v4l2=camera_device 摄像头；k210=K210 串口推流摄像头"),
+            description="前摄类型：v4l2=camera_device 摄像头；k210=K210 串口推流摄像头；none=不启动前摄"),
         DeclareLaunchArgument(
             'k210_port', default_value='/dev/ttyUSB0',
             description='K210 USB 串口设备（front_camera:=k210 时生效）'),

@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <title>R680 仿真遥控</title>
 <style>
   :root { color-scheme: dark; }
@@ -30,18 +32,19 @@
   .row { display: flex; justify-content: space-between; margin: 4px 0; font-size: 14px; }
   .row span:last-child { font-family: Consolas, monospace; color: #9fd3a8; }
   #conn.bad { color: #e08080; }
-  .cams { display: flex; gap: 8px; }
-  .cam { width: 320px; height: 180px; background: #000; border-radius: 6px; display: block; }
+  .lidar { background: #0b0e12; border-radius: 6px; display: block; }
+  #gpsMap { width: 320px; height: 280px; border-radius: 6px; background: #0b0e12; }
+  #slamMap { width: 320px; background: #0b0e12; border-radius: 6px; display: block; image-rendering: pixelated; }
   .cam-label { font-size: 12px; color: #7486a0; margin: 6px 0 4px; }
   .hint { font-size: 12px; color: #7486a0; margin-top: 10px; line-height: 1.6; }
   .slider-row { margin-top: 10px; font-size: 13px; }
   input[type=range] { width: 100%; }
-  #cruiseBtn {
+  #cruiseBtn, #mappingBtn {
     width: 100%; padding: 8px 0; font-size: 15px; border: 1px solid #3b4a63;
     border-radius: 8px; background: #273142; color: #e6ecf5; cursor: pointer;
   }
-  #cruiseBtn.on { background: #2e7d46; border-color: #3da35f; }
-  #cruiseBtn.off { background: #273142; }
+  #cruiseBtn.on, #mappingBtn.on { background: #2e7d46; border-color: #3da35f; }
+  #cruiseBtn.off, #mappingBtn.off { background: #273142; }
   #cruiseBtn.na { background: #3a3a32; color: #8a8a7a; cursor: not-allowed; }
 </style>
 </head>
@@ -86,17 +89,22 @@
     <div class="row"><span>控制权</span><span id="authority">-</span></div>
     <div class="row"><span>mux 原因</span><span id="reason">-</span></div>
     <div class="row"><span>网关输出 v / w</span><span id="gw">-</span></div>
-    <h2 style="margin-top:14px">相机</h2>
-    <div class="cams">
-      <div>
-        <div class="cam-label">前视</div>
-        <img id="camera" class="cam" alt="front camera">
-      </div>
-      <div>
-        <div class="cam-label">后视</div>
-        <img id="camera_rear" class="cam" alt="rear camera">
-      </div>
+    <h2 style="margin-top:14px">雷达</h2>
+    <canvas id="lidar" class="lidar" width="320" height="320"></canvas>
+    <div class="cam-label">车头朝上，圆环间隔 1 m（显示半径 6 m，红点=障碍回波）</div>
+    <h2 style="margin-top:14px">GPS</h2>
+    <div class="row"><span>定位状态</span><span id="gpsStatus">-</span></div>
+    <div class="row"><span>纬度 / 经度</span><span id="gpsPos">-</span></div>
+    <div class="row"><span>海拔</span><span id="gpsAlt">-</span></div>
+    <div id="gpsMap"></div>
+    <div class="cam-label">高德瓦片（需联网），蓝点=当前位置（WGS-84→GCJ-02 已纠偏）</div>
+    <h2 style="margin-top:14px">激光建图</h2>
+    <div class="slider-row">
+      <button id="mappingBtn" class="off" title="一键建图">▶ 开始建图</button>
+      <span class="hint" style="margin-top:4px">点击后小车自动开启巡航，在区域内自主走动建图（可随时用遥控接管）；再点一次停止并自动保存地图</span>
     </div>
+    <img id="slamMap" alt="SLAM map" style="display:none">
+    <div class="cam-label" id="slamMapHint">暂无地图——点击「开始建图」后此处实时显示（黑=占据 白=空闲 灰=未知）</div>
   </div>
 
 <script>
@@ -244,6 +252,18 @@
         cruiseOn = !!av.cruise_enabled;
       }
       renderCruise();
+      mappingOn = !!(s.mapping && s.mapping.active);
+      renderMapping();
+      var fix = (s.gps || {}).fix;
+      document.getElementById("gpsStatus").textContent = fix
+        ? (fix.status >= 0 ? "已定位" : "搜星中（无定位）") : "GPS 离线";
+      document.getElementById("gpsPos").textContent = (fix && fix.status >= 0)
+        ? fix.latitude.toFixed(7) + " / " + fix.longitude.toFixed(7) : "-";
+      document.getElementById("gpsAlt").textContent = (fix && fix.status >= 0)
+        ? fix.altitude.toFixed(1) + " m" : "-";
+      if (fix && fix.status >= 0 && fix.latitude !== null) {
+        updateGpsMap(fix.longitude, fix.latitude);
+      }
     }).catch(function () {
       conn.textContent = "断开";
       conn.classList.add("bad");
@@ -252,14 +272,146 @@
   pollStatus();
   setInterval(pollStatus, 500);
 
-  // 相机刷新（约 4Hz，附带随机参数防缓存）
-  var camera = document.getElementById("camera");
-  var cameraRear = document.getElementById("camera_rear");
-  setInterval(function () {
-    var t = Date.now();
-    camera.src = "/api/camera.jpg?t=" + t;
-    cameraRear.src = "/api/camera_rear.jpg?t=" + t;
-  }, 250);
+  // 雷达扫描图（5Hz 轮询 /api/scan.json，canvas 极坐标绘制）
+  var lidarCanvas = document.getElementById("lidar");
+  var lctx = lidarCanvas.getContext("2d");
+  var LIDAR_RANGE = 6;  // 显示半径 m（超出点不画）
+  function drawLidar(data) {
+    var w = lidarCanvas.width, h = lidarCanvas.height;
+    var cx = w / 2, cy = h / 2;
+    var scale = (Math.min(w, h) / 2 - 10) / LIDAR_RANGE;
+    lctx.clearRect(0, 0, w, h);
+    // 距离环 + 标注
+    lctx.strokeStyle = "#243044";
+    lctx.fillStyle = "#5a6b85";
+    lctx.font = "10px sans-serif";
+    for (var r = 1; r <= LIDAR_RANGE; r++) {
+      lctx.beginPath();
+      lctx.arc(cx, cy, r * scale, 0, Math.PI * 2);
+      lctx.stroke();
+      lctx.fillText(r + "m", cx + r * scale - 14, cy - 3);
+    }
+    // 前向参考线（车头朝上）
+    lctx.strokeStyle = "#2c3a52";
+    lctx.beginPath();
+    lctx.moveTo(cx, cy); lctx.lineTo(cx, 6);
+    lctx.stroke();
+    // 扫描点：angle 0=正前方，正值向左（ROS 左手系惯例）
+    var pts = data.points || [];
+    lctx.fillStyle = "#e74c3c";
+    for (var i = 0; i < pts.length; i++) {
+      var a = pts[i][0] * Math.PI / 180, d = pts[i][1];
+      if (d > LIDAR_RANGE) { continue; }
+      var x = cx - d * Math.sin(a) * scale;
+      var y = cy - d * Math.cos(a) * scale;
+      lctx.fillRect(x - 1.5, y - 1.5, 3, 3);
+    }
+    // 车体（指向上方的三角）
+    lctx.fillStyle = "#3f6db3";
+    lctx.beginPath();
+    lctx.moveTo(cx, cy - 8);
+    lctx.lineTo(cx - 5, cy + 6);
+    lctx.lineTo(cx + 5, cy + 6);
+    lctx.closePath();
+    lctx.fill();
+  }
+  function pollScan() {
+    fetch("/api/scan.json").then(function (r) { return r.json(); })
+      .then(drawLidar).catch(function () { /* 下轮重试 */ });
+  }
+  pollScan();
+  setInterval(pollScan, 200);
+
+  // ---------- GPS 地图（Leaflet + 高德瓦片，蓝点=当前位置） ----------
+  // WGS-84 → GCJ-02 纠偏（高德瓦片用 GCJ-02 坐标，不纠偏会偏几十~几百米）
+  function wgs2gcj(lng, lat) {
+    var a = 6378245.0, ee = 0.00669342162296594323;
+    if (lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271) {
+      return [lng, lat];  // 国外不偏移
+    }
+    function tLat(x, y) {
+      var ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+      ret += (20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0 / 3.0;
+      ret += (20.0 * Math.sin(y * Math.PI) + 40.0 * Math.sin(y / 3.0 * Math.PI)) * 2.0 / 3.0;
+      ret += (160.0 * Math.sin(y / 12.0 * Math.PI) + 320 * Math.sin(y * Math.PI / 30.0)) * 2.0 / 3.0;
+      return ret;
+    }
+    function tLng(x, y) {
+      var ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+      ret += (20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0 / 3.0;
+      ret += (20.0 * Math.sin(x * Math.PI) + 40.0 * Math.sin(x / 3.0 * Math.PI)) * 2.0 / 3.0;
+      ret += (150.0 * Math.sin(x / 12.0 * Math.PI) + 300.0 * Math.sin(x / 30.0 * Math.PI)) * 2.0 / 3.0;
+      return ret;
+    }
+    var dLat = tLat(lng - 105.0, lat - 35.0), dLng = tLng(lng - 105.0, lat - 35.0);
+    var radLat = lat / 180.0 * Math.PI, magic = Math.sin(radLat);
+    magic = 1 - ee * magic * magic;
+    var sqrtMagic = Math.sqrt(magic);
+    dLat = (dLat * 180.0) / ((a * (1 - ee)) / (magic * sqrtMagic) * Math.PI);
+    dLng = (dLng * 180.0) / (a / sqrtMagic * Math.cos(radLat) * Math.PI);
+    return [lng + dLng, lat + dLat];
+  }
+
+  var gpsMap = null, gpsDot = null, gpsMapCentered = false;
+  function updateGpsMap(lng, lat) {
+    if (typeof L === "undefined") { return; }  // Leaflet CDN 加载失败时静默降级
+    var gcj = wgs2gcj(lng, lat);
+    if (!gpsMap) {
+      gpsMap = L.map("gpsMap", { zoomControl: true, attributionControl: false });
+      L.tileLayer(
+        "https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}",
+        { subdomains: ["1", "2", "3", "4"], maxZoom: 19 }
+      ).addTo(gpsMap);
+      gpsDot = L.circleMarker([gcj[1], gcj[0]], {
+        radius: 7, color: "#ffffff", weight: 2,
+        fillColor: "#2a84ff", fillOpacity: 1.0
+      }).addTo(gpsMap);
+    }
+    gpsDot.setLatLng([gcj[1], gcj[0]]);
+    if (!gpsMapCentered) {
+      gpsMap.setView([gcj[1], gcj[0]], 17);
+      gpsMapCentered = true;
+    }
+  }
+
+  // ---------- 一键建图 ----------
+  var mappingBtn = document.getElementById("mappingBtn");
+  var mappingOn = false;
+  function renderMapping() {
+    mappingBtn.textContent = mappingOn ? "■ 停止建图并保存" : "▶ 开始建图（自动巡航）";
+    mappingBtn.className = mappingOn ? "on" : "off";
+  }
+  mappingBtn.addEventListener("click", function () {
+    fetch("/api/mapping", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enable: !mappingOn, auto_cruise: true })
+    }).then(function (r) { return r.json(); }).then(function (resp) {
+      if (resp.accepted) {
+        mappingOn = !mappingOn;
+        renderMapping();
+        if (!mappingOn && resp.message && resp.message.charAt(0) === "/") {
+          slamHint.textContent = "地图已保存：" + resp.message + ".pgm/.yaml";
+        }
+      } else if (resp.error === "slam_toolbox_not_installed") {
+        slamHint.textContent = "未安装 slam_toolbox，请先在树莓派上安装";
+      }
+    }).catch(function () { /* 状态轮询会纠正显示 */ });
+  });
+  renderMapping();
+
+  // ---------- SLAM 建图（1Hz 刷新 /api/map.png，无地图时保持提示） ----------
+  var slamImg = document.getElementById("slamMap");
+  var slamHint = document.getElementById("slamMapHint");
+  slamImg.addEventListener("load", function () {
+    slamImg.style.display = "block";
+    slamHint.textContent = "黑=占据 白=空闲 灰=未知（1Hz 刷新）";
+  });
+  slamImg.addEventListener("error", function () {
+    slamImg.style.display = "none";
+    slamHint.textContent = "暂无地图——启动 slam_toolbox 后此处实时显示（黑=占据 白=空闲 灰=未知）";
+  });
+  setInterval(function () { slamImg.src = "/api/map.png?t=" + Date.now(); }, 1000);
 })();
 </script>
 </body>

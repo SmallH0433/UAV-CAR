@@ -6,8 +6,10 @@ default and exposes:
 
   GET  /                 static teleop page (car_sim/web/index.html)
   GET  /api/health       liveness probe
-  GET  /api/status       mux/gateway status + /odom pose + camera state
+  GET  /api/status       mux/gateway status + /odom pose + camera state + /fix GPS
+  GET  /api/scan.json    latest /scan downsampled to polar points for the lidar canvas
   POST /api/ugv/teleop   {"linear": m/s, "angular": rad/s} operator command
+  POST /api/mapping      {"enable": bool, "auto_cruise": bool} 一键建图启停
   GET  /api/camera.jpg   latest gz-bridge front camera frame as JPEG (503 if absent)
   GET  /api/camera_rear.jpg  latest gz-bridge rear camera frame as JPEG (503 if absent)
 
@@ -22,19 +24,22 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
 import os
+import signal
+import subprocess
 import threading
 import time
+from datetime import datetime
 from typing import Optional, Tuple
 from urllib.parse import urlparse
 
 from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import OccupancyGrid, Odometry
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from rcl_interfaces.srv import GetParameters, SetParameters
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import Image
+from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy
+from sensor_msgs.msg import Image, LaserScan, NavSatFix
 from std_msgs.msg import Bool, String
 
 from .runtime_timing import create_steady_timer
@@ -114,6 +119,13 @@ class WebGateway(Node):
         self.declare_parameter("camera_max_rate_hz", 5.0)
         self.declare_parameter("camera_stale_after_s", 3.0)
         self.declare_parameter("jpeg_quality", 72)
+        self.declare_parameter("scan_topic", "/scan")
+        self.declare_parameter("scan_max_points", 720)
+        self.declare_parameter("fix_topic", "/fix")
+        self.declare_parameter("map_topic", "/map")
+        self.declare_parameter("mapping_lidar_x", 0.1)
+        self.declare_parameter("mapping_lidar_y", 0.0)
+        self.declare_parameter("mapping_lidar_z", 0.15)
         self.declare_parameter("avoidance_node_name", "/avoidance_node")
         self.declare_parameter("mux_node_name", "/ugv_control_mux")
 
@@ -145,6 +157,20 @@ class WebGateway(Node):
         self.rear_image_jpeg: Optional[bytes] = None
         self.rear_image_time = 0.0
         self.bridge = CvBridge() if _CAMERA_AVAILABLE else None
+        # 雷达/GPS 网页展示缓存
+        self.scan_points = []          # [[angle_deg, dist_m], ...] 降采样极坐标点
+        self.scan_range_max = 0.0
+        self.scan_time = 0.0
+        self.fix = None                # {status, latitude, longitude, altitude}
+        self.fix_time = 0.0
+        # SLAM 地图缓存（/map OccupancyGrid → PNG）
+        self.map_png: Optional[bytes] = None
+        self.map_info = None           # {width, height, resolution}
+        self.map_time = 0.0
+        # 一键建图状态（subprocess 托管 static TF + slam_toolbox）
+        self.mapping_active = False
+        self.mapping_started = 0.0
+        self.mapping_procs = []
 
         self.teleop_publisher = self.create_publisher(
             Twist, str(self.get_parameter("teleop_topic").value), 10
@@ -169,6 +195,28 @@ class WebGateway(Node):
             str(self.get_parameter("odom_topic").value),
             self._on_odom,
             10,
+        )
+        self.create_subscription(
+            LaserScan,
+            str(self.get_parameter("scan_topic").value),
+            self._on_scan,
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            NavSatFix,
+            str(self.get_parameter("fix_topic").value),
+            self._on_fix,
+            qos_profile_sensor_data,
+        )
+        # SLAM 地图（slam_toolbox 以 transient_local 发布 /map，订阅需匹配才能
+        # 立即收到最近一次地图；未启动 SLAM 时 /api/map.png 返回 503）
+        map_qos = QoSProfile(depth=1)
+        map_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        self.create_subscription(
+            OccupancyGrid,
+            str(self.get_parameter("map_topic").value),
+            self._on_map,
+            map_qos,
         )
         if _CAMERA_AVAILABLE:
             self.create_subscription(
@@ -236,6 +284,72 @@ class WebGateway(Node):
                 3,
             )
             self.topic_times["odom"] = time.monotonic()
+
+    def _on_scan(self, message: LaserScan) -> None:
+        """降采样 /scan 为 [角度deg, 距离m] 点列，供前端 canvas 极坐标绘图。"""
+        count = len(message.ranges)
+        if count == 0:
+            return
+        max_points = max(60, int(self.get_parameter("scan_max_points").value))
+        step = max(1, count // max_points)
+        points = []
+        for i in range(0, count, step):
+            distance = message.ranges[i]
+            if not math.isfinite(distance) or \
+                    distance < message.range_min or distance > message.range_max:
+                continue
+            angle = message.angle_min + i * message.angle_increment
+            points.append([round(math.degrees(angle), 1), round(distance, 2)])
+        with self.lock:
+            self.scan_points = points
+            self.scan_range_max = float(message.range_max)
+            self.scan_time = time.monotonic()
+            self.topic_times["scan"] = self.scan_time
+
+    def _on_fix(self, message: NavSatFix) -> None:
+        # 无定位时 lat/lon/alt 为 NaN：JSON 不支持 NaN 字面量，
+        # 浏览器 JSON.parse 会整个失败，必须转成 None
+        def finite(value, ndigits):
+            return round(value, ndigits) if math.isfinite(value) else None
+
+        with self.lock:
+            self.fix = {
+                "status": int(message.status.status),
+                "latitude": finite(message.latitude, 7),
+                "longitude": finite(message.longitude, 7),
+                "altitude": finite(message.altitude, 1),
+            }
+            self.fix_time = time.monotonic()
+            self.topic_times["fix"] = self.fix_time
+
+    def _on_map(self, message: OccupancyGrid) -> None:
+        """OccupancyGrid → PNG：黑=占据 白=空闲 灰=未知；行序翻转为上北显示。"""
+        if cv2 is None:
+            return
+        import numpy as np
+
+        width, height = message.info.width, message.info.height
+        if width == 0 or height == 0:
+            return
+        data = np.frombuffer(
+            bytes(message.data), dtype=np.int8, count=width * height
+        ).reshape(height, width)
+        img = np.full((height, width), 128, dtype=np.uint8)  # -1 未知=灰
+        img[data >= 0] = 255                                  # 空闲=白
+        img[data >= 50] = 0                                   # 占据=黑
+        img = np.flipud(img)  # 栅格原点在左下，图像原点在左上
+        success, encoded = cv2.imencode(".png", img)
+        if not success:
+            return
+        with self.lock:
+            self.map_png = encoded.tobytes()
+            self.map_info = {
+                "width": width,
+                "height": height,
+                "resolution": round(float(message.info.resolution), 4),
+            }
+            self.map_time = time.monotonic()
+            self.topic_times["map"] = self.map_time
 
     def _on_image(self, message: Image, rear: bool = False) -> None:
         now = time.monotonic()
@@ -374,6 +488,93 @@ class WebGateway(Node):
             return True, ""
         return False, outcome.get("reason") or "set_rejected"
 
+    # ---------------- one-click mapping ----------------
+    def set_mapping(self, enable: bool, auto_cruise: bool = True):
+        """HTTP 线程调用：启动/停止建图流水线。返回 (ok, message)。
+
+        启动 = static TF(base_link→laser_frame) + slam_toolbox + 可选自动巡航
+        （巡航 wander 让小车自主在区域内走动，SLAM 同步建图）；
+        停止 = 退巡航 → map_saver_cli 保存 ~/maps/map_<时间戳> → 终止子进程。
+        """
+        if enable == self.mapping_active:
+            return True, "already_active" if enable else "already_inactive"
+        if enable:
+            x = float(self.get_parameter("mapping_lidar_x").value)
+            y = float(self.get_parameter("mapping_lidar_y").value)
+            z = float(self.get_parameter("mapping_lidar_z").value)
+            procs = []
+            try:
+                # start_new_session：子进程独立进程组，停止时按组发信号——
+                # ros2 CLI 包装脚本会吞掉 SIGINT，直接 signal 包装进程杀不死节点
+                procs.append(subprocess.Popen([
+                    "ros2", "run", "tf2_ros", "static_transform_publisher",
+                    str(x), str(y), str(z), "0", "0", "0",
+                    "base_footprint", "laser_frame"],
+                    start_new_session=True))
+                procs.append(subprocess.Popen([
+                    "ros2", "run", "slam_toolbox", "async_slam_toolbox_node",
+                    "--ros-args",
+                    "-p", "base_frame:=base_footprint",
+                    "-p", "odom_frame:=odom",
+                    "-p", "scan_topic:=/scan"],
+                    start_new_session=True))
+            except FileNotFoundError:
+                for proc in procs:
+                    proc.terminate()
+                return False, "slam_toolbox_not_installed"
+            self.mapping_procs = procs
+            self.mapping_active = True
+            self.mapping_started = time.monotonic()
+            self.get_logger().info("建图流水线已启动（static TF + slam_toolbox）")
+            if auto_cruise:
+                ok, error = self.set_cruise(True)
+                if not ok:
+                    self.get_logger().warning(
+                        f"建图已启动，但自动巡航开启失败：{error}（可手动遥控）")
+            return True, "started"
+        # 停止：先退巡航 → 保存地图（需 slam_toolbox 还活着）→ 终止子进程
+        if auto_cruise:
+            self.set_cruise(False)
+        saved = self._save_map()
+        for proc in self.mapping_procs:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+            except ProcessLookupError:
+                pass
+        for proc in self.mapping_procs:
+            try:
+                proc.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        self.mapping_procs = []
+        self.mapping_active = False
+        self.mapping_started = 0.0
+        return True, saved or "stopped"
+
+    def _save_map(self):
+        """用 map_saver_cli 把当前 /map 存到 ~/maps/，返回保存路径前缀或 None。"""
+        with self.lock:
+            has_map = self.map_png is not None
+        if not has_map:
+            return None
+        maps_dir = os.path.expanduser("~/maps")
+        os.makedirs(maps_dir, exist_ok=True)
+        path = os.path.join(
+            maps_dir, "map_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
+        try:
+            subprocess.run(
+                ["ros2", "run", "nav2_map_server", "map_saver_cli",
+                 "-f", path, "-t", "/map"],
+                timeout=20.0, capture_output=True)
+        except Exception as error:
+            self.get_logger().warning(f"地图保存失败：{error}")
+            return None
+        self.get_logger().info(f"地图已保存：{path}.pgm/.yaml")
+        return path
+
     # ---------------- HTTP ----------------
     def _handler_class(self):
         gateway = self
@@ -419,6 +620,12 @@ class WebGateway(Node):
                 if path == "/api/status":
                     self._json(HTTPStatus.OK, gateway.status_snapshot())
                     return
+                if path == "/api/scan.json":
+                    self._json(HTTPStatus.OK, gateway.scan_snapshot())
+                    return
+                if path == "/api/map.png":
+                    gateway._serve_map(self)
+                    return
                 if path == "/api/camera.jpg":
                     gateway._serve_camera(self, rear=False)
                     return
@@ -429,7 +636,9 @@ class WebGateway(Node):
 
             def do_POST(self):
                 path = urlparse(self.path).path
-                if path not in ("/api/ugv/teleop", "/api/ugv/cruise"):
+                if path not in (
+                    "/api/ugv/teleop", "/api/ugv/cruise", "/api/mapping"
+                ):
                     self._json(HTTPStatus.NOT_FOUND, {"error": "unknown_command"})
                     return
                 try:
@@ -453,6 +662,9 @@ class WebGateway(Node):
                     return
                 if path == "/api/ugv/cruise":
                     self._handle_cruise(payload)
+                    return
+                if path == "/api/mapping":
+                    self._handle_mapping(payload)
                     return
                 try:
                     linear, angular = clamped_teleop(
@@ -491,6 +703,22 @@ class WebGateway(Node):
                     {"accepted": True, "cruise_enabled": enable},
                 )
 
+            def _handle_mapping(self, payload: dict):
+                enable = payload.get("enable") if isinstance(payload, dict) else None
+                if not isinstance(enable, bool):
+                    self._json(
+                        HTTPStatus.BAD_REQUEST, {"error": "enable_bool_required"})
+                    return
+                auto_cruise = bool(payload.get("auto_cruise", True))
+                ok, message = gateway.set_mapping(enable, auto_cruise)
+                if not ok:
+                    self._json(HTTPStatus.BAD_GATEWAY, {"error": message})
+                    return
+                self._json(
+                    HTTPStatus.ACCEPTED,
+                    {"accepted": True, "mapping": enable, "message": message},
+                )
+
         return Handler
 
     def _serve_index(self, handler) -> None:
@@ -505,6 +733,20 @@ class WebGateway(Node):
         try:
             handler._headers(HTTPStatus.OK, "text/html; charset=utf-8", len(body))
             handler.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            pass
+
+    def _serve_map(self, handler) -> None:
+        with self.lock:
+            image = self.map_png
+        if image is None:
+            handler._json(
+                HTTPStatus.SERVICE_UNAVAILABLE, {"error": "map_not_ready"}
+            )
+            return
+        try:
+            handler._headers(HTTPStatus.OK, "image/png", len(image))
+            handler.wfile.write(image)
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             pass
 
@@ -528,6 +770,14 @@ class WebGateway(Node):
             pass
 
     # ---------------- snapshots ----------------
+    def scan_snapshot(self) -> dict:
+        now = time.monotonic()
+        with self.lock:
+            age = None if not self.scan_time else round(now - self.scan_time, 2)
+            points = self.scan_points
+            range_max = self.scan_range_max
+        return {"age_s": age, "range_max": range_max, "points": points}
+
     def health_snapshot(self) -> dict:
         return {
             "ok": True,
@@ -553,6 +803,10 @@ class WebGateway(Node):
             rear_image_age = (
                 None if not self.rear_image_time else round(now - self.rear_image_time, 2)
             )
+            fix = dict(self.fix) if self.fix is not None else None
+            fix_age = None if not self.fix_time else round(now - self.fix_time, 2)
+            map_info = dict(self.map_info) if self.map_info is not None else None
+            map_age = None if not self.map_time else round(now - self.map_time, 2)
         return {
             "gateway": self.health_snapshot(),
             "server_time_ms": int(time.time() * 1000),
@@ -564,6 +818,15 @@ class WebGateway(Node):
             },
             "odom": {"pose": pose, "speed_mps": speed},
             "battery_voltage": None,  # reserved for the real motor driver
+            "gps": {"fix": fix, "age_s": fix_age},
+            "map": {"info": map_info, "age_s": map_age},
+            "mapping": {
+                "active": self.mapping_active,
+                "since_s": (
+                    None if not self.mapping_started
+                    else round(now - self.mapping_started, 1)
+                ),
+            },
             "camera": {
                 "ready": bool(
                     image_age is not None and image_age <= self.camera_stale_after
@@ -581,6 +844,11 @@ class WebGateway(Node):
         }
 
     def destroy_node(self):
+        for proc in getattr(self, "mapping_procs", []):
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
         if rclpy.ok():
             try:
                 self.teleop_publisher.publish(Twist())
