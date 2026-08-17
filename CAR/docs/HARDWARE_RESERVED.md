@@ -42,8 +42,8 @@
   `motor_port`/`lidar_port`/`gps_port`/`front_camera:=v4l2|k210|none`/`k210_port`/
   `rear_camera_device` 等参数见文件 docstring），其中用 `motor_driver_node`
   （`simulate:=false`）替换 `sim_motor_bridge_node`，其余链路
-  （mux/gateway/chassis_controller/avoidance）不动。避障实机调优值（rpi-4.2）：
-  `safety_distance` 0.9 / `slow_down_distance` 1.8 / `creep_speed` 0.25。
+  （mux/gateway/chassis_controller/avoidance）不动。避障实机调优值（rpi-4.3）：
+  `safety_distance` 1.0 / `slow_down_distance` 1.8 / `creep_speed` 0.25。
 
 ### WHEELTEC 串口协议（已实现）
 
@@ -74,7 +74,11 @@ Linux 上设备一般为 `/dev/ttyACM*`（节点默认 `/dev/ttyACM0`，参数 `
   - 电机上电即转，驱动内 `motor_running` 默认 true，**无需先发启动命令**；如需停转/恢复：
     `ros2 topic pub --once /x10/motor_control std_msgs/msg/Int8 "{data: 0}"`（1=转，0=停）。
   - N10P 双回波：保持 `publish_multiecholaserscan: false`（单回波；双回波噪点多、强度低，
-    厂商建议常规建图导航用单回波）。扫描频率 `N10Plus_hz`（6–12，默认 10）；
+    厂商建议常规建图导航用单回波）。注意即使单回波模式，N10P 原始点序在同方向相邻点间
+    仍有远近回波跳变，perception 聚类已改为按角度分 bin（360×1° 取最近回波，
+    `body_filter_distance` 0.25m 车身自遮罩 + `min_cluster_points` 噪点过滤，
+    rpi-4.3 修复——此前按原始点序聚类会把障碍打成单点碎片导致避障收不到真实障碍）。
+    扫描频率 `N10Plus_hz`（6–12，默认 10）；
     `use_high_precision` 建议开（厂商注释同系 N10 建议开启）；量程 `min_range 0.15` /
     `max_range 50.0`（仿真模型为 0.12/25，以实机为准）。
   - 构建依赖：`sudo apt install libpcl-dev ros-humble-pcl-conversions libpcap-dev`

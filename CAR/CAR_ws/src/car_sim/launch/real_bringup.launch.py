@@ -145,7 +145,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'enable_cruise': enable_cruise,
-            # 实机调优：0.5m 才绕行太晚（转弯半径 0.57m 绕不开），提前到 0.9m；
+            # 实机调优：0.5m 才绕行太晚（转弯半径 0.57m 绕不开），现为 1.0m；
             # 蠕动提速让贴障转向角速度从 ~15°/s 提到 ~25°/s
             'safety_distance': safety_distance,
             'slow_down_distance': slow_down_distance,
@@ -236,8 +236,8 @@ def generate_launch_description():
             'enable_cruise', default_value='false',
             description='true=上电即开启自主巡航避障'),
         DeclareLaunchArgument(
-            'safety_distance', default_value='0.9',
-            description='扇区可通行阈值 m（实机调优：0.5 太晚，提前到 0.9）'),
+            'safety_distance', default_value='1.0',
+            description='扇区可通行阈值 m（实机调优：障碍进入该距离开始绕行）'),
         DeclareLaunchArgument(
             'slow_down_distance', default_value='1.8',
             description='开始减速的距离 m（实机调优：原 1.2）'),

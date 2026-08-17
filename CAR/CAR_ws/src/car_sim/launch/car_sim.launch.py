@@ -83,10 +83,10 @@ def generate_launch_description():
         executable='avoidance_node',
         name='avoidance_node',
         output='screen',
-        # 实机调优参数（rpi-4.2 树莓派实测，阿克曼转弯半径 0.57m 同样适用仿真）：
-        # 0.5m 才绕行太晚，提前到 0.9m；蠕动提速加快贴障转向
+        # 实机调优参数（rpi-4.3 树莓派实测，阿克曼转弯半径 0.57m 同样适用仿真）：
+        # 障碍进入 1.0m 开始绕行；蠕动提速加快贴障转向
         parameters=[sim_time, {
-            'safety_distance': 0.9,
+            'safety_distance': 1.0,
             'slow_down_distance': 1.8,
             'creep_speed': 0.25,
         }],
