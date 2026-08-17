@@ -10,6 +10,7 @@ default and exposes:
   GET  /api/scan.json    latest /scan downsampled to polar points for the lidar canvas
   POST /api/ugv/teleop   {"linear": m/s, "angular": rad/s} operator command
   POST /api/mapping      {"enable": bool, "auto_cruise": bool} 一键建图启停
+  POST /api/photo        保存当前前摄帧到 ~/photos/photo_<时间戳>.jpg
   GET  /api/camera.jpg   latest gz-bridge front camera frame as JPEG (503 if absent)
   GET  /api/camera_rear.jpg  latest gz-bridge rear camera frame as JPEG (503 if absent)
 
@@ -78,6 +79,23 @@ def _json_message(message: String) -> dict:
         return value if isinstance(value, dict) else {}
     except json.JSONDecodeError:
         return {}
+
+
+def save_photo(jpeg_bytes: bytes, photos_dir: str) -> str:
+    """把一帧 JPEG 写入 photos_dir/photo_<时间戳>.jpg，返回文件路径。
+
+    同一秒内连拍时追加 _1/_2… 序号避免覆盖。
+    """
+    os.makedirs(photos_dir, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = os.path.join(photos_dir, "photo_" + stamp + ".jpg")
+    seq = 0
+    while os.path.exists(path):
+        seq += 1
+        path = os.path.join(photos_dir, f"photo_{stamp}_{seq}.jpg")
+    with open(path, "wb") as fh:
+        fh.write(jpeg_bytes)
+    return path
 
 
 def _yaw_from_quaternion(orientation) -> float:
@@ -643,7 +661,8 @@ class WebGateway(Node):
             def do_POST(self):
                 path = urlparse(self.path).path
                 if path not in (
-                    "/api/ugv/teleop", "/api/ugv/cruise", "/api/mapping"
+                    "/api/ugv/teleop", "/api/ugv/cruise", "/api/mapping",
+                    "/api/photo",
                 ):
                     self._json(HTTPStatus.NOT_FOUND, {"error": "unknown_command"})
                     return
@@ -671,6 +690,9 @@ class WebGateway(Node):
                     return
                 if path == "/api/mapping":
                     self._handle_mapping(payload)
+                    return
+                if path == "/api/photo":
+                    self._handle_photo()
                     return
                 try:
                     linear, angular = clamped_teleop(
@@ -725,6 +747,19 @@ class WebGateway(Node):
                     {"accepted": True, "mapping": enable, "message": message},
                 )
 
+            def _handle_photo(self):
+                ok, result = gateway.save_photo_frame()
+                if not ok:
+                    status = (
+                        HTTPStatus.SERVICE_UNAVAILABLE
+                        if result == "camera_not_ready"
+                        else HTTPStatus.INTERNAL_SERVER_ERROR
+                    )
+                    self._json(status, {"error": result})
+                    return
+                self._json(
+                    HTTPStatus.ACCEPTED, {"accepted": True, "path": result})
+
         return Handler
 
     def _serve_index(self, handler) -> None:
@@ -757,6 +792,18 @@ class WebGateway(Node):
             pass
 
     _MAPS_DIR = os.path.expanduser("~/maps")
+    _PHOTOS_DIR = os.path.expanduser("~/photos")
+
+    def save_photo_frame(self) -> Tuple[bool, str]:
+        """保存当前前摄帧到 ~/photos/；返回 (是否成功, 路径或错误码)。"""
+        with self.lock:
+            image = self.image_jpeg
+        if image is None:
+            return False, "camera_not_ready"
+        try:
+            return True, save_photo(image, self._PHOTOS_DIR)
+        except OSError:
+            return False, "save_failed"
 
     def maps_snapshot(self) -> dict:
         """~/maps 下已保存的地图列表（新的在前）。"""

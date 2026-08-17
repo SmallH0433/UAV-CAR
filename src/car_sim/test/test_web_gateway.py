@@ -1,6 +1,6 @@
 import pytest
 
-from car_sim.web_gateway import clamped_teleop
+from car_sim.web_gateway import clamped_teleop, save_photo
 
 
 def test_teleop_payload_passes_through_within_envelope():
@@ -26,3 +26,18 @@ def test_teleop_rejects_non_finite_and_wrong_types():
         clamped_teleop({"linear": "fast"}, 0.5, 0.7)
     with pytest.raises(ValueError):
         clamped_teleop([1, 2], 0.5, 0.7)
+
+
+def test_save_photo_writes_timestamped_jpeg(tmp_path):
+    payload = b"\xff\xd8fake-jpeg\xff\xd9"
+    path = save_photo(payload, str(tmp_path / "photos"))
+    assert path.endswith(".jpg")
+    assert "photo_" in path
+    with open(path, "rb") as fh:
+        assert fh.read() == payload
+
+
+def test_save_photo_names_are_unique_within_same_second(tmp_path):
+    first = save_photo(b"a", str(tmp_path))
+    second = save_photo(b"b", str(tmp_path))
+    assert first != second

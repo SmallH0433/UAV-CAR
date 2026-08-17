@@ -24,14 +24,19 @@
   detour_timeout     (float, 3.0)  绕行方向承诺保持时间 s（防左右摆动）
   enable_cruise      (bool,  False) 无目标时是否巡航
   num_sectors        (int,   36)    前方 180° 划分的扇区数
+  vehicle_half_width (float, 0.20)  车体半宽 m（含余量）：障碍角宽度按
+      障碍半径 + 车体半宽膨胀——否则前侧方障碍的角宽度盖不住正前方 0° 方向，
+      中心线判定"可通行"，但车身前角会撞上（前侧方避障失效的根因）
 
 绕行策略（阿克曼不能原地自旋，全程保持 |v| > 0 或停车）：
   1. 正常：前方 180° 扇区选代价最低的可通行方向，速度随净空缩放；
   2. 贴障（< safety_distance）：不降为零，以 creep_speed 边挪边绕；
-  3. 贴脸（< hard_stop_distance）或前方全堵：倒车-转向脱困（倒弧线把
-     车头甩向较空一侧），前方净空且持续 recover_min_time 后恢复正常；
+  3. 贴脸（< hard_stop_distance）或前方全堵：后方有真实净空
+     （> recover_exit_distance）才倒车-转向脱困；后方也贴障（如斜挤
+     进墙角）则进入锁存的死角蠕动脱困状态，朝最空扇区缓慢拱，
+     避免倒车/蠕动在阈值抖动上来回切换形成极限环；
   4. 方向承诺：选定绕行侧后 detour_timeout 内换侧加代价，防止在障碍
-     前来回摆动。前后都堵死时才真正停车等待。
+     前来回摆动。蠕动方向也四面贴脸（真正被围死）才停车等待。
 """
 
 import math
@@ -72,6 +77,7 @@ class AvoidanceNode(Node):
         self.declare_parameter('detour_timeout', 3.0)
         self.declare_parameter('enable_cruise', False)
         self.declare_parameter('num_sectors', 36)
+        self.declare_parameter('vehicle_half_width', 0.20)  # 车宽0.32/2=0.16+余量
 
         self.safety_distance = self.get_parameter('safety_distance').value
         self.hard_stop_distance = self.get_parameter('hard_stop_distance').value
@@ -89,6 +95,8 @@ class AvoidanceNode(Node):
         self.detour_timeout = self.get_parameter('detour_timeout').value
         self.enable_cruise = self.get_parameter('enable_cruise').value
         self.num_sectors = self.get_parameter('num_sectors').value
+        self.vehicle_half_width = \
+            self.get_parameter('vehicle_half_width').value
 
         self.obstacles = []
         self.pose = None          # odom 系下 (x, y, yaw)
@@ -98,6 +106,10 @@ class AvoidanceNode(Node):
         self.recover_start = 0.0
         self.detour_side = 0      # 绕行方向承诺：+1 左 -1 右 0 无
         self.detour_time = 0.0
+        # 死角蠕动脱困状态（锁存，防与倒车脱困在阈值抖动上往复切换）
+        self.escaping = False
+        self.escape_start = 0.0
+        self.escape_angle = 0.0
 
         self.create_subscription(
             ObstacleArray, '/perception/obstacles', self.obstacles_cb, 10)
@@ -198,12 +210,41 @@ class AvoidanceNode(Node):
                 self._publish_recovery()
                 return
 
+        # 死角蠕动脱困（锁存状态）：朝最空扇区缓慢拱，承诺方向被堵才重选；
+        # 前方恢复基本净空后退出交回正常扇区流程，超时兜底退出
+        if self.escaping:
+            clearance = self._direction_distance(self.escape_angle)
+            if clearance < self.hard_stop_distance:
+                self.escape_angle, clearance = self._clearest_direction()
+            if clearance <= self.hard_stop_distance + 0.05:
+                self.escaping = False
+                self.pub_cmd.publish(cmd)
+                self.get_logger().warn(
+                    '前后均被堵死，停车等待', throttle_duration_sec=2.0)
+                return
+            if now - self.escape_start >= self.recover_max_time * 2:
+                self.escaping = False
+                self.get_logger().warn('死角脱困超时，恢复正常流程')
+            elif fwd_dist > self.recover_exit_distance and \
+                    now - self.escape_start >= self.recover_min_time:
+                self.escaping = False
+                self.get_logger().info('死角脱困完成，恢复正常绕行')
+            else:
+                cmd.linear.x = self.creep_speed
+                cmd.angular.z = self._clamp(
+                    1.5 * self.escape_angle, -self.max_angular, self.max_angular)
+                self.pub_cmd.publish(cmd)
+                return
+
         # 扇区避障：前方 180° 分扇区，选代价最低的可通过扇区
         best_angle = self._select_sector(desired_angle)
 
-        # 触发倒车脱困：正前方障碍贴脸，或前方扇区全部不可通行
+        # 触发脱困：正前方障碍贴脸，或前方扇区全部不可通行。
+        # 后方有真实净空（> recover_exit_distance）才倒车脱困；后方也贴障
+        # 时进入锁存的死角蠕动脱困状态（阈值紧贴时两分支来回切换会形成
+        # 极限环：蠕动 0.4s→倒车 4s 超时→再蠕动，永远困在墙角）
         if fwd_dist < self.hard_stop_distance or best_angle is None:
-            if self._rear_clearance() > self.hard_stop_distance:
+            if self._rear_clearance() > self.recover_exit_distance:
                 self.recovering = True
                 self.recover_start = now
                 self.detour_side = self._freer_side()
@@ -212,10 +253,23 @@ class AvoidanceNode(Node):
                     f'前方受阻，倒车脱困（绕行侧：{"左" if self.detour_side > 0 else "右"}）')
                 self._publish_recovery()
             else:
-                # 前后都堵死，只能停车等待
-                self.pub_cmd.publish(cmd)
-                self.get_logger().warn(
-                    '前后均被堵死，停车等待', throttle_duration_sec=2.0)
+                angle, clearance = self._clearest_direction()
+                if clearance <= self.hard_stop_distance + 0.05:
+                    # 四面贴脸，真正被围死
+                    self.pub_cmd.publish(cmd)
+                    self.get_logger().warn(
+                        '前后均被堵死，停车等待', throttle_duration_sec=2.0)
+                else:
+                    self.escaping = True
+                    self.escape_start = now
+                    self.escape_angle = angle
+                    self.get_logger().warn(
+                        f'前后贴障，死角蠕动脱困（最空方向 '
+                        f'{math.degrees(angle):.0f}°，净空 {clearance:.2f}m）')
+                    cmd.linear.x = self.creep_speed
+                    cmd.angular.z = self._clamp(
+                        1.5 * angle, -self.max_angular, self.max_angular)
+                    self.pub_cmd.publish(cmd)
             return
 
         # 绕行方向承诺：偏离目标方向时记录绕行侧；目标方向仍被挡时
@@ -269,19 +323,29 @@ class AvoidanceNode(Node):
         cmd.angular.z = self.detour_side * self.max_angular
         self.pub_cmd.publish(cmd)
 
+    def _inflated_half_width(self, o):
+        """障碍角半宽（rad）：障碍半径 + 车体半宽 膨胀后的角宽度。
+
+        把车当质点会导致前侧方障碍的角宽度盖不住 0° 方向而被判"可通行"，
+        但车身前角实际会撞上；膨胀后中心线判定即代表整车走廊。
+        """
+        return math.atan2(
+            o.radius + self.vehicle_half_width, max(o.distance, 0.05))
+
     def _forward_obstacle_distance(self, fov=math.pi / 3.0):
-        """前向锥（±fov）内最近障碍距离"""
+        """前向锥（±fov）内最近障碍距离；膨胀后伸进正前走廊的侧方障碍也算"""
         fwd = float('inf')
         for o in self.obstacles:
-            if abs(self._normalize_angle(o.angle)) <= fov:
+            a = abs(self._normalize_angle(o.angle))
+            if a <= fov or a <= self._inflated_half_width(o):
                 fwd = min(fwd, o.distance)
         return fwd
 
     def _direction_distance(self, direction):
-        """某方向上被障碍角宽度覆盖的最近距离（用于判断该方向是否被挡）"""
+        """某方向上被障碍角宽度（含车体膨胀）覆盖的最近距离"""
         nearest = float('inf')
         for o in self.obstacles:
-            half_width = math.atan2(o.radius, max(o.distance, 0.05))
+            half_width = self._inflated_half_width(o)
             if abs(self._normalize_angle(o.angle - direction)) <= half_width:
                 nearest = min(nearest, o.distance)
         return nearest
@@ -305,13 +369,30 @@ class AvoidanceNode(Node):
                 right = min(right, o.distance)
         return 1 if left >= right else -1
 
+    def _clearest_direction(self):
+        """前方 180° 内净空最大的扇区 (中心角, 净空距离)，用于死角蠕动脱困"""
+        best_angle, best_clearance = 0.0, -1.0
+        for k in range(self.num_sectors):
+            sector_angle = -math.pi / 2.0 + \
+                (k + 0.5) * math.pi / self.num_sectors
+            nearest = float('inf')
+            for o in self.obstacles:
+                half_width = self._inflated_half_width(o)
+                if abs(self._normalize_angle(o.angle - sector_angle)) <= half_width:
+                    nearest = min(nearest, o.distance)
+            if nearest > best_clearance:
+                best_clearance = nearest
+                best_angle = sector_angle
+        return best_angle, best_clearance
+
     def _select_sector(self, desired_angle):
         """前方 180° 扇区代价评估，返回最佳扇区中心角；全堵返回 None"""
         # 期望方向本身可通行时直接采用：否则扇区中心量化（±π/72）会在
         # 无障碍时产生恒定小角速度，导致车辆持续向一侧缓慢偏转
+        # （角宽度均按 障碍半径+车体半宽 膨胀，见 _inflated_half_width）
         nearest_desired = float('inf')
         for o in self.obstacles:
-            half_width = math.atan2(o.radius, max(o.distance, 0.05))
+            half_width = self._inflated_half_width(o)
             if abs(self._normalize_angle(o.angle - desired_angle)) <= half_width:
                 nearest_desired = min(nearest_desired, o.distance)
         if nearest_desired >= self.safety_distance:
@@ -325,7 +406,7 @@ class AvoidanceNode(Node):
             # 扇区内最近障碍（考虑障碍角宽度）
             nearest = float('inf')
             for o in self.obstacles:
-                half_width = math.atan2(o.radius, max(o.distance, 0.05))
+                half_width = self._inflated_half_width(o)
                 if abs(self._normalize_angle(o.angle - sector_angle)) <= half_width:
                     nearest = min(nearest, o.distance)
             if nearest < self.safety_distance:
