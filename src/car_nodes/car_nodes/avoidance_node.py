@@ -19,6 +19,8 @@
   creep_speed        (float, 0.15) 贴障蠕动速度 m/s（不停死，边挪边绕）
   reverse_speed      (float, 0.20) 倒车脱困速度 m/s
   recover_min_time   (float, 1.5)  倒车脱困最短持续时间 s（防抖动）
+  recover_exit_distance(float, 0.45) 脱困退出净空 m（独立于 safety_distance）
+  recover_max_time   (float, 4.0)  脱困最长 s，超时强制退出防死循环
   detour_timeout     (float, 3.0)  绕行方向承诺保持时间 s（防左右摆动）
   enable_cruise      (bool,  False) 无目标时是否巡航
   num_sectors        (int,   36)    前方 180° 划分的扇区数
@@ -65,6 +67,8 @@ class AvoidanceNode(Node):
         self.declare_parameter('creep_speed', 0.15)
         self.declare_parameter('reverse_speed', 0.20)
         self.declare_parameter('recover_min_time', 1.5)
+        self.declare_parameter('recover_exit_distance', 0.45)  # 脱困退出净空 m
+        self.declare_parameter('recover_max_time', 4.0)        # 脱困最长 s
         self.declare_parameter('detour_timeout', 3.0)
         self.declare_parameter('enable_cruise', False)
         self.declare_parameter('num_sectors', 36)
@@ -79,6 +83,9 @@ class AvoidanceNode(Node):
         self.creep_speed = self.get_parameter('creep_speed').value
         self.reverse_speed = self.get_parameter('reverse_speed').value
         self.recover_min_time = self.get_parameter('recover_min_time').value
+        self.recover_exit_distance = \
+            self.get_parameter('recover_exit_distance').value
+        self.recover_max_time = self.get_parameter('recover_max_time').value
         self.detour_timeout = self.get_parameter('detour_timeout').value
         self.enable_cruise = self.get_parameter('enable_cruise').value
         self.num_sectors = self.get_parameter('num_sectors').value
@@ -173,12 +180,20 @@ class AvoidanceNode(Node):
             self.pub_cmd.publish(cmd)
             return
 
-        # 倒车脱困状态：前方净空且持续足够时间后退出
+        # 倒车脱困状态：前方有基本净空且持续足够时间后退出；
+        # 退出阈值独立于 safety_distance（实机：用 1.0m 安全距做退出条件，
+        # 杂物多的环境永远达不到，车会一直倒车转圈"不回正"）；
+        # 超时强制退出，杜绝无限倒车死循环
         if self.recovering:
-            if fwd_dist > self.safety_distance and \
-                    now - self.recover_start >= self.recover_min_time:
+            timed_out = now - self.recover_start >= self.recover_max_time
+            if (fwd_dist > self.recover_exit_distance and
+                    now - self.recover_start >= self.recover_min_time) \
+                    or timed_out:
                 self.recovering = False
-                self.get_logger().info('脱困完成，恢复绕行')
+                if timed_out:
+                    self.get_logger().warn('脱困超时，强制恢复正常绕行')
+                else:
+                    self.get_logger().info('脱困完成，恢复绕行')
             else:
                 self._publish_recovery()
                 return

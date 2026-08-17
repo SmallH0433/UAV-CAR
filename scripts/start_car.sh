@@ -31,5 +31,15 @@ fi
 source /opt/ros/humble/setup.bash
 source /home/yahboom/CAR_ws/install/setup.bash
 
+# UVC 免驱摄像头（仅画面采集显示，无视觉处理）：by-id 路径重启不变
+CAMERA_DEVICE=/dev/v4l/by-id/usb-Generic_HD_camera_20201212000000-video-index0
+CAMERA_ARGS=""
+if [ -e "$CAMERA_DEVICE" ]; then
+    CAMERA_ARGS="front_camera:=v4l2 camera_device:=$CAMERA_DEVICE"
+else
+    echo "[start_car] 未检测到摄像头，按无相机模式启动" >&2
+    CAMERA_ARGS="front_camera:=none"
+fi
+
 exec ros2 launch car_sim real_bringup.launch.py \
-    motor_port:=/dev/wheeltec front_camera:=none
+    motor_port:=/dev/wheeltec $CAMERA_ARGS

@@ -47,10 +47,14 @@ def generate_launch_description():
     lidar_port = LaunchConfiguration('lidar_port')
     lidar_mode = LaunchConfiguration('lidar_mode')
     camera_device = LaunchConfiguration('camera_device')
+    camera_width = LaunchConfiguration('camera_width')
+    camera_height = LaunchConfiguration('camera_height')
+    camera_fps = LaunchConfiguration('camera_fps')
     rear_camera_device = LaunchConfiguration('rear_camera_device')
     motor_simulate = LaunchConfiguration('motor_simulate')
     camera_simulate = LaunchConfiguration('camera_simulate')
     enable_cruise = LaunchConfiguration('enable_cruise')
+    enable_vision = LaunchConfiguration('enable_vision')
     safety_distance = LaunchConfiguration('safety_distance')
     slow_down_distance = LaunchConfiguration('slow_down_distance')
     creep_speed = LaunchConfiguration('creep_speed')
@@ -102,6 +106,11 @@ def generate_launch_description():
         parameters=[{
             'device': camera_device,
             'simulate': camera_simulate,
+            # 画面仅供网页显示（无视觉处理），低规格采集省 CPU：
+            # 降低采集/转换/话题传输/网页编码四项开销
+            'width': camera_width,
+            'height': camera_height,
+            'fps': camera_fps,
         }],
         condition=v4l2_front,
     )
@@ -134,9 +143,9 @@ def generate_launch_description():
         executable='perception_node',
         name='perception_node',
         output='screen',
-        # 无前摄（front_camera:=none）时关闭视觉辅助，不再订阅图像话题
-        parameters=[{'enable_vision': PythonExpression(
-            ["'", front_camera, "' != 'none'"])}],
+        # 视觉辅助（亮度差占位判断）由独立开关控制，与是否接摄像头解耦——
+        # 只作画面显示（front_camera=v4l2/k210）时保持 false 即可
+        parameters=[{'enable_vision': enable_vision}],
     )
     avoidance = Node(
         package='car_nodes',
@@ -224,6 +233,15 @@ def generate_launch_description():
             'camera_device', default_value='/dev/video0',
             description='V4L2 前视摄像头设备'),
         DeclareLaunchArgument(
+            'camera_width', default_value='640',
+            description='前摄采集宽度（仅网页显示用低规格，省 CPU）'),
+        DeclareLaunchArgument(
+            'camera_height', default_value='480',
+            description='前摄采集高度'),
+        DeclareLaunchArgument(
+            'camera_fps', default_value='1',
+            description='前摄采集帧率'),
+        DeclareLaunchArgument(
             'rear_camera_device', default_value='',
             description='USB 后置摄像头设备（如 /dev/video1）；留空=不启动后摄'),
         DeclareLaunchArgument(
@@ -235,6 +253,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'enable_cruise', default_value='false',
             description='true=上电即开启自主巡航避障'),
+        DeclareLaunchArgument(
+            'enable_vision', default_value='false',
+            description='true=感知节点启用视觉辅助判断；摄像头仅作画面显示时保持 false'),
         DeclareLaunchArgument(
             'safety_distance', default_value='1.0',
             description='扇区可通行阈值 m（实机调优：障碍进入该距离开始绕行）'),
