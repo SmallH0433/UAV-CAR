@@ -42,8 +42,11 @@
   `motor_port`/`lidar_port`/`gps_port`/`front_camera:=v4l2|k210|none`/`k210_port`/
   `rear_camera_device` 等参数见文件 docstring），其中用 `motor_driver_node`
   （`simulate:=false`）替换 `sim_motor_bridge_node`，其余链路
-  （mux/gateway/chassis_controller/avoidance）不动。避障实机调优值（rpi-4.3）：
-  `safety_distance` 1.0 / `slow_down_distance` 1.8 / `creep_speed` 0.25。
+  （mux/gateway/chassis_controller/avoidance）不动。避障实机调优值（rpi-5.0）：
+  `safety_distance` 1.0 / `slow_down_distance` 1.8 / `creep_speed` 0.25；
+  脱困（recover）有独立退出阈值 `recover_exit_distance` 0.45m 与 `recover_max_time` 4s
+  超时强制退出（修复"避障后不回正"：原退出要求前方净空超 safety_distance，
+  杂物环境永远达不到导致一直倒车满转）。
 
 ### WHEELTEC 串口协议（已实现）
 

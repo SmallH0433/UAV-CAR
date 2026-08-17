@@ -5,108 +5,161 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<title>R680 仿真遥控</title>
+<title>R680 遥控台</title>
 <style>
-  :root { color-scheme: dark; }
+  :root { color-scheme: dark; --accent: #4a7dd4; --card: #1b212b; --line: #2c3442; }
   * { box-sizing: border-box; }
   body {
-    margin: 0; padding: 16px; background: #14171c; color: #d7dde6;
+    margin: 0; padding: 20px; color: #d7dde6;
     font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
-    display: flex; flex-wrap: wrap; gap: 16px; justify-content: center;
+    background: linear-gradient(160deg, #10131a 0%, #14171c 60%, #101820 100%);
+    min-height: 100vh;
   }
-  .panel {
-    background: #1d222b; border: 1px solid #2c3442; border-radius: 10px;
-    padding: 16px; min-width: 300px;
+  header {
+    max-width: 1240px; margin: 0 auto 16px; display: flex;
+    align-items: baseline; gap: 12px;
   }
-  h1 { font-size: 18px; margin: 0 0 12px; }
-  h2 { font-size: 14px; margin: 0 0 8px; color: #8fa3bf; }
-  #pad { display: grid; grid-template-columns: repeat(3, 72px); grid-auto-rows: 56px; gap: 8px; justify-content: center; }
+  header h1 { font-size: 20px; margin: 0; letter-spacing: 1px; }
+  header h1 em { color: var(--accent); font-style: normal; }
+  header .sub { font-size: 12px; color: #7486a0; }
+  #grid {
+    max-width: 1240px; margin: 0 auto;
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+    gap: 16px;
+  }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px 18px; box-shadow: 0 2px 10px rgba(0,0,0,.25);
+  }
+  .card h2 {
+    font-size: 13px; margin: 0 0 12px; color: #8fa3bf; font-weight: 600;
+    letter-spacing: 2px; display: flex; align-items: center; gap: 8px;
+  }
+  .card h2::before {
+    content: ""; width: 4px; height: 14px; border-radius: 2px;
+    background: var(--accent); display: inline-block;
+  }
+  #pad { display: grid; grid-template-columns: repeat(3, 76px); grid-auto-rows: 58px; gap: 8px; justify-content: center; }
   #pad button {
-    font-size: 20px; border: 1px solid #3b4a63; border-radius: 8px;
+    font-size: 20px; border: 1px solid #3b4a63; border-radius: 10px;
     background: #273142; color: #e6ecf5; cursor: pointer; user-select: none;
-    touch-action: none;
+    touch-action: none; transition: background .12s, transform .05s;
   }
-  #pad button:active, #pad button.active { background: #3f6db3; }
+  #pad button:hover { background: #31405c; }
+  #pad button:active, #pad button.active { background: var(--accent); transform: scale(.96); }
   #pad .stop { background: #5a2730; }
+  #pad .stop:hover { background: #6e3038; }
   #pad .stop:active { background: #a03a48; }
-  .row { display: flex; justify-content: space-between; margin: 4px 0; font-size: 14px; }
+  .row { display: flex; justify-content: space-between; margin: 6px 0; font-size: 14px; }
+  .row span:first-child { color: #93a1b7; }
   .row span:last-child { font-family: Consolas, monospace; color: #9fd3a8; }
   #conn.bad { color: #e08080; }
-  .lidar { background: #0b0e12; border-radius: 6px; display: block; }
-  #gpsMap { width: 320px; height: 280px; border-radius: 6px; background: #0b0e12; }
-  #slamMap { width: 320px; background: #0b0e12; border-radius: 6px; display: block; image-rendering: pixelated; }
-  .cam-label { font-size: 12px; color: #7486a0; margin: 6px 0 4px; }
-  .hint { font-size: 12px; color: #7486a0; margin-top: 10px; line-height: 1.6; }
-  .slider-row { margin-top: 10px; font-size: 13px; }
-  input[type=range] { width: 100%; }
-  #cruiseBtn, #mappingBtn {
-    width: 100%; padding: 8px 0; font-size: 15px; border: 1px solid #3b4a63;
-    border-radius: 8px; background: #273142; color: #e6ecf5; cursor: pointer;
+  .media {
+    width: 100%; background: #0b0e12; border-radius: 8px; display: block;
+    border: 1px solid #232b38;
   }
+  #lidar { aspect-ratio: 1; }
+  #gpsMap { width: 100%; height: 260px; border-radius: 8px; background: #0b0e12; border: 1px solid #232b38; }
+  #slamMap { image-rendering: pixelated; }
+  .cam-label { font-size: 12px; color: #7486a0; margin: 8px 0 0; line-height: 1.5; }
+  .hint { font-size: 12px; color: #7486a0; margin-top: 10px; line-height: 1.6; }
+  .slider-row { margin-top: 12px; font-size: 13px; color: #93a1b7; }
+  .slider-row span { font-family: Consolas, monospace; color: #9fd3a8; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  select {
+    max-width: 180px; background: #273142; color: #e6ecf5;
+    border: 1px solid #3b4a63; border-radius: 6px; padding: 3px 6px;
+  }
+  #cruiseBtn, #mappingBtn {
+    width: 100%; padding: 9px 0; font-size: 15px; border: 1px solid #3b4a63;
+    border-radius: 10px; background: #273142; color: #e6ecf5; cursor: pointer;
+    transition: background .12s;
+  }
+  #cruiseBtn:hover, #mappingBtn:hover { background: #31405c; }
   #cruiseBtn.on, #mappingBtn.on { background: #2e7d46; border-color: #3da35f; }
   #cruiseBtn.off, #mappingBtn.off { background: #273142; }
   #cruiseBtn.na { background: #3a3a32; color: #8a8a7a; cursor: not-allowed; }
 </style>
 </head>
 <body>
-  <div class="panel">
-    <h1>R680 仿真遥控</h1>
-    <div id="pad">
-      <span></span>
-      <button data-cmd="forward" title="W / ↑">▲</button>
-      <span></span>
-      <button data-cmd="left" title="A / ←">◀</button>
-      <button class="stop" data-cmd="stop" title="空格">■</button>
-      <button data-cmd="right" title="D / →">▶</button>
-      <span></span>
-      <button data-cmd="backward" title="S / ↓">▼</button>
-      <span></span>
-    </div>
-    <div class="slider-row">
-      线速度 <span id="linLabel">0.30</span> m/s
-      <input type="range" id="lin" min="0.05" max="0.50" step="0.05" value="0.30">
-    </div>
-    <div class="slider-row">
-      角速度 <span id="angLabel">0.50</span> rad/s
-      <input type="range" id="ang" min="0.10" max="0.70" step="0.05" value="0.50">
-    </div>
-    <div class="slider-row">
-      <button id="cruiseBtn" class="cruise" title="自动避障定速巡航">开启巡航</button>
-      <span class="hint" style="margin-top:4px">开启后小车自主巡航避障；巡航中按住 A/D 可保持巡航速度手动调整方向（W/S 直接接管速度），松手恢复自主避障</span>
-    </div>
-    <div class="hint">
-      键盘：WASD / 方向键，按住行驶，可组合（W+A 弧线转弯），松开或空格停车。<br>
-      阿克曼底盘不能原地自旋：单独按 A/D 只会原地预打方向，叠加 W/S 才会转弯。<br>
-      指令 ~10Hz 持续发送；网关 350ms 看门狗会自动停车。
-    </div>
-  </div>
+  <header>
+    <h1>R680 <em>遥控台</em></h1>
+    <span class="sub">阿克曼小车 · 雷达 / GPS / 建图 / 画面</span>
+  </header>
 
-  <div class="panel">
-    <h2>状态</h2>
-    <div class="row"><span>连接</span><span id="conn" class="bad">断开</span></div>
-    <div class="row"><span>位姿 x / y / yaw</span><span id="pose">-</span></div>
-    <div class="row"><span>速度</span><span id="speed">-</span></div>
-    <div class="row"><span>控制权</span><span id="authority">-</span></div>
-    <div class="row"><span>mux 原因</span><span id="reason">-</span></div>
-    <div class="row"><span>网关输出 v / w</span><span id="gw">-</span></div>
-    <h2 style="margin-top:14px">雷达</h2>
-    <canvas id="lidar" class="lidar" width="320" height="320"></canvas>
-    <div class="cam-label">车头朝上，圆环间隔 1 m（显示半径 6 m，红点=障碍回波）</div>
-    <h2 style="margin-top:14px">GPS</h2>
-    <div class="row"><span>定位状态</span><span id="gpsStatus">-</span></div>
-    <div class="row"><span>纬度 / 经度</span><span id="gpsPos">-</span></div>
-    <div class="row"><span>海拔</span><span id="gpsAlt">-</span></div>
-    <div id="gpsMap"></div>
-    <div class="cam-label">高德瓦片（需联网），蓝点=当前位置（WGS-84→GCJ-02 已纠偏）</div>
-    <h2 style="margin-top:14px">激光建图</h2>
-    <div class="slider-row">
-      <button id="mappingBtn" class="off" title="一键建图">▶ 开始建图</button>
-      <span class="hint" style="margin-top:4px">点击后小车自动开启巡航，在区域内自主走动建图（可随时用遥控接管）；再点一次停止并自动保存地图</span>
+  <div id="grid">
+    <div class="card">
+      <h2>遥控</h2>
+      <div id="pad">
+        <span></span>
+        <button data-cmd="forward" title="W / ↑">▲</button>
+        <span></span>
+        <button data-cmd="left" title="A / ←">◀</button>
+        <button class="stop" data-cmd="stop" title="空格">■</button>
+        <button data-cmd="right" title="D / →">▶</button>
+        <span></span>
+        <button data-cmd="backward" title="S / ↓">▼</button>
+        <span></span>
+      </div>
+      <div class="slider-row">
+        线速度 <span id="linLabel">0.30</span> m/s
+        <input type="range" id="lin" min="0.05" max="0.50" step="0.05" value="0.30">
+      </div>
+      <div class="slider-row">
+        角速度 <span id="angLabel">0.50</span> rad/s
+        <input type="range" id="ang" min="0.10" max="0.70" step="0.05" value="0.50">
+      </div>
+      <div class="slider-row">
+        <button id="cruiseBtn" class="cruise" title="自动避障定速巡航">开启巡航</button>
+      </div>
+      <div class="hint">
+        开启巡航后小车自主避障；巡航中按住 A/D 可保持巡航速度手动调整方向（W/S 直接接管速度），松手恢复自主避障。<br>
+        键盘：WASD / 方向键，按住行驶，可组合（W+A 弧线转弯），松开或空格停车。
+        阿克曼底盘不能原地自旋：单独按 A/D 只会原地预打方向，叠加 W/S 才会转弯。
+      </div>
     </div>
-    <img id="slamMap" alt="SLAM map" style="display:none">
-    <div class="cam-label" id="slamMapHint">暂无地图——点击「开始建图」后此处实时显示（黑=占据 白=空闲 灰=未知）</div>
-    <div class="row" style="margin-top:6px"><span>预览已保存地图</span>
-      <select id="savedMaps" style="max-width:170px;background:#273142;color:#e6ecf5;border:1px solid #3b4a63;border-radius:6px"></select>
+
+    <div class="card">
+      <h2>状态</h2>
+      <div class="row"><span>连接</span><span id="conn" class="bad">断开</span></div>
+      <div class="row"><span>位姿 x / y / yaw</span><span id="pose">-</span></div>
+      <div class="row"><span>速度</span><span id="speed">-</span></div>
+      <div class="row"><span>控制权</span><span id="authority">-</span></div>
+      <div class="row"><span>mux 原因</span><span id="reason">-</span></div>
+      <div class="row"><span>网关输出 v / w</span><span id="gw">-</span></div>
+      <h2 style="margin-top:16px">GPS 定位</h2>
+      <div class="row"><span>定位状态</span><span id="gpsStatus">-</span></div>
+      <div class="row"><span>纬度 / 经度</span><span id="gpsPos">-</span></div>
+      <div class="row"><span>海拔</span><span id="gpsAlt">-</span></div>
+    </div>
+
+    <div class="card">
+      <h2>相机画面</h2>
+      <img id="camView" class="media" alt="camera">
+      <div class="cam-label">480p · 约 1fps（仅画面采集显示，不参与避障）</div>
+    </div>
+
+    <div class="card">
+      <h2>雷达扫描</h2>
+      <canvas id="lidar" class="media" width="320" height="320"></canvas>
+      <div class="cam-label">车头朝上，圆环间隔 1 m（显示半径 6 m，红点=障碍回波）</div>
+    </div>
+
+    <div class="card">
+      <h2>GPS 地图</h2>
+      <div id="gpsMap"></div>
+      <div class="cam-label">高德瓦片（需联网），蓝点=当前位置（WGS-84→GCJ-02 已纠偏）</div>
+    </div>
+
+    <div class="card">
+      <h2>激光建图</h2>
+      <button id="mappingBtn" class="off" title="一键建图">▶ 开始建图</button>
+      <div class="hint" style="margin-top:6px">点击后小车自动开启巡航，在区域内自主走动建图（可随时用遥控接管）；再点一次停止并自动保存地图</div>
+      <img id="slamMap" class="media" alt="SLAM map" style="display:none; margin-top:10px">
+      <div class="cam-label" id="slamMapHint">暂无地图——点击「开始建图」后此处实时显示（黑=占据 白=空闲 灰=未知）</div>
+      <div class="row" style="margin-top:8px"><span>预览已保存地图</span>
+        <select id="savedMaps"></select>
+      </div>
     </div>
   </div>
 
@@ -441,6 +494,12 @@
     slamHint.textContent = "预览已保存地图：" + savedMapsSel.value;
   });
   refreshSavedMaps();
+
+  // ---------- 相机画面 ----------
+  var camView = document.getElementById("camView");
+  camView.addEventListener("error", function () { camView.style.visibility = "hidden"; });
+  camView.addEventListener("load", function () { camView.style.visibility = "visible"; });
+  setInterval(function () { camView.src = "/api/camera.jpg?t=" + Date.now(); }, 250);
 })();
 </script>
 </body>
