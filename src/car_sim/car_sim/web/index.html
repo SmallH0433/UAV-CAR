@@ -105,6 +105,9 @@
     </div>
     <img id="slamMap" alt="SLAM map" style="display:none">
     <div class="cam-label" id="slamMapHint">暂无地图——点击「开始建图」后此处实时显示（黑=占据 白=空闲 灰=未知）</div>
+    <div class="row" style="margin-top:6px"><span>预览已保存地图</span>
+      <select id="savedMaps" style="max-width:170px;background:#273142;color:#e6ecf5;border:1px solid #3b4a63;border-radius:6px"></select>
+    </div>
   </div>
 
 <script>
@@ -252,8 +255,10 @@
         cruiseOn = !!av.cruise_enabled;
       }
       renderCruise();
+      var wasMapping = mappingOn;
       mappingOn = !!(s.mapping && s.mapping.active);
       renderMapping();
+      if (wasMapping && !mappingOn) { refreshSavedMaps(); }
       var fix = (s.gps || {}).fix;
       document.getElementById("gpsStatus").textContent = fix
         ? (fix.status >= 0 ? "已定位" : "搜星中（无定位）") : "GPS 离线";
@@ -409,9 +414,33 @@
   });
   slamImg.addEventListener("error", function () {
     slamImg.style.display = "none";
-    slamHint.textContent = "暂无地图——启动 slam_toolbox 后此处实时显示（黑=占据 白=空闲 灰=未知）";
+    slamHint.textContent = "暂无地图——点击「开始建图」后此处实时显示（黑=占据 白=空闲 灰=未知）";
   });
-  setInterval(function () { slamImg.src = "/api/map.png?t=" + Date.now(); }, 1000);
+  setInterval(function () {
+    if (mappingOn) { slamImg.src = "/api/map.png?t=" + Date.now(); }
+  }, 1000);
+
+  // ---------- 已保存地图预览 ----------
+  var savedMapsSel = document.getElementById("savedMaps");
+  function refreshSavedMaps() {
+    fetch("/api/maps").then(function (r) { return r.json(); }).then(function (d) {
+      var cur = savedMapsSel.value;
+      savedMapsSel.innerHTML = "";
+      (d.maps || []).forEach(function (m) {
+        var opt = document.createElement("option");
+        opt.value = m; opt.textContent = m;
+        savedMapsSel.appendChild(opt);
+      });
+      if (cur) { savedMapsSel.value = cur; }
+    }).catch(function () { /* 下轮重试 */ });
+  }
+  savedMapsSel.addEventListener("change", function () {
+    if (!savedMapsSel.value) { return; }
+    slamImg.style.display = "block";
+    slamImg.src = "/api/maps/" + encodeURIComponent(savedMapsSel.value) + ".png";
+    slamHint.textContent = "预览已保存地图：" + savedMapsSel.value;
+  });
+  refreshSavedMaps();
 })();
 </script>
 </body>

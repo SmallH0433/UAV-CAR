@@ -626,6 +626,12 @@ class WebGateway(Node):
                 if path == "/api/map.png":
                     gateway._serve_map(self)
                     return
+                if path == "/api/maps":
+                    self._json(HTTPStatus.OK, gateway.maps_snapshot())
+                    return
+                if path.startswith("/api/maps/") and path.endswith(".png"):
+                    gateway._serve_saved_map(self, path[10:-4])
+                    return
                 if path == "/api/camera.jpg":
                     gateway._serve_camera(self, rear=False)
                     return
@@ -747,6 +753,44 @@ class WebGateway(Node):
         try:
             handler._headers(HTTPStatus.OK, "image/png", len(image))
             handler.wfile.write(image)
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            pass
+
+    _MAPS_DIR = os.path.expanduser("~/maps")
+
+    def maps_snapshot(self) -> dict:
+        """~/maps 下已保存的地图列表（新的在前）。"""
+        entries = []
+        try:
+            for fname in sorted(os.listdir(self._MAPS_DIR), reverse=True):
+                if fname.endswith(".pgm"):
+                    entries.append(fname[:-4])
+        except OSError:
+            pass
+        return {"maps": entries}
+
+    def _serve_saved_map(self, handler, name: str) -> None:
+        """把 ~/maps/<name>.pgm 转 PNG 输出（只接受安全文件名，防目录穿越）。"""
+        if not name or not all(c.isalnum() or c in "_-" for c in name):
+            handler._json(HTTPStatus.BAD_REQUEST, {"error": "invalid_name"})
+            return
+        path = os.path.join(self._MAPS_DIR, name + ".pgm")
+        if cv2 is None or not os.path.isfile(path):
+            handler._json(HTTPStatus.NOT_FOUND, {"error": "map_not_found"})
+            return
+        img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            handler._json(HTTPStatus.NOT_FOUND, {"error": "map_unreadable"})
+            return
+        # map_saver 的 pgm：0=占据 254=空闲 205=未知；翻转为上北显示
+        img = cv2.flip(img, 0)
+        success, encoded = cv2.imencode(".png", img)
+        if not success:
+            handler._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "encode_failed"})
+            return
+        try:
+            handler._headers(HTTPStatus.OK, "image/png", len(encoded))
+            handler.wfile.write(encoded.tobytes())
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             pass
 

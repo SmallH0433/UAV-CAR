@@ -11,6 +11,8 @@
   enable_vision          (bool,  True)  是否启用视觉辅助判断
   vision_default_distance(float, 1.5)   视觉命中时估计的障碍距离 m
   vision_diff_threshold  (float, 40.0)  左右半区亮度差阈值（0-255）
+  body_filter_distance   (float, 0.25)  车身自遮罩半径 m，小于该距离的回波丢弃
+  min_cluster_points     (int,   3)     聚类最少点数，少于此视为噪点丢弃
 """
 
 import math
@@ -33,6 +35,10 @@ class PerceptionNode(Node):
         self.declare_parameter('enable_vision', True)
         self.declare_parameter('vision_default_distance', 1.5)
         self.declare_parameter('vision_diff_threshold', 40.0)
+        # 实机排障：车身结构在雷达尾线方向产生大量 0.2m 左右的零散回波，
+        # 聚类后按距离截断时会把所有真实障碍挤出 max_obstacles 列表
+        self.declare_parameter('body_filter_distance', 0.25)  # 车身自遮罩半径 m
+        self.declare_parameter('min_cluster_points', 3)       # 少于此点数视为噪点
 
         self.max_obstacles = self.get_parameter('max_obstacles').value
         publish_rate = self.get_parameter('publish_rate').value
@@ -40,6 +46,10 @@ class PerceptionNode(Node):
         self.vision_default_distance = \
             self.get_parameter('vision_default_distance').value
         self.vision_diff_threshold = self.get_parameter('vision_diff_threshold').value
+        self.body_filter_distance = \
+            self.get_parameter('body_filter_distance').value
+        self.min_cluster_points = \
+            int(self.get_parameter('min_cluster_points').value)
 
         self.latest_scan = None
         self.vision_obstacle = None  # 视觉估计的障碍（单条）
@@ -57,52 +67,65 @@ class PerceptionNode(Node):
         self.latest_scan = msg
 
     def _lidar_obstacles(self, scan):
-        """按角度连续性聚类，每个聚类输出一个障碍（source=0）"""
+        """角度分 bin 聚类，每个聚类输出一个障碍（source=0）。
+
+        N10P 双回波交错：同方向相邻点距离在远近回波间跳变（如 1.5m/4.7m），
+        按原始点序聚类会被全部打成单点簇。改为每 1° 一个 bin 取最近回波
+        （避障只关心最近距离），再按 bin 间距离连续性聚类。
+        """
         obstacles = []
         if scan is None or len(scan.ranges) == 0:
             return obstacles
 
         ranges = np.asarray(scan.ranges, dtype=np.float32)
         n = len(ranges)
+        # 车身自遮罩：小于 body_filter_distance 的回波视为车体自身，直接丢弃
         valid = np.isfinite(ranges) & (ranges >= scan.range_min) \
-            & (ranges <= scan.range_max)
+            & (ranges <= scan.range_max) \
+            & (ranges >= self.body_filter_distance)
+        if not valid.any():
+            return obstacles
 
-        # 相邻有效点距离差小于阈值认为属于同一障碍
-        cluster_gap = 0.3  # m
-        cluster = []
-        for i in range(n):
-            if valid[i]:
+        bin_count = 360
+        angles = scan.angle_min + np.arange(n) * scan.angle_increment
+        bin_idx = np.floor(
+            (angles + math.pi) / (2.0 * math.pi) * bin_count).astype(np.int64)
+        bin_idx = np.clip(bin_idx, 0, bin_count - 1)
+        bin_min = np.full(bin_count, np.inf, dtype=np.float32)
+        np.minimum.at(bin_min, bin_idx[valid], ranges[valid])
+
+        cluster_gap = 0.3  # m，相邻 bin 最近距离差小于阈值认为同一障碍
+        cluster = []       # [(bin_center_angle, min_dist), ...]
+        for b in range(bin_count):
+            dist = bin_min[b]
+            if np.isinf(dist):
                 if cluster:
-                    prev = cluster[-1]
-                    if abs(ranges[i] - ranges[prev]) > cluster_gap:
-                        obstacles.append(self._cluster_to_obstacle(scan, ranges, cluster))
-                        cluster = []
-                cluster.append(i)
-            else:
-                if cluster:
-                    obstacles.append(self._cluster_to_obstacle(scan, ranges, cluster))
+                    self._flush_cluster(obstacles, cluster)
                     cluster = []
+                continue
+            if cluster and abs(dist - cluster[-1][1]) > cluster_gap:
+                self._flush_cluster(obstacles, cluster)
+                cluster = []
+            angle = -math.pi + (b + 0.5) * (2.0 * math.pi / bin_count)
+            cluster.append((angle, float(dist)))
         if cluster:
-            obstacles.append(self._cluster_to_obstacle(scan, ranges, cluster))
+            self._flush_cluster(obstacles, cluster)
         return obstacles
 
-    def _cluster_to_obstacle(self, scan, ranges, cluster):
-        """把一个点簇转换为障碍：最近点距离、簇中心角度、簇宽等效半径"""
+    def _flush_cluster(self, obstacles, cluster):
+        """bin 数过少的簇是线缆/噪点（真实障碍会覆盖连续多个 bin），丢弃"""
+        if len(cluster) < self.min_cluster_points:
+            return
         obs = Obstacle()
-        dists = ranges[cluster]
-        min_idx = cluster[int(np.argmin(dists))]
-        distance = float(ranges[min_idx])
-        # 簇中心角度
-        mid = cluster[len(cluster) // 2]
-        angle = scan.angle_min + mid * scan.angle_increment
-        # 簇宽（弧长）的一半作为等效半径
-        width = distance * len(cluster) * scan.angle_increment
-        obs.angle = float(angle)
-        obs.distance = distance
+        dists = [c[1] for c in cluster]
+        obs.distance = float(min(dists))
+        obs.angle = float(cluster[len(cluster) // 2][0])  # 簇中心角度
+        # 簇宽（弧长）的一半作为等效半径（每 bin 1°）
+        width = obs.distance * len(cluster) * math.radians(1.0)
         obs.radius = float(max(width / 2.0, 0.05))
         obs.velocity = 0.0
         obs.source = 0
-        return obs
+        obstacles.append(obs)
 
     # ---------- 视觉处理（轻量占位实现） ----------
     def image_cb(self, msg):
