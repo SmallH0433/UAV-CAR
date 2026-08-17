@@ -70,12 +70,12 @@
     max-width: 180px; background: #273142; color: #e6ecf5;
     border: 1px solid #3b4a63; border-radius: 6px; padding: 3px 6px;
   }
-  #cruiseBtn, #mappingBtn {
+  #cruiseBtn, #mappingBtn, #photoBtn {
     width: 100%; padding: 9px 0; font-size: 15px; border: 1px solid #3b4a63;
     border-radius: 10px; background: #273142; color: #e6ecf5; cursor: pointer;
     transition: background .12s;
   }
-  #cruiseBtn:hover, #mappingBtn:hover { background: #31405c; }
+  #cruiseBtn:hover, #mappingBtn:hover, #photoBtn:hover { background: #31405c; }
   #cruiseBtn.on, #mappingBtn.on { background: #2e7d46; border-color: #3da35f; }
   #cruiseBtn.off, #mappingBtn.off { background: #273142; }
   #cruiseBtn.na { background: #3a3a32; color: #8a8a7a; cursor: not-allowed; }
@@ -137,6 +137,8 @@
       <h2>相机画面</h2>
       <img id="camView" class="media" alt="camera">
       <div class="cam-label">480p · 约 1fps（仅画面采集显示，不参与避障）</div>
+      <button id="photoBtn" style="margin-top:8px" title="保存当前帧">◉ 拍照</button>
+      <div class="cam-label" id="photoHint">保存到树莓派 ~/photos/ 目录</div>
     </div>
 
     <div class="card">
@@ -500,6 +502,26 @@
   camView.addEventListener("error", function () { camView.style.visibility = "hidden"; });
   camView.addEventListener("load", function () { camView.style.visibility = "visible"; });
   setInterval(function () { camView.src = "/api/camera.jpg?t=" + Date.now(); }, 250);
+
+  // ---------- 拍照（保存当前帧到树莓派 ~/photos/） ----------
+  var photoBtn = document.getElementById("photoBtn");
+  var photoHint = document.getElementById("photoHint");
+  photoBtn.addEventListener("click", function () {
+    photoHint.textContent = "保存中…";
+    fetch("/api/photo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}"
+    }).then(function (r) { return r.json(); }).then(function (resp) {
+      if (resp.accepted) {
+        photoHint.textContent = "已保存：" + resp.path;
+      } else if (resp.error === "camera_not_ready") {
+        photoHint.textContent = "拍照失败：无相机画面（检查摄像头或无相机模式）";
+      } else {
+        photoHint.textContent = "拍照失败：" + (resp.error || "未知错误");
+      }
+    }).catch(function () { photoHint.textContent = "拍照请求失败（网络/网关异常）"; });
+  });
 })();
 </script>
 </body>
