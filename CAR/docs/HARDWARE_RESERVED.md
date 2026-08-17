@@ -6,10 +6,10 @@
 | --- | --- | --- |
 | 树莓派 4B | 已备 | 主控，运行 ROS 2 节点 |
 | WHEELTEC R680 底盘 + STM32 下位机 | 已备 | **阿克曼转向版**（卖家发错货，项目已适配）：前轮舵机转向 + 后轮双编码器电机，一块双路电机驱动板；轮径 152mm，轮距 0.32m，轴距约 0.31m（待实测） |
-| 镭神 N10P 激光雷达 + 串口转接模块 | 已备 | **双回波雷达**（默认单回波，建图导航建议保持单回波）。厂商 ROS2 SDK 已收进项目 `CAR_ws/src/vendor/lslidar_ros2`（`lslidar_driver` + `lslidar_msgs` + `wheeltec_udev.sh`，源自 `D:\资料\N10系列激光雷达附送资料\...\2.ROS2_SDK`）；项目侧启动入口 `car_nodes/launch/n10p_lidar.launch.py` + `car_nodes/config/lslidar_n10p_uart.yaml`；自带 `lidar_driver` 节点仅用于空载仿真 |
-| WHEELTEC G60 GPS 模块 | 已备 | ATGM336H + **CH9102F** USB 转串口（出厂串口序列号 **0005**，与雷达 CH9102 的 0001 不冲突），波特率 **9600**，上电即输出 NMEA（GN 系语句）。厂商 ROS2 SDK 已收进项目 `CAR_ws/src/vendor/wheeltec_gps`（`nmea_msgs` + `nmea_navsat_driver` + `wheeltec_gps_path` + `wheeltec_udev.sh`，源自 `D:\资料\WHEELTEC G60模块附送资料\...\2.Linux解析例程`）；项目侧启动入口 `car_nodes/launch/g60_gps.launch.py` + `car_nodes/config/g60_gps.yaml` |
+| 镭神 N10P 激光雷达 + 串口转接模块 | 已备 | **双回波雷达**（默认单回波，建图导航建议保持单回波）。厂商 ROS2 SDK 已收进项目 `CAR_ws/src/vendor/lslidar_ros2`（`lslidar_driver` + `lslidar_msgs` + `wheeltec_udev.sh`，源自 `D:\资料\N10系列激光雷达附送资料\...\2.ROS2_SDK`）；项目侧启动入口 `car_nodes/launch/n10p_lidar.launch.py` + `car_nodes/config/lslidar_n10p_uart.yaml`；自带 `lidar_driver` 节点仅用于空载仿真；本机实测串口转接为 CH9102（1a86:55d4，serial `5B8E677903`） |
+| WHEELTEC G60 GPS 模块 | 已备 | ATGM336H + **CH9102F** USB 转串口（1a86:55d4，本机实测串口序列号 **5B0B031719**，非出厂标称 0005，须按实机核对），波特率 **9600**，上电即输出 NMEA（GN 系语句）。厂商 ROS2 SDK 已收进项目 `CAR_ws/src/vendor/wheeltec_gps`（`nmea_msgs` + `nmea_navsat_driver` + `wheeltec_gps_path` + `wheeltec_udev.sh`，源自 `D:\资料\WHEELTEC G60模块附送资料\...\2.Linux解析例程`）；项目侧启动入口 `car_nodes/launch/g60_gps.launch.py` + `car_nodes/config/g60_gps.yaml` |
 | CSI 摄像头 | 待购 | 对应 `camera_driver` 节点（当前仅渐变测试图） |
-| K210 开发板（MaixPy） | 已备 | **实机前视摄像头**：烧录 `scripts/k210_firmware.py`（QVGA JPEG 串口推流 + LCD 本地预览，921600 波特），USB 线直连树莓派（同时供电，识别为 /dev/ttyUSB*），Pi 侧 `k210_camera_driver_node` 发布 `/camera/image_raw`，发布契约与 `camera_driver` 相同可直接替换 |
+| K210 开发板（MaixPy） | 已备 | **实机前视摄像头**：烧录 `scripts/k210_firmware.py`（QVGA JPEG 串口推流 + LCD 本地预览，921600 波特），USB 线直连树莓派（同时供电，识别为 /dev/ttyUSB*，本机实测 CH9102 serial `558B018651`），Pi 侧 `k210_camera_driver_node` 发布 `/camera/image_raw`，发布契约与 `camera_driver` 相同可直接替换。实测两坑：① CanMV makerobo 固件 REPL 不占 machine.UART1、UART1 上电无引脚映射，固件已补 `fm.register(5, fm.fpioa.UART1_TX)`（IO5 为 USB 串口 K210→PC 方向）；② CH9102 的 DTR/RTS 接 K210 复位/BOOT，驱动打开串口后必须清除 DTR/RTS，否则 K210 被按在复位态收不到流（`k210_camera_driver` 已处理） |
 | USB 后置摄像头 | 待购 | Pi 4B 只有一个 CSI 口，后摄走 USB（如 `/dev/video1`）；以 `camera_driver` 第二实例发布 `/camera/rear/image_raw`（参数 `device`/`image_topic`/`info_topic`/`frame_id`，见节点 docstring） |
 | 24V→5V 5A 降压模块 | 待购 | 树莓派供电 |
 | 4G 模块 | 暂缓 | 远程链路，后期评估 |
@@ -38,8 +38,12 @@
 - `motor_driver.py` 已实现 WHEELTEC 二进制协议（实机时 `simulate:=false`），编解码
   在 `car_nodes/wheeltec_protocol.py`（纯函数，可单测）。STM32 侧按车体三轴速度收发，
   节点内部做 阿克曼指令 ↔ (vx, vz) 换算（与 sim_motor_bridge 同一套运动学函数）。
-- launch 切换点：实机 bringup 中用 `motor_driver_node`（`simulate:=false`）替换
-  `sim_motor_bridge_node`，其余链路（mux/gateway/chassis_controller/avoidance）不动。
+- 实机全链路 bringup：`car_sim/launch/real_bringup.launch.py`（树莓派实测版；
+  `motor_port`/`lidar_port`/`gps_port`/`front_camera:=v4l2|k210|none`/`k210_port`/
+  `rear_camera_device` 等参数见文件 docstring），其中用 `motor_driver_node`
+  （`simulate:=false`）替换 `sim_motor_bridge_node`，其余链路
+  （mux/gateway/chassis_controller/avoidance）不动。避障实机调优值（rpi-4.2）：
+  `safety_distance` 0.9 / `slow_down_distance` 1.8 / `creep_speed` 0.25。
 
 ### WHEELTEC 串口协议（已实现）
 
@@ -65,7 +69,8 @@ Linux 上设备一般为 `/dev/ttyACM*`（节点默认 `/dev/ttyACM0`，参数 `
   `Lslidar_ROS2_driver` N10_V1.0 分支，那是 N10 的，N10P 不适用）。一键启动：
   `ros2 launch car_nodes n10p_lidar.launch.py`（配置 `car_nodes/config/lslidar_n10p_uart.yaml`：
   `frame_id: laser_frame`、`laserscan_topic: /scan`、串口默认 `/dev/wheeltec_lidar`——
-  用 vendor 目录里的 `wheeltec_udev.sh` 建 udev 规则，或改为实际 `/dev/ttyUSB*`/`/dev/ttyACM*`）。
+  用 vendor 目录里的 `wheeltec_udev.sh` 建 udev 规则（本机实测转接模块为 CH9102
+  1a86:55d4 serial `5B8E677903`，按 serial 建规则），或改为实际 `/dev/ttyUSB*`/`/dev/ttyACM*`）。
   - 电机上电即转，驱动内 `motor_running` 默认 true，**无需先发启动命令**；如需停转/恢复：
     `ros2 topic pub --once /x10/motor_control std_msgs/msg/Int8 "{data: 0}"`（1=转，0=停）。
   - N10P 双回波：保持 `publish_multiecholaserscan: false`（单回波；双回波噪点多、强度低，
@@ -82,10 +87,14 @@ Linux 上设备一般为 `/dev/ttyACM*`（节点默认 `/dev/ttyACM0`，参数 `
   `port: /dev/wheeltec_gps`、`baud: 9600`、`frame_id: gps`、`useRMC: false`）。
   - **必须用 vendored 的 wheeltec 修改版 nmea_navsat_driver，不能 apt 装上游**：
     G60 输出 `$GNxxx` 语句，上游旧版解析器只吃 `$GP`（vendored 版支持 GP/GN/GL/IN）。
-  - udev：模块为 **CH9102F**（`1a86:55d4`），出厂串口序列号 **0005**；用 vendor 目录里的
-    `wheeltec_udev.sh` 建规则得 `/dev/wheeltec_gps`（**坑**：zip 自带脚本只写了 CP2102
-    规则，与实物 CH9102F 不符，vendored 版已补上 CH9102 两条规则）。
-    与雷达（CH9102 serial 0001 → `/dev/wheeltec_lidar`）可同时插，序列号区分不冲突。
+  - udev：模块为 **CH9102F**（`1a86:55d4`），本机实测串口序列号 **5B0B031719**（非出厂
+    标称 0005，用 `udevadm info -a -n /dev/ttyACM* | grep serial` 按实机核对）；用 vendor
+    目录里的 `wheeltec_udev.sh` 建规则得 `/dev/wheeltec_gps`（**坑**：zip 自带脚本只写了
+    CP2102 规则，与实物 CH9102F 不符，vendored 版已补上 CH9102 两条规则）。
+    ⚠ 控制板 / GPS / 雷达 / K210 四个设备同为 **1a86:55d4**，udev 规则必须全部按
+    serial 区分（本机实测：控制板 `0002`、GPS `5B0B031719`、雷达 `5B8E677903`、
+    K210 `558B018651`）；控制板规则若无 serial 过滤，插 GPS 时 `/dev/wheeltec`
+    可能指向 GPS。
   - GPS 上电即输出 NMEA，无需启动命令；依赖 `ros-humble-tf-transformations`
     （手册 FAQ 同款报错 `No module named 'tf_transformations'` 即缺此包）。
   - NavSatFix 是全球坐标不依赖 TF；URDF 暂无 gps_link（天线安装位置未实测），

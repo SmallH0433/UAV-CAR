@@ -83,7 +83,13 @@ def generate_launch_description():
         executable='avoidance_node',
         name='avoidance_node',
         output='screen',
-        parameters=[sim_time],
+        # 实机调优参数（rpi-4.2 树莓派实测，阿克曼转弯半径 0.57m 同样适用仿真）：
+        # 0.5m 才绕行太晚，提前到 0.9m；蠕动提速加快贴障转向
+        parameters=[sim_time, {
+            'safety_distance': 0.9,
+            'slow_down_distance': 1.8,
+            'creep_speed': 0.25,
+        }],
     )
     # teleop 优先：operator heartbeat 新鲜时 /ugv/teleop/cmd_vel 覆盖 /cmd_vel；
     # 无 heartbeat 时放行 avoidance 的 /cmd_vel（navigation_topic 默认值）。

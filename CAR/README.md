@@ -11,7 +11,7 @@
 - `car_interfaces` — 自定义 msg/srv（AckermannCommand / MotorFeedback / Obstacle(Array) / UavCommand / UavStatus / SetGoal）
 - `car_nodes` — 7 个功能节点 + `sim_motor_bridge`（仿真电机桥）
 - `car_description` — R680 URDF + Gazebo 模型 `models/r680_4wd`
-- `car_sim` — gz 世界、ros_gz_bridge 配置、控制权 mux、指令网关、网页遥控
+- `car_sim` — gz 世界、ros_gz_bridge 配置、控制权 mux、指令网关、网页遥控、实机 bringup launch（`real_bringup.launch.py`）
 - `vendor/lslidar_ros2` — 镭神 N10P 雷达厂商 ROS2 SDK（lslidar_driver + lslidar_msgs，实机用）
 - `vendor/wheeltec_gps` — WHEELTEC G60 GPS 厂商 ROS2 SDK（nmea_msgs + nmea_navsat_driver
   + wheeltec_gps_path + wheeltec_udev.sh，实机用；wheeltec 修改版，支持 $GN/$GL talker）
@@ -83,6 +83,8 @@ ros2 launch car_sim teleop_test.launch.py
 
 网页遥控：浏览器打开 <http://localhost:8765>（WSL 内运行时用 Windows 浏览器同样可访问）。
 方向键按钮 / WASD / 方向键控制，按住行驶、松开停车；页面显示位姿、速度、控制权与前后视相机。
+网页控制台另有雷达扫描图（`/api/scan.json`）、GPS 面板 + 高德瓦片地图定位（WGS-84→GCJ-02
+纠偏）、激光建图面板与一键建图按钮（slam_toolbox，实机用，详见 `real_bringup.launch.py` 链路）。
 
 ### 一键启停脚本
 
@@ -116,6 +118,10 @@ authority 为 `operator_steering`。
 
 ## 实机待办
 
+- 实机一键全链路：`ros2 launch car_sim real_bringup.launch.py`（树莓派实测版，
+  参数 `motor_port`/`lidar_port`/`gps_port`/`front_camera:=v4l2|k210|none` 等见文件
+  docstring；避障已带实机调优值）。树莓派部署子集维护在本仓 `rpi-deploy` 分支
+  （对应 `D:\CAR_deploy`）。
 - ~~用真实 `motor_driver`（WHEELTEC 串口协议）替换 `sim_motor_bridge`~~ 已完成：
   协议编解码在 `car_nodes/wheeltec_protocol.py`（0x7B/0x7D 帧、BCC 异或校验），
   话题契约不变——订阅 `/ackermann_cmd`（AckermannCommand：后轮速[左后/右后] rad/s +

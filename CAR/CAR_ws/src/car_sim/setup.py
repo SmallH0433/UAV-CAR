@@ -4,7 +4,7 @@ package_name = 'car_sim'
 
 setup(
     name=package_name,
-    version='0.1.0',
+    version='0.2.0',
     packages=[package_name],
     data_files=[
         ('share/ament_index/resource_index/packages',
@@ -14,6 +14,7 @@ setup(
         ('share/' + package_name + '/launch', [
             'launch/car_sim.launch.py',
             'launch/teleop_test.launch.py',
+            'launch/real_bringup.launch.py',
         ]),
         ('share/' + package_name + '/worlds', ['worlds/r680_test_field.sdf']),
         ('share/' + package_name + '/web', ['car_sim/web/index.html']),
@@ -22,7 +23,7 @@ setup(
     zip_safe=True,
     maintainer='yoimiya',
     maintainer_email='yoimiya@todo.todo',
-    description='R680 Gazebo 仿真设施：桥配置、控制权 mux、指令网关、网页遥控',
+    description='R680 仿真 + 实机部署：Gazebo 桥配置、控制权 mux、指令网关、网页遥控、实机 bringup launch',
     license='MIT',
     tests_require=['pytest'],
     entry_points={

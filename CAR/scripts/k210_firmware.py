@@ -30,6 +30,11 @@ sensor.skip_frames(time=2000)
 
 # Maix 开发板的 USB 转串口芯片（CH340 等）接的就是 UART1（REPL 口）；
 # 脚本运行时 REPL 不活动，直接复用该串口经 USB 线向树莓派推流。
+# 注意（本部署板实测）：CanMV makerobo 固件的 REPL 不是 machine.UART1，
+# UART1 上电未绑定任何引脚，必须显式做 FPIOA 映射——USB 串口 CH9102 的
+# K210→PC 方向接 IO5（逐引脚扫描实测）。MaixPy v1 固件的板子可去掉这两行。
+from fpioa_manager import fm
+fm.register(5, fm.fpioa.UART1_TX, force=True)
 uart = UART(UART.UART1, BAUD, 8, 0, 0, timeout=1000, read_buf_len=4096)
 
 while True:

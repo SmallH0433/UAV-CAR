@@ -79,6 +79,10 @@ class K210CameraDriverNode(Node):
         import serial  # pyserial
         try:
             self._serial = serial.Serial(self.port, self.baud, timeout=0.5)
+            # CH9102 的 DTR/RTS 连着 K210 的复位/BOOT：pyserial 打开默认拉有效，
+            # 不清除会把 K210 按在复位/ISP 态，永远收不到流（本部署板实测）
+            self._serial.dtr = False
+            self._serial.rts = False
             self.get_logger().info(f'已打开串口 {self.port}')
             return True
         except Exception as exc:
