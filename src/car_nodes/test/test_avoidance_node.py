@@ -208,3 +208,168 @@ def test_select_sector_avoids_side_obstacle_side(node):
     best = node._select_sector(0.0)
     assert best is not None
     assert best > math.radians(5.0)
+
+
+# ---------- 脱困优先级测试（回归：脱困不得被弧线掉头分支抢占） ----------
+
+class FakeGoal:
+    """geometry_msgs/PoseStamped 的等价替身（仅 control_loop 用到的字段）。"""
+
+    class pose:
+        class position:
+            x = -1.0   # 目标在正后方 → desired_angle ≈ ±180° > 90°
+            y = 0.0
+
+
+def _run_recovery_loop(node, obstacles):
+    """脱困状态 + 目标在正后方 下跑一次 control_loop，返回发布的指令。"""
+    node.obstacles = obstacles
+    node.pose = (0.0, 0.0, 0.0)
+    node.goal = FakeGoal()
+    node.enable_cruise = False
+    now = node.get_clock().now().nanoseconds * 1e-9
+    node.recover_start = now   # 刚进脱困，远未到 recover_min_time
+    node.escape_start = now
+    node.detour_side = 1
+    recorder = CmdRecorder()
+    real_pub = node.pub_cmd
+    node.pub_cmd = recorder
+    try:
+        node.control_loop()
+    finally:
+        node.pub_cmd = real_pub
+        node.goal = None
+        node.recovering = False
+        node.escaping = False
+        node.detour_side = 0
+    return recorder.last
+
+
+def test_recovery_not_preempted_by_turnaround(node):
+    # 回归：倒车脱困中车头甩向空旷侧、目标落到后方（|desired|>90°）时，
+    # 弧线掉头分支不得抢占——否则倒车指令被前进掉头覆盖，转向轮刚反向
+    # 就回到原位，车沿同一弧线前后往复
+    node.recovering = True
+    node.escaping = False
+    # 正前贴脸障碍（触发倒车的那堵墙），后方空旷
+    cmd = _run_recovery_loop(node, [FakeObstacle(0.0, 0.25, 0.15)])
+    assert cmd is not None
+    assert cmd.linear.x < 0.0   # 必须仍是倒车，而不是 turn_speed 前进掉头
+    assert cmd.angular.z == pytest.approx(node.max_angular)  # detour_side=+1
+
+
+def test_escaping_not_preempted_by_turnaround(node):
+    # 同理：死角蠕动脱困中目标在后方时，也不得被掉头分支抢占
+    node.recovering = False
+    node.escaping = True
+    node.escape_angle = math.radians(80.0)  # 承诺方向：右侧（无障碍）
+    cmd = _run_recovery_loop(node, [FakeObstacle(0.0, 0.25, 0.15)])
+    assert cmd is not None
+    assert cmd.linear.x == pytest.approx(node.creep_speed)  # 蠕动而非掉头
+
+
+# ---------- 原地往复检测 + 脱困路径测试 ----------
+
+def _run(node, obstacles):
+    """巡航模式（无目标）下跑一次 control_loop，返回发布的指令。"""
+    node.obstacles = obstacles
+    node.pose = (0.0, 0.0, 0.0)
+    node.goal = None
+    node.enable_cruise = True
+    recorder = CmdRecorder()
+    real_pub = node.pub_cmd
+    node.pub_cmd = recorder
+    try:
+        node.control_loop()
+    finally:
+        node.pub_cmd = real_pub
+        node.enable_cruise = False
+    return recorder.last
+
+
+def _reset_escape_state(node):
+    node.escape_pathing = False
+    node.escape_path = []
+    node.escape_idx = 0
+    node.escape_stop_until = 0.0
+    node.recover_snapshots = []
+    node.recovering = False
+    node.escaping = False
+
+
+def test_repeated_identical_scan_triggers_escape_path(node):
+    # 两次倒车脱困完成时雷达画面几乎一致 → 判定原地往复：
+    # 进入脱困路径模式并立即停车
+    _reset_escape_state(node)
+    obs = [FakeObstacle(-20.0, 1.0, 0.15), FakeObstacle(30.0, 1.2, 0.2)]
+    now = node.get_clock().now().nanoseconds * 1e-9
+    # 第一次脱困完成：只记录签名，不触发
+    node.recovering = True
+    node.recover_start = now - 2.0  # 已超过 recover_min_time
+    node.detour_side = 1
+    _run(node, obs)
+    assert node.recovering is False
+    assert not node.escape_pathing
+    # 第二次脱困完成，雷达签名几乎一致 → 触发
+    node.recovering = True
+    node.recover_start = now - 2.0
+    cmd = _run(node, obs)
+    assert node.escape_pathing
+    assert cmd.linear.x == 0.0 and cmd.angular.z == 0.0  # 停止一切动作
+    assert len(node.escape_path) == node.escape_path_points
+    _reset_escape_state(node)
+
+
+def test_different_scans_do_not_trigger(node):
+    # 两次签名差异大（环境明显变化）→ 不触发
+    _reset_escape_state(node)
+    now = node.get_clock().now().nanoseconds * 1e-9
+    node.recovering = True
+    node.recover_start = now - 2.0
+    node.detour_side = 1
+    _run(node, [FakeObstacle(0.0, 1.0, 0.15)])
+    node.recovering = True
+    node.recover_start = now - 2.0
+    _run(node, [FakeObstacle(80.0, 0.6, 0.15)])  # 完全不同的画面
+    assert not node.escape_pathing
+    _reset_escape_state(node)
+
+
+def test_escape_path_stop_then_follow(node):
+    # 停车阶段发零指令；停车结束后沿路径点前进并朝路径点转向
+    _reset_escape_state(node)
+    node.escape_path = [(0.4, 0.3), (0.8, 0.6)]
+    node.escape_pathing = True
+    node.escape_stop_until = \
+        node.get_clock().now().nanoseconds * 1e-9 + 10.0
+    cmd = _run(node, [])
+    assert cmd.linear.x == 0.0 and cmd.angular.z == 0.0
+    node.escape_stop_until = 0.0  # 停车结束
+    cmd = _run(node, [])
+    assert cmd.linear.x > 0.0
+    assert cmd.angular.z > 0.0   # 第一个路径点在左前方
+    _reset_escape_state(node)
+
+
+def test_escape_path_completion_resumes_normal(node):
+    # 到达路径终点（已在到达半径内）→ 退出脱困路径模式，恢复常规巡航
+    _reset_escape_state(node)
+    node.escape_path = [(0.05, 0.05)]
+    node.escape_pathing = True
+    cmd = _run(node, [])
+    assert node.escape_pathing is False
+    assert cmd.linear.x > 0.0  # 常规巡航前进
+
+
+def test_plan_escape_path_avoids_obstacle(node):
+    # 正前方障碍：规划的路径必须绕开，而不是直线穿过去
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    node.obstacles = [FakeObstacle(0.0, 0.8, 0.2)]
+    path = node._plan_escape_path()
+    assert len(path) == node.escape_path_points
+    assert any(abs(py) > 0.05 for _, py in path)  # 明显偏离直线
+    # 路径点不得进入障碍膨胀圈（半径 0.2 + 车半宽 0.2）
+    for px, py in path:
+        assert math.hypot(px - 0.8, py - 0.0) >= 0.4 - 1e-6
+    node.obstacles = []
