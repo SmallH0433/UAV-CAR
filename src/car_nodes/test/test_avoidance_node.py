@@ -173,3 +173,38 @@ def test_dead_end_escapes_sideways_not_front_back(node):
     assert cmd is not None
     assert cmd.linear.x > 0.0
     assert cmd.angular.z < 0.0  # 朝左侧转
+
+
+# ---------- 侧前方障碍物响应测试 ----------
+
+def test_bias_desired_angle_toward_clear_side(node):
+    # 左侧近距离障碍，右侧空旷：期望方向应向左偏移
+    node.obstacles = [
+        FakeObstacle(-45.0, 0.4, 0.15),
+        FakeObstacle(45.0, 2.0, 0.15),
+    ]
+    biased = node._bias_desired_angle(0.0)
+    assert biased > math.radians(5.0)
+
+
+def test_bias_desired_angle_no_obstacles_unchanged(node):
+    node.obstacles = []
+    assert node._bias_desired_angle(0.0) == 0.0
+
+
+def test_side_obstacle_cost_penalises_same_side(node):
+    node.obstacles = [FakeObstacle(-45.0, 0.4, 0.15)]
+    cost_left = node._side_obstacle_cost(math.radians(-45.0))
+    cost_right = node._side_obstacle_cost(math.radians(45.0))
+    assert cost_left > cost_right
+
+
+def test_select_sector_avoids_side_obstacle_side(node):
+    # 正前空旷但左侧近距离障碍：应提前向右侧绕行
+    node.obstacles = [
+        FakeObstacle(0.0, 2.0, 0.15),
+        FakeObstacle(-45.0, 0.4, 0.15),
+    ]
+    best = node._select_sector(0.0)
+    assert best is not None
+    assert best > math.radians(5.0)

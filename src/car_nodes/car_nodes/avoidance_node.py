@@ -33,6 +33,10 @@
       后续选路时优先避开，防止在狭长死胡同里前后反复震荡
   blocked_direction_penalty  (float, 1.0) 被阻方向扇区附加代价
   blocked_direction_tolerance(float, 0.50) 被阻方向惩罚容差 rad（约 28°）
+  lateral_response_enable (bool, True)  是否启用侧前方障碍提前响应
+  lateral_bias_max        (float, 0.35) 侧前方障碍导致的期望方向最大偏移 rad
+  lateral_clearance_margin(float, 0.30) 左右侧净空差超过该值才触发提前转向
+  side_obstacle_penalty (float, 0.40) 侧前方障碍对同侧扇区的附加代价系数
 
 绕行策略（阿克曼不能原地自旋，全程保持 |v| > 0 或停车）：
   1. 正常：前方 180° 扇区选代价最低的可通行方向，速度随净空缩放；
@@ -47,6 +51,9 @@
      后续 _select_sector / _clearest_direction 对接近该方向的扇区加
      代价，使车辆倾向于探索未走过的侧向出口，而不是在死胡同里
      前后反复震荡。记忆 8s 后自动过期，避免长期影响目标可达性。
+  6. 侧前方提前响应：当某一侧侧前方净空明显小于另一侧时，期望方向
+     自动向空旷侧偏移（最大 lateral_bias_max），避免到正前方被堵才急转，
+     提升对正侧方/斜前方障碍物的响应能力。
 """
 
 import math
@@ -92,6 +99,10 @@ class AvoidanceNode(Node):
         self.declare_parameter('blocked_direction_memory_s', 8.0)
         self.declare_parameter('blocked_direction_penalty', 1.0)
         self.declare_parameter('blocked_direction_tolerance', 0.50)
+        self.declare_parameter('lateral_response_enable', True)
+        self.declare_parameter('lateral_bias_max', 0.35)
+        self.declare_parameter('lateral_clearance_margin', 0.30)
+        self.declare_parameter('side_obstacle_penalty', 0.40)
 
         self.safety_distance = self.get_parameter('safety_distance').value
         self.hard_stop_distance = self.get_parameter('hard_stop_distance').value
@@ -119,6 +130,14 @@ class AvoidanceNode(Node):
             self.get_parameter('blocked_direction_penalty').value
         self.blocked_direction_tolerance = \
             self.get_parameter('blocked_direction_tolerance').value
+        self.lateral_response_enable = \
+            self.get_parameter('lateral_response_enable').value
+        self.lateral_bias_max = \
+            self.get_parameter('lateral_bias_max').value
+        self.lateral_clearance_margin = \
+            self.get_parameter('lateral_clearance_margin').value
+        self.side_obstacle_penalty = \
+            self.get_parameter('side_obstacle_penalty').value
 
         self.obstacles = []
         self.pose = None          # odom 系下 (x, y, yaw)
@@ -213,6 +232,10 @@ class AvoidanceNode(Node):
             # 原地待命
             self.pub_cmd.publish(cmd)
             return
+
+        # 侧前方障碍提前响应：期望方向自动向空旷侧偏移
+        if self.lateral_response_enable:
+            desired_angle = self._bias_desired_angle(desired_angle)
 
         # 目标方向在正后方等超出可通行扇区范围时，带速弧线掉头
         # （阿克曼底盘不能原地自旋，必须保持前进速度）
@@ -400,6 +423,54 @@ class AvoidanceNode(Node):
                 cost += self.blocked_direction_penalty * scale
         return cost
 
+    def _bias_desired_angle(self, desired_angle):
+        """根据侧前方障碍分布把期望方向向空旷侧偏移。
+
+        只在 slow_down_distance 范围内的侧前方（±15° ~ ±90°）障碍参与计算；
+        左右净空差超过 lateral_clearance_margin 才触发偏移，最大偏移
+        lateral_bias_max。让小车在正前方还没被堵死时就提前向空旷侧转向，
+        提升对侧前方/斜前方障碍物的响应能力。
+        """
+        left_clearance = right_clearance = float('inf')
+        for o in self.obstacles:
+            a = self._normalize_angle(o.angle)
+            if 0.26 < a < math.pi / 2.0 and \
+                    o.distance < self.slow_down_distance:
+                left_clearance = min(left_clearance, o.distance)
+            elif -math.pi / 2.0 < a < -0.26 and \
+                    o.distance < self.slow_down_distance:
+                right_clearance = min(right_clearance, o.distance)
+        if left_clearance == float('inf') and right_clearance == float('inf'):
+            return desired_angle
+        if left_clearance == float('inf'):
+            # 左侧无障碍而右侧有：向左侧空旷侧偏移
+            return desired_angle + self.lateral_bias_max
+        if right_clearance == float('inf'):
+            # 右侧无障碍而左侧有：向右侧空旷侧偏移
+            return desired_angle - self.lateral_bias_max
+        diff = left_clearance - right_clearance
+        if abs(diff) < self.lateral_clearance_margin:
+            return desired_angle
+        # diff > 0：左侧更空，向左偏移（desired_angle 增大）
+        bias = self._clamp(
+            diff * 0.25, -self.lateral_bias_max, self.lateral_bias_max)
+        return self._clamp(
+            desired_angle + bias, -math.pi / 2.0, math.pi / 2.0)
+
+    def _side_obstacle_cost(self, sector_angle):
+        """侧前方障碍对同侧扇区的附加代价，促使提前向对侧绕行。"""
+        cost = 0.0
+        for o in self.obstacles:
+            a = self._normalize_angle(o.angle)
+            if 0.26 < abs(a) < math.pi / 2.0 and \
+                    o.distance < self.slow_down_distance:
+                if sector_angle * a > 0:
+                    proximity = (self.slow_down_distance - o.distance) / \
+                        self.slow_down_distance
+                    cost += self.side_obstacle_penalty * proximity * \
+                        math.cos(abs(a))
+        return cost
+
     def _inflated_half_width(self, o):
         """障碍角半宽（rad）：障碍半径 + 车体半宽 膨胀后的角宽度。
 
@@ -501,6 +572,7 @@ class AvoidanceNode(Node):
             if nearest < self.slow_down_distance:
                 cost += (self.slow_down_distance - nearest)
             cost += self._blocked_direction_cost(sector_angle)
+            cost += self._side_obstacle_cost(sector_angle)
             # 绕行方向承诺：换侧加代价，防止在障碍前左右摆动
             if self.detour_side and sector_angle * self.detour_side < 0:
                 cost += 0.6
