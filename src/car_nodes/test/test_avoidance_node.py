@@ -121,3 +121,55 @@ def test_fully_surrounded_still_stops(node):
     assert cmd is not None
     assert cmd.linear.x == 0.0
     assert cmd.angular.z == 0.0
+
+
+# ---------- 死胡同方向记忆测试 ----------
+
+def test_blocked_direction_cost_penalises_recently_blocked(node):
+    node.blocked_directions = [(0.0, float('inf'))]  # 正前刚碰壁，不过期
+    cost_front = node._blocked_direction_cost(0.0)
+    cost_side = node._blocked_direction_cost(math.radians(45.0))
+    assert cost_front > cost_side
+    assert cost_front > 0.0
+
+
+def test_blocked_direction_cost_expires(node):
+    now = node.get_clock().now().nanoseconds * 1e-9
+    node.blocked_directions = [(0.0, now - 0.1)]  # 已过期
+    assert node._blocked_direction_cost(0.0) == 0.0
+
+
+def test_select_sector_avoids_blocked_direction(node):
+    # 正前障碍 1.5m（> safety_distance 1.0），不记忆时 _select_sector 会直行；
+    # 记录正前为被阻方向后，应偏向侧方，不再直冲已碰壁的方向
+    node.blocked_directions = [(0.0, float('inf'))]
+    node.obstacles = [FakeObstacle(0.0, 1.5, 0.15)]
+    best = node._select_sector(0.0)
+    assert best is not None
+    assert abs(best) > math.radians(5.0)
+
+
+def test_clearest_direction_prefers_unblocked_side(node):
+    # 左右净空对称，仅正前被标记为已碰壁：最空方向应偏离正前
+    node.blocked_directions = [(0.0, float('inf'))]
+    node.obstacles = [
+        FakeObstacle(-45.0, 2.0, 0.15),
+        FakeObstacle(45.0, 2.0, 0.15),
+    ]
+    angle, clearance = node._clearest_direction()
+    assert abs(angle) > math.radians(5.0)
+
+
+def test_dead_end_escapes_sideways_not_front_back(node):
+    # 死胡同：正前、正后都贴障，左侧空旷；记录正前为被阻方向后，
+    # 车辆应选择左侧出口，而不是再次尝试前后震荡
+    node.blocked_directions = [(0.0, float('inf'))]
+    cmd = _run_control_loop(node, [
+        FakeObstacle(0.0, 0.25, 0.15),
+        FakeObstacle(175.0, 0.25, 0.15),
+        FakeObstacle(-60.0, 2.0, 0.15),   # 左侧空
+        FakeObstacle(60.0, 0.25, 0.15),  # 右侧堵
+    ])
+    assert cmd is not None
+    assert cmd.linear.x > 0.0
+    assert cmd.angular.z < 0.0  # 朝左侧转

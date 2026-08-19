@@ -27,6 +27,12 @@
   vehicle_half_width (float, 0.20)  车体半宽 m（含余量）：障碍角宽度按
       障碍半径 + 车体半宽膨胀——否则前侧方障碍的角宽度盖不住正前方 0° 方向，
       中心线判定"可通行"，但车身前角会撞上（前侧方避障失效的根因）
+  path_history_length (float, 5.0)  轨迹历史保留时长 s（用于死胡同记忆）
+  blocked_direction_memory_s (float, 8.0)
+      被阻方向记忆时长 s：触发脱困前 1s 的平均行进方向会被标记为"已碰壁"，
+      后续选路时优先避开，防止在狭长死胡同里前后反复震荡
+  blocked_direction_penalty  (float, 1.0) 被阻方向扇区附加代价
+  blocked_direction_tolerance(float, 0.50) 被阻方向惩罚容差 rad（约 28°）
 
 绕行策略（阿克曼不能原地自旋，全程保持 |v| > 0 或停车）：
   1. 正常：前方 180° 扇区选代价最低的可通行方向，速度随净空缩放；
@@ -37,6 +43,10 @@
      避免倒车/蠕动在阈值抖动上来回切换形成极限环；
   4. 方向承诺：选定绕行侧后 detour_timeout 内换侧加代价，防止在障碍
      前来回摆动。蠕动方向也四面贴脸（真正被围死）才停车等待。
+  5. 死胡同记忆：触发脱困时把最近 1s 的平均行进方向标记为"已碰壁"，
+     后续 _select_sector / _clearest_direction 对接近该方向的扇区加
+     代价，使车辆倾向于探索未走过的侧向出口，而不是在死胡同里
+     前后反复震荡。记忆 8s 后自动过期，避免长期影响目标可达性。
 """
 
 import math
@@ -78,6 +88,10 @@ class AvoidanceNode(Node):
         self.declare_parameter('enable_cruise', False)
         self.declare_parameter('num_sectors', 36)
         self.declare_parameter('vehicle_half_width', 0.20)  # 车宽0.32/2=0.16+余量
+        self.declare_parameter('path_history_length', 5.0)
+        self.declare_parameter('blocked_direction_memory_s', 8.0)
+        self.declare_parameter('blocked_direction_penalty', 1.0)
+        self.declare_parameter('blocked_direction_tolerance', 0.50)
 
         self.safety_distance = self.get_parameter('safety_distance').value
         self.hard_stop_distance = self.get_parameter('hard_stop_distance').value
@@ -97,6 +111,14 @@ class AvoidanceNode(Node):
         self.num_sectors = self.get_parameter('num_sectors').value
         self.vehicle_half_width = \
             self.get_parameter('vehicle_half_width').value
+        self.path_history_length = \
+            self.get_parameter('path_history_length').value
+        self.blocked_direction_memory_s = \
+            self.get_parameter('blocked_direction_memory_s').value
+        self.blocked_direction_penalty = \
+            self.get_parameter('blocked_direction_penalty').value
+        self.blocked_direction_tolerance = \
+            self.get_parameter('blocked_direction_tolerance').value
 
         self.obstacles = []
         self.pose = None          # odom 系下 (x, y, yaw)
@@ -110,6 +132,9 @@ class AvoidanceNode(Node):
         self.escaping = False
         self.escape_start = 0.0
         self.escape_angle = 0.0
+        # 死胡同方向记忆：轨迹历史 + 被阻方向集合
+        self.position_history = []   # [(x, y, yaw, time), ...]
+        self.blocked_directions = []  # [(车体坐标系方向 rad, 过期时间), ...]
 
         self.create_subscription(
             ObstacleArray, '/perception/obstacles', self.obstacles_cb, 10)
@@ -140,7 +165,13 @@ class AvoidanceNode(Node):
     def odom_cb(self, msg):
         p = msg.pose.pose.position
         yaw = yaw_from_quaternion(msg.pose.pose.orientation)
+        now = self.get_clock().now().nanoseconds * 1e-9
         self.pose = (p.x, p.y, yaw)
+        # 保留最近 path_history_length 秒的 odom 轨迹，用于死胡同方向记忆
+        self.position_history.append((p.x, p.y, yaw, now))
+        cutoff = now - self.path_history_length
+        while self.position_history and self.position_history[0][3] < cutoff:
+            self.position_history.pop(0)
 
     def goal_cb(self, msg):
         self.goal = msg
@@ -244,6 +275,9 @@ class AvoidanceNode(Node):
         # 时进入锁存的死角蠕动脱困状态（阈值紧贴时两分支来回切换会形成
         # 极限环：蠕动 0.4s→倒车 4s 超时→再蠕动，永远困在墙角）
         if fwd_dist < self.hard_stop_distance or best_angle is None:
+            # 先记录"触发脱困前的行进方向"为已碰壁方向，后续选路时优先避开，
+            # 防止在狭长死胡同里前后反复震荡
+            self._record_blocked_direction()
             if self._rear_clearance() > self.recover_exit_distance:
                 self.recovering = True
                 self.recover_start = now
@@ -323,6 +357,49 @@ class AvoidanceNode(Node):
         cmd.angular.z = self.detour_side * self.max_angular
         self.pub_cmd.publish(cmd)
 
+    def _record_blocked_direction(self):
+        """把触发脱困前 1s 内的平均行进方向标记为"已碰壁"。
+
+        方向换算到车体坐标系，保证车辆转向后记忆仍有效。
+        记忆会在 blocked_direction_memory_s 秒后自动过期。
+        """
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if len(self.position_history) < 2:
+            return
+        recent = [pt for pt in self.position_history
+                  if now - pt[3] <= 1.0]
+        if len(recent) < 2:
+            recent = self.position_history[-2:]
+        start = recent[0]
+        end = recent[-1]
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        if math.hypot(dx, dy) < 0.01:
+            # 位移太小，直接用车头朝向作为被阻方向
+            direction_body = 0.0
+        else:
+            travel_yaw = math.atan2(dy, dx)
+            direction_body = self._normalize_angle(travel_yaw - start[2])
+        expiration = now + self.blocked_direction_memory_s
+        self.blocked_directions.append((direction_body, expiration))
+        self.get_logger().info(
+            f'记录被阻方向 {math.degrees(direction_body):.0f}°，'
+            f'记忆 {self.blocked_direction_memory_s:.1f}s')
+
+    def _blocked_direction_cost(self, sector_angle):
+        """返回 sector_angle 相对被阻方向记忆的额外代价（自动清理过期项）。"""
+        now = self.get_clock().now().nanoseconds * 1e-9
+        self.blocked_directions = [
+            (d, exp) for d, exp in self.blocked_directions if exp > now
+        ]
+        cost = 0.0
+        for direction, _ in self.blocked_directions:
+            diff = abs(self._normalize_angle(sector_angle - direction))
+            if diff < self.blocked_direction_tolerance:
+                scale = 1.0 - diff / self.blocked_direction_tolerance
+                cost += self.blocked_direction_penalty * scale
+        return cost
+
     def _inflated_half_width(self, o):
         """障碍角半宽（rad）：障碍半径 + 车体半宽 膨胀后的角宽度。
 
@@ -370,8 +447,11 @@ class AvoidanceNode(Node):
         return 1 if left >= right else -1
 
     def _clearest_direction(self):
-        """前方 180° 内净空最大的扇区 (中心角, 净空距离)，用于死角蠕动脱困"""
-        best_angle, best_clearance = 0.0, -1.0
+        """前方 180° 内净空最大的扇区 (中心角, 净空距离)，用于死角蠕动脱困。
+
+        选择时叠加被阻方向惩罚，使死胡同内蠕动不会反复拱向已经碰壁的方向。
+        """
+        best_angle, best_clearance, best_score = 0.0, -1.0, -float('inf')
         for k in range(self.num_sectors):
             sector_angle = -math.pi / 2.0 + \
                 (k + 0.5) * math.pi / self.num_sectors
@@ -380,7 +460,9 @@ class AvoidanceNode(Node):
                 half_width = self._inflated_half_width(o)
                 if abs(self._normalize_angle(o.angle - sector_angle)) <= half_width:
                     nearest = min(nearest, o.distance)
-            if nearest > best_clearance:
+            score = nearest - self._blocked_direction_cost(sector_angle)
+            if score > best_score:
+                best_score = score
                 best_clearance = nearest
                 best_angle = sector_angle
         return best_angle, best_clearance
@@ -396,7 +478,10 @@ class AvoidanceNode(Node):
             if abs(self._normalize_angle(o.angle - desired_angle)) <= half_width:
                 nearest_desired = min(nearest_desired, o.distance)
         if nearest_desired >= self.safety_distance:
-            return desired_angle
+            # 期望方向畅通且未被标记为"已碰壁"时直接采用；否则继续
+            # 走扇区评估，让死胡同记忆有机会把车辆推离反复震荡的方向
+            if self._blocked_direction_cost(desired_angle) < 0.05:
+                return desired_angle
         best_angle = None
         best_cost = float('inf')
         for k in range(self.num_sectors):
@@ -411,10 +496,11 @@ class AvoidanceNode(Node):
                     nearest = min(nearest, o.distance)
             if nearest < self.safety_distance:
                 continue  # 不可通行
-            # 代价 = 与目标方向偏差 + 障碍接近惩罚
+            # 代价 = 与目标方向偏差 + 障碍接近惩罚 + 死胡同被阻方向惩罚
             cost = abs(self._normalize_angle(sector_angle - desired_angle))
             if nearest < self.slow_down_distance:
                 cost += (self.slow_down_distance - nearest)
+            cost += self._blocked_direction_cost(sector_angle)
             # 绕行方向承诺：换侧加代价，防止在障碍前左右摆动
             if self.detour_side and sector_angle * self.detour_side < 0:
                 cost += 0.6
