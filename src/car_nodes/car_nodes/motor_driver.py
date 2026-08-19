@@ -21,6 +21,9 @@
 编解码见 car_nodes/wheeltec_protocol.py。STM32 侧按车体三轴速度收发，
 转向角 → 舵机、后轮差速由固件内部完成；本节点只负责
 阿克曼指令 ↔ (vx, vz) 的运动学换算（与 sim_motor_bridge 同一套函数）。
+注意固件由 vz 解算舵机转角时按前进假设处理（不随 vx<0 自动反向），
+倒车时必须在下发前把 vz 翻号（见 ackermann_to_firmware_velocity），
+否则前进/倒车切换时舵机角度不变，车会沿同一弧线往复卡死。
 """
 
 import rclpy
@@ -32,6 +35,26 @@ from car_nodes.sim_motor_bridge import (
     ackermann_to_twist, twist_to_ackermann, V_EPS)
 from car_nodes.wheeltec_protocol import (
     UplinkFrameParser, build_downlink_frame)
+
+
+def ackermann_to_firmware_velocity(rear_speeds, steering, wheel_radius,
+                                   wheelbase):
+    """阿克曼指令（后轮速 + 转向角）→ 下位机下行帧的 (vx, vz)。
+
+    运动学换算用 ackermann_to_twist（v 带符号，倒车 v<0）。但固件由 vz
+    解算舵机转角时按前进假设处理（δ 只随 vz 符号变化，不随 vx<0 自动
+    反向），因此倒车（vx<0）时把 vz 翻号，舵机才会打出与前进相反的
+    角度，得到正确的倒车弧线（车头朝 ω 期望的方向甩）；
+    否则前进/倒车共用同一舵机角，车沿同一弧线前后往复。
+    v≈0 时 vz 强制为 0（阿克曼不能原地自旋）。
+    上行反馈不受影响：上行 vx/vz 是车体实际运动，仍按标准 atan 换算。
+    """
+    vx, vz = ackermann_to_twist(rear_speeds, steering, wheel_radius, wheelbase)
+    if abs(vx) < V_EPS:
+        vz = 0.0
+    elif vx < 0.0:
+        vz = -vz
+    return vx, vz
 
 
 class MotorDriverNode(Node):
@@ -99,15 +122,14 @@ class MotorDriverNode(Node):
         """阿克曼指令 → 车体 (vx, vz) → WHEELTEC 下行帧写入 STM32。
 
         Y 轴速度恒为 0；Z 轴正值为逆时针（与 ROS 一致）。静止（v≈0）时
-        vz 必须为 0——阿克曼底盘不能原地自旋，转向角变化由固件自行处理。
+        vz 必须为 0——阿克曼底盘不能原地自旋；倒车时 vz 翻号以适配固件
+        的前进假设（见 ackermann_to_firmware_velocity）。
         """
         if self.serial is None or not self.serial.is_open:
             return
-        vx, vz = ackermann_to_twist(
+        vx, vz = ackermann_to_firmware_velocity(
             self.target_rear, self.target_steering,
             self.wheel_radius, self.wheelbase)
-        if abs(vx) < V_EPS:
-            vz = 0.0
         try:
             self.serial.write(build_downlink_frame(vx, 0.0, vz))
         except Exception as e:
