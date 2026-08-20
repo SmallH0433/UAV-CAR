@@ -426,3 +426,43 @@ def test_plan_escape_path_avoids_obstacle(node):
     for px, py in path:
         assert math.hypot(px - 0.8, py - 0.0) >= 0.4 - 1e-6
     node.obstacles = []
+
+
+# ---------- 绕行方向扇区锁定测试 ----------
+
+def test_sector_lock_left_only_evaluates_left(node):
+    # 绕行侧为左：即使右侧更空旷，也只评估左侧扇区
+    node.detour_side = 1
+    node.obstacles = [
+        FakeObstacle(45.0, 2.0, 0.15),   # 左侧远处
+        FakeObstacle(-45.0, 5.0, 0.15),  # 右侧更空旷（不评估）
+    ]
+    best = node._select_sector(0.0)
+    assert best is not None
+    assert best > 0.0  # 必须选左侧扇区
+    node.detour_side = 0
+
+
+def test_sector_lock_right_only_evaluates_right(node):
+    # 绕行侧为右：即使左侧更空旷，也只评估右侧扇区
+    node.detour_side = -1
+    node.obstacles = [
+        FakeObstacle(45.0, 5.0, 0.15),   # 左侧更空旷（不评估）
+        FakeObstacle(-45.0, 2.0, 0.15),  # 右侧远处
+    ]
+    best = node._select_sector(0.0)
+    assert best is not None
+    assert best < 0.0  # 必须选右侧扇区
+    node.detour_side = 0
+
+
+def test_sector_lock_released_when_side_blocked(node):
+    # 绕行侧全堵：_select_sector 返回 None，control_loop 会解除锁定
+    node.detour_side = 1
+    node.obstacles = [
+        FakeObstacle(45.0, 0.2, 0.15),
+        FakeObstacle(60.0, 0.2, 0.15),
+        FakeObstacle(75.0, 0.2, 0.15),
+    ]
+    assert node._select_sector(0.0) is None
+    node.detour_side = 0

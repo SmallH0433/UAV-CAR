@@ -37,6 +37,8 @@
   lateral_bias_max        (float, 0.35) 侧前方障碍导致的期望方向最大偏移 rad
   lateral_clearance_margin(float, 0.30) 左右侧净空差超过该值才触发提前转向
   side_obstacle_penalty (float, 0.40) 侧前方障碍对同侧扇区的附加代价系数
+  sector_lock_enable  (bool, True)  绕行状态下是否锁定扇区评估范围到当前
+      绕行侧；锁定后只关注转向路线上的障碍，避免另一侧障碍干扰
   loop_detect_tolerance (float, 0.12) 两次脱困雷达签名平均净空差阈值 m，
       小于该值判定为原地往复
   escape_stop_time    (float, 1.0)  触发脱困路径前的停车时长 s
@@ -63,14 +65,17 @@
   6. 侧前方提前响应：当某一侧侧前方净空明显小于另一侧时，期望方向
      自动向空旷侧偏移（最大 lateral_bias_max），避免到正前方被堵才急转，
      提升对正侧方/斜前方障碍物的响应能力。
-  7. 原地往复检测：每次倒车脱困结束时记录当前雷达签名（前方各扇区净空），
+  7. 绕行扇区锁定：选定绕行侧后只评估该侧扇区，只关注转向路线上的
+     障碍，避免另一侧障碍干扰导致"能转却不敢转"；该侧全堵时自动
+     解除锁定重新全向评估。
+  8. 原地往复检测：每次倒车脱困结束时记录当前雷达签名（前方各扇区净空），
      若与上一次几乎一致（说明退回原处、在原地往复），立即停车
      escape_stop_time，再用当前扫描贪心规划一条局部脱困路径
      （escape_path_step 折线；点数按当前雷达实际感知范围收缩——
      最远障碍距离以内、且不超过 escape_path_max_range 硬封顶，
      未看到的区域不能当作空旷），沿路径行驶中若前方净空超过
      escape_early_exit_distance 则立即退出、交回常规避障。
-  8. 网页遥控最高优先：/ugv/operator/heartbeat 活跃时立即取消包括
+  9. 网页遥控最高优先：/ugv/operator/heartbeat 活跃时立即取消包括
      自主脱困在内的全部自主状态并停车，底盘输出由 mux 切到遥控链路。
 """
 
@@ -122,6 +127,7 @@ class AvoidanceNode(Node):
         self.declare_parameter('lateral_bias_max', 0.35)
         self.declare_parameter('lateral_clearance_margin', 0.30)
         self.declare_parameter('side_obstacle_penalty', 0.40)
+        self.declare_parameter('sector_lock_enable', True)
         self.declare_parameter('loop_detect_tolerance', 0.12)
         self.declare_parameter('escape_stop_time', 1.0)
         self.declare_parameter('escape_path_step', 0.40)
@@ -164,6 +170,8 @@ class AvoidanceNode(Node):
             self.get_parameter('lateral_clearance_margin').value
         self.side_obstacle_penalty = \
             self.get_parameter('side_obstacle_penalty').value
+        self.sector_lock_enable = \
+            self.get_parameter('sector_lock_enable').value
         self.loop_detect_tolerance = \
             self.get_parameter('loop_detect_tolerance').value
         self.escape_stop_time = self.get_parameter('escape_stop_time').value
@@ -404,6 +412,12 @@ class AvoidanceNode(Node):
 
         # 扇区避障：前方 180° 分扇区，选代价最低的可通过扇区
         best_angle = self._select_sector(desired_angle)
+        if best_angle is None and self.sector_lock_enable and \
+                self.detour_side != 0:
+            # 当前绕行侧全堵，解除扇区锁定重新全向评估
+            self.detour_side = 0
+            self.get_logger().info('绕行侧扇区全堵，解除锁定重新评估')
+            best_angle = self._select_sector(desired_angle)
 
         # 触发脱困：正前方障碍贴脸，或前方扇区全部不可通行。
         # 后方有真实净空（> recover_exit_distance）才倒车脱困；后方也贴障
@@ -775,7 +789,16 @@ class AvoidanceNode(Node):
                 return desired_angle
         best_angle = None
         best_cost = float('inf')
-        for k in range(self.num_sectors):
+        # 绕行状态下只评估绕行方向一侧的扇区：倒车脱困/绕行时只关注
+        # 当前转向路线上的障碍，避免另一侧障碍干扰导致"能转却不敢转"
+        sector_range = range(self.num_sectors)
+        if self.sector_lock_enable and self.detour_side != 0:
+            half = self.num_sectors // 2
+            if self.detour_side > 0:
+                sector_range = range(half, self.num_sectors)
+            else:
+                sector_range = range(0, half)
+        for k in sector_range:
             # 扇区中心角：-90° ~ +90°
             sector_angle = -math.pi / 2.0 + \
                 (k + 0.5) * math.pi / self.num_sectors
