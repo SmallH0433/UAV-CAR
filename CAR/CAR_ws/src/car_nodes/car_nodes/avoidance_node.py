@@ -27,6 +27,27 @@
   vehicle_half_width (float, 0.20)  车体半宽 m（含余量）：障碍角宽度按
       障碍半径 + 车体半宽膨胀——否则前侧方障碍的角宽度盖不住正前方 0° 方向，
       中心线判定"可通行"，但车身前角会撞上（前侧方避障失效的根因）
+  path_history_length (float, 5.0)  轨迹历史保留时长 s（用于死胡同记忆）
+  blocked_direction_memory_s (float, 8.0)
+      被阻方向记忆时长 s：触发脱困前 1s 的平均行进方向会被标记为"已碰壁"，
+      后续选路时优先避开，防止在狭长死胡同里前后反复震荡
+  blocked_direction_penalty  (float, 1.0) 被阻方向扇区附加代价
+  blocked_direction_tolerance(float, 0.50) 被阻方向惩罚容差 rad（约 28°）
+  lateral_response_enable (bool, True)  是否启用侧前方障碍提前响应
+  lateral_bias_max        (float, 0.35) 侧前方障碍导致的期望方向最大偏移 rad
+  lateral_clearance_margin(float, 0.30) 左右侧净空差超过该值才触发提前转向
+  side_obstacle_penalty (float, 0.40) 侧前方障碍对同侧扇区的附加代价系数
+  sector_lock_enable  (bool, True)  绕行状态下是否锁定扇区评估范围到当前
+      绕行侧；锁定后只关注转向路线上的障碍，避免另一侧障碍干扰
+  loop_detect_tolerance (float, 0.12) 两次脱困雷达签名平均净空差阈值 m，
+      小于该值判定为原地往复
+  escape_stop_time    (float, 1.0)  触发脱困路径前的停车时长 s
+  escape_path_step    (float, 0.40) 脱困路径步长 m
+  escape_path_points  (int,   6)    脱困路径点数上限
+  escape_path_max_range (float, 2.0) 脱困路径总长的硬封顶 m
+  escape_waypoint_tolerance (float, 0.15) 路径点到达判定半径 m
+  escape_early_exit_distance (float, 0.80) 脱困路径行驶中前方净空
+      超过该值立即退出脱困模式，恢复常规导航
 
 绕行策略（阿克曼不能原地自旋，全程保持 |v| > 0 或停车）：
   1. 正常：前方 180° 扇区选代价最低的可通行方向，速度随净空缩放；
@@ -37,6 +58,25 @@
      避免倒车/蠕动在阈值抖动上来回切换形成极限环；
   4. 方向承诺：选定绕行侧后 detour_timeout 内换侧加代价，防止在障碍
      前来回摆动。蠕动方向也四面贴脸（真正被围死）才停车等待。
+  5. 死胡同记忆：触发脱困时把最近 1s 的平均行进方向标记为"已碰壁"，
+     后续 _select_sector / _clearest_direction 对接近该方向的扇区加
+     代价，使车辆倾向于探索未走过的侧向出口，而不是在死胡同里
+     前后反复震荡。记忆 8s 后自动过期，避免长期影响目标可达性。
+  6. 侧前方提前响应：当某一侧侧前方净空明显小于另一侧时，期望方向
+     自动向空旷侧偏移（最大 lateral_bias_max），避免到正前方被堵才急转，
+     提升对正侧方/斜前方障碍物的响应能力。
+  7. 绕行扇区锁定：选定绕行侧后只评估该侧扇区，只关注转向路线上的
+     障碍，避免另一侧障碍干扰导致"能转却不敢转"；该侧全堵时自动
+     解除锁定重新全向评估。
+  8. 原地往复检测：每次倒车脱困结束时记录当前雷达签名（前方各扇区净空），
+     若与上一次几乎一致（说明退回原处、在原地往复），立即停车
+     escape_stop_time，再用当前扫描贪心规划一条局部脱困路径
+     （escape_path_step 折线；点数按当前雷达实际感知范围收缩——
+     最远障碍距离以内、且不超过 escape_path_max_range 硬封顶，
+     未看到的区域不能当作空旷），沿路径行驶中若前方净空超过
+     escape_early_exit_distance 则立即退出、交回常规避障。
+  9. 网页遥控最高优先：/ugv/operator/heartbeat 活跃时立即取消包括
+     自主脱困在内的全部自主状态并停车，底盘输出由 mux 切到遥控链路。
 """
 
 import math
@@ -45,6 +85,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry
+from std_msgs.msg import Bool
 from rcl_interfaces.msg import SetParametersResult
 
 from car_interfaces.msg import ObstacleArray
@@ -78,6 +119,22 @@ class AvoidanceNode(Node):
         self.declare_parameter('enable_cruise', False)
         self.declare_parameter('num_sectors', 36)
         self.declare_parameter('vehicle_half_width', 0.20)  # 车宽0.32/2=0.16+余量
+        self.declare_parameter('path_history_length', 5.0)
+        self.declare_parameter('blocked_direction_memory_s', 8.0)
+        self.declare_parameter('blocked_direction_penalty', 1.0)
+        self.declare_parameter('blocked_direction_tolerance', 0.50)
+        self.declare_parameter('lateral_response_enable', True)
+        self.declare_parameter('lateral_bias_max', 0.35)
+        self.declare_parameter('lateral_clearance_margin', 0.30)
+        self.declare_parameter('side_obstacle_penalty', 0.40)
+        self.declare_parameter('sector_lock_enable', True)
+        self.declare_parameter('loop_detect_tolerance', 0.12)
+        self.declare_parameter('escape_stop_time', 1.0)
+        self.declare_parameter('escape_path_step', 0.40)
+        self.declare_parameter('escape_path_points', 6)
+        self.declare_parameter('escape_path_max_range', 2.0)
+        self.declare_parameter('escape_waypoint_tolerance', 0.15)
+        self.declare_parameter('escape_early_exit_distance', 0.80)
 
         self.safety_distance = self.get_parameter('safety_distance').value
         self.hard_stop_distance = self.get_parameter('hard_stop_distance').value
@@ -97,6 +154,35 @@ class AvoidanceNode(Node):
         self.num_sectors = self.get_parameter('num_sectors').value
         self.vehicle_half_width = \
             self.get_parameter('vehicle_half_width').value
+        self.path_history_length = \
+            self.get_parameter('path_history_length').value
+        self.blocked_direction_memory_s = \
+            self.get_parameter('blocked_direction_memory_s').value
+        self.blocked_direction_penalty = \
+            self.get_parameter('blocked_direction_penalty').value
+        self.blocked_direction_tolerance = \
+            self.get_parameter('blocked_direction_tolerance').value
+        self.lateral_response_enable = \
+            self.get_parameter('lateral_response_enable').value
+        self.lateral_bias_max = \
+            self.get_parameter('lateral_bias_max').value
+        self.lateral_clearance_margin = \
+            self.get_parameter('lateral_clearance_margin').value
+        self.side_obstacle_penalty = \
+            self.get_parameter('side_obstacle_penalty').value
+        self.sector_lock_enable = \
+            self.get_parameter('sector_lock_enable').value
+        self.loop_detect_tolerance = \
+            self.get_parameter('loop_detect_tolerance').value
+        self.escape_stop_time = self.get_parameter('escape_stop_time').value
+        self.escape_path_step = self.get_parameter('escape_path_step').value
+        self.escape_path_points = self.get_parameter('escape_path_points').value
+        self.escape_path_max_range = \
+            self.get_parameter('escape_path_max_range').value
+        self.escape_waypoint_tolerance = \
+            self.get_parameter('escape_waypoint_tolerance').value
+        self.escape_early_exit_distance = \
+            self.get_parameter('escape_early_exit_distance').value
 
         self.obstacles = []
         self.pose = None          # odom 系下 (x, y, yaw)
@@ -110,11 +196,26 @@ class AvoidanceNode(Node):
         self.escaping = False
         self.escape_start = 0.0
         self.escape_angle = 0.0
+        # 死胡同方向记忆：轨迹历史 + 被阻方向集合
+        self.position_history = []   # [(x, y, yaw, time), ...]
+        self.blocked_directions = []  # [(车体坐标系方向 rad, 过期时间), ...]
+        # 原地往复检测 + 脱困路径状态
+        self.recover_snapshots = []  # 最近两次倒车脱困完成时的雷达签名
+        self.escape_pathing = False  # 脱困路径模式中
+        self.escape_path = []        # odom 系路径点 [(x, y), ...]
+        self.escape_idx = 0
+        self.escape_stop_until = 0.0
+        # 网页遥控接管状态（/ugv/operator/heartbeat）
+        self.operator_active = False
+        self.operator_time = 0.0
 
         self.create_subscription(
             ObstacleArray, '/perception/obstacles', self.obstacles_cb, 10)
         self.create_subscription(Odometry, '/odom', self.odom_cb, 10)
         self.create_subscription(PoseStamped, '/goal_pose', self.goal_cb, 10)
+        # 网页遥控心跳：活跃时遥控优先于一切自主逻辑
+        self.create_subscription(
+            Bool, '/ugv/operator/heartbeat', self.operator_cb, 10)
         self.pub_cmd = self.create_publisher(Twist, '/cmd_vel', 10)
         self.create_service(SetGoal, '/avoidance/set_goal', self.set_goal_cb)
         # enable_cruise 支持运行时动态修改（网页巡航开关 / ros2 param set）
@@ -137,18 +238,31 @@ class AvoidanceNode(Node):
     def obstacles_cb(self, msg):
         self.obstacles = list(msg.obstacles)
 
+    def operator_cb(self, msg):
+        """网页遥控心跳（web_gateway 10Hz 持续发布）：True=操作员活跃"""
+        self.operator_active = bool(msg.data)
+        self.operator_time = self.get_clock().now().nanoseconds * 1e-9
+
     def odom_cb(self, msg):
         p = msg.pose.pose.position
         yaw = yaw_from_quaternion(msg.pose.pose.orientation)
+        now = self.get_clock().now().nanoseconds * 1e-9
         self.pose = (p.x, p.y, yaw)
+        # 保留最近 path_history_length 秒的 odom 轨迹，用于死胡同方向记忆
+        self.position_history.append((p.x, p.y, yaw, now))
+        cutoff = now - self.path_history_length
+        while self.position_history and self.position_history[0][3] < cutoff:
+            self.position_history.pop(0)
 
     def goal_cb(self, msg):
         self.goal = msg
+        self.recover_snapshots = []  # 新目标=新场景，清空往复检测记忆
         self.get_logger().info(
             f'收到新目标：x={msg.pose.position.x:.2f} y={msg.pose.position.y:.2f}')
 
     def set_goal_cb(self, request, response):
         self.goal = request.goal
+        self.recover_snapshots = []
         response.accepted = True
         response.message = '已接受目标点'
         self.get_logger().info('通过服务设置目标点')
@@ -162,36 +276,77 @@ class AvoidanceNode(Node):
         fwd_dist = self._forward_obstacle_distance()
         now = self.get_clock().now().nanoseconds * 1e-9
 
-        # 期望方向：有目标朝目标，否则巡航（前方）或待命
+        # 网页遥控优先于一切自主逻辑：操作员活跃（心跳 0.6s 内，与 mux 的
+        # operator_timeout 一致）时立即取消包括自主脱困在内的全部自主状态
+        # 并停车；底盘输出由 mux 切到遥控链路
+        if self.operator_active and now - self.operator_time < 0.6:
+            if self.recovering or self.escaping or self.escape_pathing:
+                self.get_logger().info('网页遥控接管，取消全部自主脱困动作')
+            self.recovering = False
+            self.escaping = False
+            self.escape_pathing = False
+            self.escape_path = []
+            self.pub_cmd.publish(cmd)
+            return
+
+        # 脱困路径模式（原地往复检测触发）：先停车 escape_stop_time，
+        # 再沿规划路径逐个路径点前进（仍走扇区避障），走完交回常规避障
         desired_angle = None
-        if self.goal is not None and self.pose is not None:
-            dx = self.goal.pose.position.x - self.pose[0]
-            dy = self.goal.pose.position.y - self.pose[1]
-            dist_goal = math.hypot(dx, dy)
-            if dist_goal < 0.2:
-                # 到达目标
-                self.goal = None
-                self.pub_cmd.publish(cmd)
-                self.get_logger().info('已到达目标点')
+        if self.escape_pathing:
+            if self.pose is None:
+                self.escape_pathing = False
+            elif now < self.escape_stop_until:
+                self.pub_cmd.publish(cmd)  # 停止一切动作
                 return
-            goal_bearing = math.atan2(dy, dx)
-            desired_angle = self._normalize_angle(goal_bearing - self.pose[2])
-        elif self.enable_cruise:
-            desired_angle = 0.0
-        else:
-            # 原地待命
-            self.pub_cmd.publish(cmd)
-            return
+            elif fwd_dist > self.escape_early_exit_distance:
+                # 前方已较为空旷：立即退出脱困模式，恢复常规导航
+                self.escape_pathing = False
+                self.escape_path = []
+                self.get_logger().info(
+                    f'前方净空 {fwd_dist:.2f}m，提前退出脱困路径，'
+                    f'恢复常规导航')
+            else:
+                while self.escape_idx < len(self.escape_path) and \
+                        math.hypot(
+                            self.escape_path[self.escape_idx][0] - self.pose[0],
+                            self.escape_path[self.escape_idx][1] - self.pose[1]
+                        ) < self.escape_waypoint_tolerance:
+                    self.escape_idx += 1
+                if self.escape_idx >= len(self.escape_path):
+                    self.escape_pathing = False
+                    self.escape_path = []
+                    self.get_logger().info('脱困路径走完，恢复常规避障')
+                else:
+                    wx, wy = self.escape_path[self.escape_idx]
+                    desired_angle = self._normalize_angle(math.atan2(
+                        wy - self.pose[1], wx - self.pose[0]) - self.pose[2])
 
-        # 目标方向在正后方等超出可通行扇区范围时，带速弧线掉头
-        # （阿克曼底盘不能原地自旋，必须保持前进速度）
-        if abs(desired_angle) > math.pi / 2.0:
-            cmd.linear.x = self.turn_speed
-            cmd.angular.z = self._clamp(
-                1.5 * desired_angle, -self.max_angular, self.max_angular)
-            self.pub_cmd.publish(cmd)
-            return
+        # 期望方向：有目标朝目标，否则巡航（前方）或待命
+        if desired_angle is None:
+            if self.goal is not None and self.pose is not None:
+                dx = self.goal.pose.position.x - self.pose[0]
+                dy = self.goal.pose.position.y - self.pose[1]
+                dist_goal = math.hypot(dx, dy)
+                if dist_goal < 0.2:
+                    # 到达目标
+                    self.goal = None
+                    self.pub_cmd.publish(cmd)
+                    self.get_logger().info('已到达目标点')
+                    return
+                goal_bearing = math.atan2(dy, dx)
+                desired_angle = \
+                    self._normalize_angle(goal_bearing - self.pose[2])
+            elif self.enable_cruise:
+                desired_angle = 0.0
+            else:
+                # 原地待命
+                self.pub_cmd.publish(cmd)
+                return
 
+        # 脱困状态优先于一切目标跟随逻辑：倒车/蠕动脱困中车头会甩向
+        # 空旷侧，往往偏离目标方向；若先做目标跟随（尤其 |desired|>90°
+        # 的弧线掉头分支），脱困指令会被前进指令覆盖——转向轮刚反向就
+        # 被拉回目标侧，前后换向失效、沿原路径往复
         # 倒车脱困状态：前方有基本净空且持续足够时间后退出；
         # 退出阈值独立于 safety_distance（实机：用 1.0m 安全距做退出条件，
         # 杂物多的环境永远达不到，车会一直倒车转圈"不回正"）；
@@ -206,6 +361,11 @@ class AvoidanceNode(Node):
                     self.get_logger().warn('脱困超时，强制恢复正常绕行')
                 else:
                     self.get_logger().info('脱困完成，恢复绕行')
+                # 完成后退时记录雷达签名；若与上一次几乎一致（原地往复），
+                # 进入脱困路径模式并立即停车
+                if self._record_recovery_snapshot():
+                    self.pub_cmd.publish(cmd)
+                    return
             else:
                 self._publish_recovery()
                 return
@@ -236,14 +396,37 @@ class AvoidanceNode(Node):
                 self.pub_cmd.publish(cmd)
                 return
 
+        # 侧前方障碍提前响应：期望方向自动向空旷侧偏移
+        if self.lateral_response_enable:
+            desired_angle = self._bias_desired_angle(desired_angle)
+
+        # 目标方向在正后方等超出可通行扇区范围时，带速弧线掉头
+        # （阿克曼底盘不能原地自旋，必须保持前进速度）；
+        # 仅正常导航生效，脱困状态已在上方优先处理
+        if abs(desired_angle) > math.pi / 2.0:
+            cmd.linear.x = self.turn_speed
+            cmd.angular.z = self._clamp(
+                1.5 * desired_angle, -self.max_angular, self.max_angular)
+            self.pub_cmd.publish(cmd)
+            return
+
         # 扇区避障：前方 180° 分扇区，选代价最低的可通过扇区
         best_angle = self._select_sector(desired_angle)
+        if best_angle is None and self.sector_lock_enable and \
+                self.detour_side != 0:
+            # 当前绕行侧全堵，解除扇区锁定重新全向评估
+            self.detour_side = 0
+            self.get_logger().info('绕行侧扇区全堵，解除锁定重新评估')
+            best_angle = self._select_sector(desired_angle)
 
         # 触发脱困：正前方障碍贴脸，或前方扇区全部不可通行。
         # 后方有真实净空（> recover_exit_distance）才倒车脱困；后方也贴障
         # 时进入锁存的死角蠕动脱困状态（阈值紧贴时两分支来回切换会形成
         # 极限环：蠕动 0.4s→倒车 4s 超时→再蠕动，永远困在墙角）
         if fwd_dist < self.hard_stop_distance or best_angle is None:
+            # 先记录"触发脱困前的行进方向"为已碰壁方向，后续选路时优先避开，
+            # 防止在狭长死胡同里前后反复震荡
+            self._record_blocked_direction()
             if self._rear_clearance() > self.recover_exit_distance:
                 self.recovering = True
                 self.recover_start = now
@@ -323,6 +506,205 @@ class AvoidanceNode(Node):
         cmd.angular.z = self.detour_side * self.max_angular
         self.pub_cmd.publish(cmd)
 
+    # ---------- 原地往复检测 + 脱困路径 ----------
+    def _recovery_signature(self):
+        """前方 180° 各扇区净空签名（截断 3m）：两次脱困结束时签名几乎
+        一致，说明车退回了原处，正在原地往复。"""
+        sig = []
+        for k in range(self.num_sectors):
+            a = -math.pi / 2.0 + (k + 0.5) * math.pi / self.num_sectors
+            sig.append(min(self._direction_distance(a), 3.0))
+        return sig
+
+    def _record_recovery_snapshot(self):
+        """倒车脱困完成时记录雷达签名；与上一次几乎一致则进入脱困路径
+        模式（停车 + 规划 + 沿路径前进）。返回是否触发了脱困路径模式。"""
+        sig = self._recovery_signature()
+        triggered = False
+        if self.recover_snapshots:
+            prev = self.recover_snapshots[-1]
+            mean_diff = sum(abs(a - b) for a, b in zip(sig, prev)) / len(sig)
+            if mean_diff < self.loop_detect_tolerance:
+                self.get_logger().warn(
+                    f'两次脱困雷达签名几乎一致（平均差 {mean_diff:.3f}m < '
+                    f'{self.loop_detect_tolerance:.2f}m），判定原地往复，'
+                    f'停车并规划脱困路径')
+                triggered = self._enter_escape_path_mode()
+        self.recover_snapshots = (self.recover_snapshots + [sig])[-2:]
+        return triggered
+
+    def _enter_escape_path_mode(self):
+        """停车 escape_stop_time 并生成脱困路径；无路可规划返回 False。"""
+        if self.pose is None:
+            return False
+        # 脱困路径不得超出当前雷达感知范围：以当前最远障碍距离为可用
+        # 范围（未看到的区域不能视为空旷），再用 escape_path_max_range
+        # 硬封顶，按步长折算路径点数
+        if self.obstacles:
+            seen_range = max(o.distance for o in self.obstacles)
+        else:
+            seen_range = self.escape_path_max_range
+        max_range = min(seen_range, self.escape_path_max_range)
+        points = max(2, min(self.escape_path_points,
+                            int(max_range / self.escape_path_step)))
+        path = self._plan_escape_path(points)
+        if not path:
+            return False
+        now = self.get_clock().now().nanoseconds * 1e-9
+        self.escape_path = path
+        self.escape_idx = 0
+        self.escape_pathing = True
+        self.escape_stop_until = now + self.escape_stop_time
+        self.recovering = False
+        self.escaping = False
+        self.detour_side = 0
+        self.recover_snapshots = []  # 清空记忆，避免路径跟随中连锁触发
+        end = path[-1]
+        self.get_logger().warn(
+            f'脱困路径已规划（{len(path)} 点，终点 ({end[0]:.2f}, '
+            f'{end[1]:.2f})），停车 {self.escape_stop_time:.1f}s 后沿路径前进')
+        return True
+
+    def _plan_escape_path(self, num_points):
+        """用当前雷达快照贪心规划局部脱困路径（odom 系折线）。
+
+        每步在当前段朝向的前方 180° 内，沿候选方向的一步线段采样 3 点
+        取最小净空（障碍按 半径+车体半宽 膨胀），净空 < 5cm 的方向不可行；
+        可行方向中选净空最大者，相同偏直走。全部不可行（被围死）时退而
+        选"最不差"方向。只依赖当前扫描，目标是走出困住车辆的局部区域，
+        随后交回常规避障。
+        """
+        x, y, yaw = self.pose
+        # 障碍圆盘转到 odom 系
+        discs = []
+        for o in self.obstacles:
+            a = self._normalize_angle(o.angle)
+            discs.append((x + o.distance * math.cos(yaw + a),
+                          y + o.distance * math.sin(yaw + a),
+                          o.radius + self.vehicle_half_width))
+        margin = 0.05
+        vx, vy, heading = x, y, yaw
+        path = []
+        for _ in range(num_points):
+            best_score, best_dir = -float('inf'), heading
+            fb_clear, fb_dir = -float('inf'), heading  # 全不可行时的兜底
+            for k in range(self.num_sectors):
+                rel = -math.pi / 2.0 + \
+                    (k + 0.5) * math.pi / self.num_sectors
+                d = heading + rel
+                min_clear = float('inf')
+                for t in (0.33, 0.67, 1.0):
+                    px = vx + self.escape_path_step * t * math.cos(d)
+                    py = vy + self.escape_path_step * t * math.sin(d)
+                    for ox, oy, r in discs:
+                        min_clear = min(
+                            min_clear, math.hypot(px - ox, py - oy) - r)
+                if min_clear > fb_clear:
+                    fb_clear, fb_dir = min_clear, d
+                if min_clear < margin:
+                    continue  # 会撞上膨胀障碍，不可行
+                score = min(min_clear, 2.0) - 0.5 * abs(rel)  # 偏直走
+                if score > best_score:
+                    best_score, best_dir = score, d
+            if best_score == -float('inf'):
+                best_dir = fb_dir  # 被围死：选"最不差"方向缓慢拱
+            heading = best_dir
+            vx += self.escape_path_step * math.cos(heading)
+            vy += self.escape_path_step * math.sin(heading)
+            path.append((vx, vy))
+        return path
+
+    def _record_blocked_direction(self):
+        """把触发脱困前 1s 内的平均行进方向标记为"已碰壁"。
+
+        方向换算到车体坐标系，保证车辆转向后记忆仍有效。
+        记忆会在 blocked_direction_memory_s 秒后自动过期。
+        """
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if len(self.position_history) < 2:
+            return
+        recent = [pt for pt in self.position_history
+                  if now - pt[3] <= 1.0]
+        if len(recent) < 2:
+            recent = self.position_history[-2:]
+        start = recent[0]
+        end = recent[-1]
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        if math.hypot(dx, dy) < 0.01:
+            # 位移太小，直接用车头朝向作为被阻方向
+            direction_body = 0.0
+        else:
+            travel_yaw = math.atan2(dy, dx)
+            direction_body = self._normalize_angle(travel_yaw - start[2])
+        expiration = now + self.blocked_direction_memory_s
+        self.blocked_directions.append((direction_body, expiration))
+        self.get_logger().info(
+            f'记录被阻方向 {math.degrees(direction_body):.0f}°，'
+            f'记忆 {self.blocked_direction_memory_s:.1f}s')
+
+    def _blocked_direction_cost(self, sector_angle):
+        """返回 sector_angle 相对被阻方向记忆的额外代价（自动清理过期项）。"""
+        now = self.get_clock().now().nanoseconds * 1e-9
+        self.blocked_directions = [
+            (d, exp) for d, exp in self.blocked_directions if exp > now
+        ]
+        cost = 0.0
+        for direction, _ in self.blocked_directions:
+            diff = abs(self._normalize_angle(sector_angle - direction))
+            if diff < self.blocked_direction_tolerance:
+                scale = 1.0 - diff / self.blocked_direction_tolerance
+                cost += self.blocked_direction_penalty * scale
+        return cost
+
+    def _bias_desired_angle(self, desired_angle):
+        """根据侧前方障碍分布把期望方向向空旷侧偏移。
+
+        只在 slow_down_distance 范围内的侧前方（±15° ~ ±90°）障碍参与计算；
+        左右净空差超过 lateral_clearance_margin 才触发偏移，最大偏移
+        lateral_bias_max。让小车在正前方还没被堵死时就提前向空旷侧转向，
+        提升对侧前方/斜前方障碍物的响应能力。
+        """
+        left_clearance = right_clearance = float('inf')
+        for o in self.obstacles:
+            a = self._normalize_angle(o.angle)
+            if 0.26 < a < math.pi / 2.0 and \
+                    o.distance < self.slow_down_distance:
+                left_clearance = min(left_clearance, o.distance)
+            elif -math.pi / 2.0 < a < -0.26 and \
+                    o.distance < self.slow_down_distance:
+                right_clearance = min(right_clearance, o.distance)
+        if left_clearance == float('inf') and right_clearance == float('inf'):
+            return desired_angle
+        if left_clearance == float('inf'):
+            # 左侧无障碍而右侧有：向左侧空旷侧偏移
+            return desired_angle + self.lateral_bias_max
+        if right_clearance == float('inf'):
+            # 右侧无障碍而左侧有：向右侧空旷侧偏移
+            return desired_angle - self.lateral_bias_max
+        diff = left_clearance - right_clearance
+        if abs(diff) < self.lateral_clearance_margin:
+            return desired_angle
+        # diff > 0：左侧更空，向左偏移（desired_angle 增大）
+        bias = self._clamp(
+            diff * 0.25, -self.lateral_bias_max, self.lateral_bias_max)
+        return self._clamp(
+            desired_angle + bias, -math.pi / 2.0, math.pi / 2.0)
+
+    def _side_obstacle_cost(self, sector_angle):
+        """侧前方障碍对同侧扇区的附加代价，促使提前向对侧绕行。"""
+        cost = 0.0
+        for o in self.obstacles:
+            a = self._normalize_angle(o.angle)
+            if 0.26 < abs(a) < math.pi / 2.0 and \
+                    o.distance < self.slow_down_distance:
+                if sector_angle * a > 0:
+                    proximity = (self.slow_down_distance - o.distance) / \
+                        self.slow_down_distance
+                    cost += self.side_obstacle_penalty * proximity * \
+                        math.cos(abs(a))
+        return cost
+
     def _inflated_half_width(self, o):
         """障碍角半宽（rad）：障碍半径 + 车体半宽 膨胀后的角宽度。
 
@@ -370,8 +752,11 @@ class AvoidanceNode(Node):
         return 1 if left >= right else -1
 
     def _clearest_direction(self):
-        """前方 180° 内净空最大的扇区 (中心角, 净空距离)，用于死角蠕动脱困"""
-        best_angle, best_clearance = 0.0, -1.0
+        """前方 180° 内净空最大的扇区 (中心角, 净空距离)，用于死角蠕动脱困。
+
+        选择时叠加被阻方向惩罚，使死胡同内蠕动不会反复拱向已经碰壁的方向。
+        """
+        best_angle, best_clearance, best_score = 0.0, -1.0, -float('inf')
         for k in range(self.num_sectors):
             sector_angle = -math.pi / 2.0 + \
                 (k + 0.5) * math.pi / self.num_sectors
@@ -380,7 +765,9 @@ class AvoidanceNode(Node):
                 half_width = self._inflated_half_width(o)
                 if abs(self._normalize_angle(o.angle - sector_angle)) <= half_width:
                     nearest = min(nearest, o.distance)
-            if nearest > best_clearance:
+            score = nearest - self._blocked_direction_cost(sector_angle)
+            if score > best_score:
+                best_score = score
                 best_clearance = nearest
                 best_angle = sector_angle
         return best_angle, best_clearance
@@ -396,10 +783,22 @@ class AvoidanceNode(Node):
             if abs(self._normalize_angle(o.angle - desired_angle)) <= half_width:
                 nearest_desired = min(nearest_desired, o.distance)
         if nearest_desired >= self.safety_distance:
-            return desired_angle
+            # 期望方向畅通且未被标记为"已碰壁"时直接采用；否则继续
+            # 走扇区评估，让死胡同记忆有机会把车辆推离反复震荡的方向
+            if self._blocked_direction_cost(desired_angle) < 0.05:
+                return desired_angle
         best_angle = None
         best_cost = float('inf')
-        for k in range(self.num_sectors):
+        # 绕行状态下只评估绕行方向一侧的扇区：倒车脱困/绕行时只关注
+        # 当前转向路线上的障碍，避免另一侧障碍干扰导致"能转却不敢转"
+        sector_range = range(self.num_sectors)
+        if self.sector_lock_enable and self.detour_side != 0:
+            half = self.num_sectors // 2
+            if self.detour_side > 0:
+                sector_range = range(half, self.num_sectors)
+            else:
+                sector_range = range(0, half)
+        for k in sector_range:
             # 扇区中心角：-90° ~ +90°
             sector_angle = -math.pi / 2.0 + \
                 (k + 0.5) * math.pi / self.num_sectors
@@ -411,10 +810,12 @@ class AvoidanceNode(Node):
                     nearest = min(nearest, o.distance)
             if nearest < self.safety_distance:
                 continue  # 不可通行
-            # 代价 = 与目标方向偏差 + 障碍接近惩罚
+            # 代价 = 与目标方向偏差 + 障碍接近惩罚 + 死胡同被阻方向惩罚
             cost = abs(self._normalize_angle(sector_angle - desired_angle))
             if nearest < self.slow_down_distance:
                 cost += (self.slow_down_distance - nearest)
+            cost += self._blocked_direction_cost(sector_angle)
+            cost += self._side_obstacle_cost(sector_angle)
             # 绕行方向承诺：换侧加代价，防止在障碍前左右摆动
             if self.detour_side and sector_angle * self.detour_side < 0:
                 cost += 0.6
