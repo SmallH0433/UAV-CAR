@@ -166,14 +166,25 @@
 
     <div class="card">
       <h2>自主导航</h2>
+      <div style="display:flex; gap:8px; margin-bottom:8px;">
+        <button id="navLoadMapBtn" class="off" title="加载地图">📂 加载地图</button>
+        <button id="navSetStartBtn" class="off" title="设置初始点">📍 设置初始点</button>
+        <button id="navSetGoalBtn" class="off" title="设置目标点">🎯 设置目标点</button>
+      </div>
       <button id="navBtn" class="off" title="自主导航">▶ 开始导航</button>
-      <div class="hint" style="margin-top:6px">在地图上点击设置目标点，小车将沿规划路径自主导航（结合激光雷达实时避障）</div>
+      <div class="hint" style="margin-top:6px">先加载地图，然后设置初始点和目标点，最后开始导航（结合激光雷达实时避障）</div>
       <div id="navMapContainer" style="position:relative; margin-top:10px; display:none;">
         <canvas id="navMap" class="media" width="320" height="320" style="cursor:crosshair;"></canvas>
-        <div class="cam-label" id="navHint">点击地图设置目标点</div>
+        <div class="cam-label" id="navHint">加载地图后点击设置初始点和目标点</div>
       </div>
       <div class="row" style="margin-top:8px"><span>导航状态</span>
         <span id="navStatus">未启动</span>
+      </div>
+      <div class="row" style="margin-top:4px"><span>初始点</span>
+        <span id="navStart">未设置</span>
+      </div>
+      <div class="row" style="margin-top:4px"><span>目标点</span>
+        <span id="navGoal">未设置</span>
       </div>
     </div>
   </div>
@@ -535,7 +546,12 @@
 
   // ---------- 自主导航 ----------
   var navBtn = document.getElementById("navBtn");
+  var navLoadMapBtn = document.getElementById("navLoadMapBtn");
+  var navSetStartBtn = document.getElementById("navSetStartBtn");
+  var navSetGoalBtn = document.getElementById("navSetGoalBtn");
   var navStatus = document.getElementById("navStatus");
+  var navStart = document.getElementById("navStart");
+  var navGoal = document.getElementById("navGoal");
   var navMapContainer = document.getElementById("navMapContainer");
   var navMap = document.getElementById("navMap");
   var navHint = document.getElementById("navHint");
@@ -543,11 +559,18 @@
   var navMapData = null;
   var navMapInfo = null;
   var navCurrentPose = null;
+  var navStartPoint = null;
+  var navGoalPoint = null;
+  var navSettingMode = null;  // "start" | "goal" | null
 
   function renderNav() {
     navBtn.textContent = navOn ? "■ 停止导航" : "▶ 开始导航";
     navBtn.className = navOn ? "on" : "off";
     navStatus.textContent = navOn ? "导航中" : "未启动";
+    navStart.textContent = navStartPoint ?
+      "(" + navStartPoint[0].toFixed(2) + ", " + navStartPoint[1].toFixed(2) + ")" : "未设置";
+    navGoal.textContent = navGoalPoint ?
+      "(" + navGoalPoint[0].toFixed(2) + ", " + navGoalPoint[1].toFixed(2) + ")" : "未设置";
   }
 
   function loadNavMap() {
@@ -560,7 +583,7 @@
           body: JSON.stringify({ name: latestMap })
         }).then(function (r) { return r.json(); }).then(function (resp) {
           if (resp.accepted) {
-            navHint.textContent = "地图已加载：" + latestMap + "，点击设置目标点";
+            navHint.textContent = "地图已加载：" + latestMap + "，请设置初始点和目标点";
             navMapContainer.style.display = "block";
             loadNavMapImage(latestMap);
           } else {
@@ -592,24 +615,30 @@
     if (!navMapData) { return; }
     var ctx = navMap.getContext("2d");
     ctx.drawImage(navMapData, 0, 0);
-    // 绘制当前位置
-    if (navCurrentPose) {
-      var pos = worldToNavMap(navCurrentPose[0], navCurrentPose[1]);
+    // 绘制初始点
+    if (navStartPoint) {
+      var pos = worldToNavMap(navStartPoint[0], navStartPoint[1]);
       if (pos) {
         ctx.fillStyle = "#4a7dd4";
         ctx.beginPath();
-        ctx.arc(pos[0], pos[1], 5, 0, 2 * Math.PI);
+        ctx.arc(pos[0], pos[1], 6, 0, 2 * Math.PI);
         ctx.fill();
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "10px sans-serif";
+        ctx.fillText("起点", pos[0] - 10, pos[1] - 10);
       }
     }
     // 绘制目标点
-    if (navGoal) {
-      var goalPos = worldToNavMap(navGoal[0], navGoal[1]);
+    if (navGoalPoint) {
+      var goalPos = worldToNavMap(navGoalPoint[0], navGoalPoint[1]);
       if (goalPos) {
         ctx.fillStyle = "#e08080";
         ctx.beginPath();
-        ctx.arc(goalPos[0], goalPos[1], 5, 0, 2 * Math.PI);
+        ctx.arc(goalPos[0], goalPos[1], 6, 0, 2 * Math.PI);
         ctx.fill();
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "10px sans-serif";
+        ctx.fillText("终点", goalPos[0] - 10, goalPos[1] - 10);
       }
     }
   }
@@ -621,10 +650,30 @@
     return [gx, navMap.height - gy];  // 翻转 y 轴
   }
 
-  var navGoal = null;
+  navLoadMapBtn.addEventListener("click", function () {
+    loadNavMap();
+  });
+
+  navSetStartBtn.addEventListener("click", function () {
+    if (!navMapData) {
+      navHint.textContent = "请先加载地图";
+      return;
+    }
+    navSettingMode = "start";
+    navHint.textContent = "点击地图设置初始点";
+  });
+
+  navSetGoalBtn.addEventListener("click", function () {
+    if (!navMapData) {
+      navHint.textContent = "请先加载地图";
+      return;
+    }
+    navSettingMode = "goal";
+    navHint.textContent = "点击地图设置目标点";
+  });
 
   navMap.addEventListener("click", function (e) {
-    if (!navOn || !navMapInfo) { return; }
+    if (!navMapInfo || !navSettingMode) { return; }
     var rect = navMap.getBoundingClientRect();
     var scaleX = navMap.width / rect.width;
     var scaleY = navMap.height / rect.height;
@@ -632,35 +681,44 @@
     var gy = navMap.height - (e.clientY - rect.top) * scaleY;  // 翻转 y 轴
     var worldX = navMapInfo.origin[0] + gx * navMapInfo.resolution;
     var worldY = navMapInfo.origin[1] + gy * navMapInfo.resolution;
-    navGoal = [worldX, worldY];
-    fetch("/api/nav/set_goal", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ x: worldX, y: worldY })
-    }).then(function (r) { return r.json(); }).then(function (resp) {
-      if (resp.accepted) {
-        navHint.textContent = "目标点已设置，路径规划成功";
-        drawNavMap();
-      } else {
-        navHint.textContent = "路径规划失败：" + (resp.error || "未知错误");
-      }
-    }).catch(function () {
-      navHint.textContent = "路径规划请求失败";
-    });
+    if (navSettingMode === "start") {
+      navStartPoint = [worldX, worldY];
+      navHint.textContent = "初始点已设置，请设置目标点";
+      navSettingMode = null;
+    } else if (navSettingMode === "goal") {
+      navGoalPoint = [worldX, worldY];
+      navHint.textContent = "目标点已设置，可以开始导航";
+      navSettingMode = null;
+    }
+    renderNav();
+    drawNavMap();
   });
 
   navBtn.addEventListener("click", function () {
     if (!navOn) {
-      loadNavMap();
-      fetch("/api/nav/status").then(function (r) { return r.json(); }).then(function (d) {
-        if (d.has_map) {
+      if (!navStartPoint || !navGoalPoint) {
+        navHint.textContent = "请先设置初始点和目标点";
+        return;
+      }
+      fetch("/api/nav/set_goal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          x: navGoalPoint[0],
+          y: navGoalPoint[1],
+          start_x: navStartPoint[0],
+          start_y: navStartPoint[1]
+        })
+      }).then(function (r) { return r.json(); }).then(function (resp) {
+        if (resp.accepted) {
           navOn = true;
           renderNav();
+          navHint.textContent = "导航中，路径长度：" + resp.path.length + " 点";
         } else {
-          navHint.textContent = "请先加载地图";
+          navHint.textContent = "路径规划失败：" + (resp.error || "未知错误");
         }
       }).catch(function () {
-        navHint.textContent = "无法获取导航状态";
+        navHint.textContent = "路径规划请求失败";
       });
     } else {
       fetch("/api/nav/stop", {

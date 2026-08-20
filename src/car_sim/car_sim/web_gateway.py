@@ -837,7 +837,19 @@ class WebGateway(Node):
                 except (TypeError, ValueError):
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid_coordinate"})
                     return
-                ok, result = gateway.nav_set_goal(x, y)
+                # 可选初始点
+                start_x = payload.get("start_x")
+                start_y = payload.get("start_y")
+                if start_x is not None and start_y is not None:
+                    try:
+                        start_x = float(start_x)
+                        start_y = float(start_y)
+                    except (TypeError, ValueError):
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid_start_coordinate"})
+                        return
+                else:
+                    start_x = start_y = None
+                ok, result = gateway.nav_set_goal(x, y, start_x, start_y)
                 if not ok:
                     self._json(HTTPStatus.BAD_GATEWAY, {"error": result})
                     return
@@ -1106,14 +1118,21 @@ class WebGateway(Node):
         simplified.append(path[-1])
         return simplified
 
-    def nav_set_goal(self, goal_x: float, goal_y: float):
-        """设置导航目标点，返回 (是否成功, 路径或错误码)。"""
-        if self.pose is None:
-            return False, "no_pose"
+    def nav_set_goal(self, goal_x: float, goal_y: float, start_x: float = None, start_y: float = None):
+        """设置导航目标点，返回 (是否成功, 路径或错误码)。
+
+        若提供 start_x/start_y，则从该点规划路径；否则从当前位置规划。
+        """
+        if start_x is None or start_y is None:
+            if self.pose is None:
+                return False, "no_pose"
+            start = self.pose[:2]
+        else:
+            start = (start_x, start_y)
         if self.nav_map_data is None:
             return False, "no_map"
         # 规划路径
-        path_grid = self._plan_path(self.pose[:2], (goal_x, goal_y))
+        path_grid = self._plan_path(start, (goal_x, goal_y))
         if path_grid is None:
             return False, "no_path"
         # 转换为 odom 系坐标
