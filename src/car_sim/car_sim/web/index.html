@@ -546,6 +546,7 @@
   var autoCruiseOn = false;
   var navMapData = null;
   var navMapInfo = null;
+  var navInitialPoint = null;
 
   function renderAutoCruise() {
     autoCruiseBtn.textContent = autoCruiseOn ? "■ 停止巡航" : "▶ 自动巡航";
@@ -557,6 +558,7 @@
     fetch("/api/auto_cruise/status").then(function (r) { return r.json(); }).then(function (d) {
       if (d.initial && d.map_info) {
         navStart.textContent = "(" + d.initial[0].toFixed(2) + ", " + d.initial[1].toFixed(2) + ")";
+        navInitialPoint = d.initial;
         navMapInfo = d.map_info;
         navMapContainer.style.display = "block";
         loadNavMapImage();
@@ -584,8 +586,8 @@
     var ctx = navMap.getContext("2d");
     ctx.drawImage(navMapData, 0, 0);
     // 绘制初始点
-    if (navMapInfo && navMapInfo.origin) {
-      var pos = worldToNavMap(navMapInfo.origin[0], navMapInfo.origin[1]);
+    if (navInitialPoint) {
+      var pos = worldToNavMap(navInitialPoint[0], navInitialPoint[1]);
       if (pos) {
         ctx.fillStyle = "#e08080";
         ctx.beginPath();
