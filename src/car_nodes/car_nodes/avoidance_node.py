@@ -331,6 +331,7 @@ class AvoidanceNode(Node):
                 # 前方已较为空旷：立即退出脱困模式，恢复常规导航
                 self.escape_pathing = False
                 self.escape_path = []
+                self.detour_side = 0  # 解除扇区锁定
                 self.get_logger().info(
                     f'前方净空 {fwd_dist:.2f}m，提前退出脱困路径，'
                     f'恢复常规导航')
@@ -344,11 +345,18 @@ class AvoidanceNode(Node):
                 if self.escape_idx >= len(self.escape_path):
                     self.escape_pathing = False
                     self.escape_path = []
+                    self.detour_side = 0  # 解除扇区锁定
                     self.get_logger().info('脱困路径走完，恢复常规避障')
                 else:
                     wx, wy = self.escape_path[self.escape_idx]
                     desired_angle = self._normalize_angle(math.atan2(
                         wy - self.pose[1], wx - self.pose[0]) - self.pose[2])
+                    # 脱困路径行驶时锁定扇区：只关注路径方向上的障碍，
+                    # 避免另一侧障碍干扰导致"能转却不敢转"
+                    if desired_angle > 0.1:
+                        self.detour_side = 1
+                    elif desired_angle < -0.1:
+                        self.detour_side = -1
 
         # 脱困状态优先于一切目标跟随逻辑：倒车/蠕动脱困中车头会甩向
         # 空旷侧，往往偏离目标方向；若先做目标跟随（尤其 |desired|>90°

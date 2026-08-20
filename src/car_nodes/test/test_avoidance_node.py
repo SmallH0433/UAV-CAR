@@ -296,6 +296,8 @@ def _reset_escape_state(node):
     node.recovering = False
     node.escaping = False
     node.operator_active = False
+    node.detour_side = 0
+    node.escape_retrying = False
 
 
 def test_repeated_identical_scan_triggers_escape_path(node):
@@ -528,3 +530,46 @@ def test_escape_active_disables_cruise(node):
     assert cmd.angular.z == 0.0
     node.escape_pathing = False
     node.enable_cruise = False
+
+
+# ---------- 脱困路径扇区锁定测试 ----------
+
+def test_escape_pathing_locks_sector_left(node):
+    # 脱困路径向左：detour_side 应设为 1，只评估左侧扇区
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    node.escape_path = [(0.4, 0.3)]  # 向左前方
+    node.escape_pathing = True
+    node.escape_stop_until = 0.0  # 停车阶段已结束
+    node.obstacles = [FakeObstacle(0.0, 0.5, 0.15)]  # 正前障碍，防止提前退出
+    cmd = _run(node, node.obstacles)
+    assert node.detour_side == 1
+    node.detour_side = 0
+
+
+def test_escape_pathing_locks_sector_right(node):
+    # 脱困路径向右：detour_side 应设为 -1，只评估右侧扇区
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    node.escape_path = [(0.4, -0.3)]  # 向右前方
+    node.escape_pathing = True
+    node.escape_stop_until = 0.0  # 停车阶段已结束
+    node.obstacles = [FakeObstacle(0.0, 0.5, 0.15)]  # 正前障碍，防止提前退出
+    cmd = _run(node, node.obstacles)
+    assert node.detour_side == -1
+    node.detour_side = 0
+
+
+def test_escape_pathing_unlocks_on_exit(node):
+    # 脱困路径走完或提前退出时，escape_pathing 应退出，detour_side 由后续
+    # 常规避障逻辑重新决定
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    node.escape_path = [(0.4, 0.3)]
+    node.escape_pathing = True
+    node.escape_stop_until = 0.0
+    node.escape_idx = 1  # 已走完
+    node.obstacles = [FakeObstacle(0.0, 0.5, 0.15)]  # 正前障碍，防止提前退出
+    cmd = _run(node, node.obstacles)
+    assert node.escape_pathing is False
+    assert node.escape_path == []
