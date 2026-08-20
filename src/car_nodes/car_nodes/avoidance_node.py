@@ -131,9 +131,9 @@ class AvoidanceNode(Node):
         self.declare_parameter('blocked_direction_penalty', 1.0)
         self.declare_parameter('blocked_direction_tolerance', 0.50)
         self.declare_parameter('lateral_response_enable', True)
-        self.declare_parameter('lateral_bias_max', 0.35)
-        self.declare_parameter('lateral_clearance_margin', 0.30)
-        self.declare_parameter('side_obstacle_penalty', 0.40)
+        self.declare_parameter('lateral_bias_max', 0.20)
+        self.declare_parameter('lateral_clearance_margin', 0.50)
+        self.declare_parameter('side_obstacle_penalty', 0.20)
         self.declare_parameter('sector_lock_enable', True)
         self.declare_parameter('loop_detect_tolerance', 0.12)
         self.declare_parameter('escape_stop_time', 1.0)
@@ -717,19 +717,20 @@ class AvoidanceNode(Node):
     def _bias_desired_angle(self, desired_angle):
         """根据侧前方障碍分布把期望方向向空旷侧偏移。
 
-        只在 slow_down_distance 范围内的侧前方（±15° ~ ±90°）障碍参与计算；
+        只在 0.8m 范围内的侧前方（±15° ~ ±90°）障碍参与计算；
         左右净空差超过 lateral_clearance_margin 才触发偏移，最大偏移
         lateral_bias_max。让小车在正前方还没被堵死时就提前向空旷侧转向，
         提升对侧前方/斜前方障碍物的响应能力。
         """
+        response_range = 0.8  # 只响应 0.8m 内的侧前方障碍，避免过于灵敏
         left_clearance = right_clearance = float('inf')
         for o in self.obstacles:
             a = self._normalize_angle(o.angle)
             if 0.26 < a < math.pi / 2.0 and \
-                    o.distance < self.slow_down_distance:
+                    o.distance < response_range:
                 left_clearance = min(left_clearance, o.distance)
             elif -math.pi / 2.0 < a < -0.26 and \
-                    o.distance < self.slow_down_distance:
+                    o.distance < response_range:
                 right_clearance = min(right_clearance, o.distance)
         if left_clearance == float('inf') and right_clearance == float('inf'):
             return desired_angle
@@ -744,7 +745,7 @@ class AvoidanceNode(Node):
             return desired_angle
         # diff > 0：左侧更空，向左偏移（desired_angle 增大）
         bias = self._clamp(
-            diff * 0.25, -self.lateral_bias_max, self.lateral_bias_max)
+            diff * 0.15, -self.lateral_bias_max, self.lateral_bias_max)
         return self._clamp(
             desired_angle + bias, -math.pi / 2.0, math.pi / 2.0)
 
