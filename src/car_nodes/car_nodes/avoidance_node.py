@@ -48,6 +48,9 @@
   escape_waypoint_tolerance (float, 0.15) 路径点到达判定半径 m
   escape_early_exit_distance (float, 0.80) 脱困路径行驶中前方净空
       超过该值立即退出脱困模式，恢复常规导航
+  escape_path_length  (float, 1.50) 脱困路径目标长度 m（直线距离）
+  escape_retry_reverse_s (float, 1.0) 脱困路径无法规划时，先沿原方向
+      后退的时长 s，之后重新尝试规划
 
 绕行策略（阿克曼不能原地自旋，全程保持 |v| > 0 或停车）：
   1. 正常：前方 180° 扇区选代价最低的可通行方向，速度随净空缩放；
@@ -71,11 +74,15 @@
   8. 原地往复检测：每次倒车脱困结束时记录当前雷达签名（前方各扇区净空），
      若与上一次几乎一致（说明退回原处、在原地往复），立即停车
      escape_stop_time，再用当前扫描贪心规划一条局部脱困路径
-     （escape_path_step 折线；点数按当前雷达实际感知范围收缩——
-     最远障碍距离以内、且不超过 escape_path_max_range 硬封顶，
-     未看到的区域不能当作空旷），沿路径行驶中若前方净空超过
+     （escape_path_step 折线；路径终点距当前位置直线距离约
+     escape_path_length，且不超过 escape_path_max_range 硬封顶，
+     未看到的区域不能当作空旷）。若无法规划，先沿原方向后退
+     escape_retry_reverse_s 后重新尝试。沿路径行驶中若前方净空超过
      escape_early_exit_distance 则立即退出、交回常规避障。
-  9. 网页遥控最高优先：/ugv/operator/heartbeat 活跃时立即取消包括
+  9. 脱困状态高优先级：recovering / escaping / escape_pathing /
+     escape_retrying 任一激活时，常规巡航与目标跟随被禁用，直到脱困
+     完全结束或网页遥控接管。
+  10. 网页遥控最高优先：/ugv/operator/heartbeat 活跃时立即取消包括
      自主脱困在内的全部自主状态并停车，底盘输出由 mux 切到遥控链路。
 """
 
@@ -135,6 +142,8 @@ class AvoidanceNode(Node):
         self.declare_parameter('escape_path_max_range', 2.0)
         self.declare_parameter('escape_waypoint_tolerance', 0.15)
         self.declare_parameter('escape_early_exit_distance', 0.80)
+        self.declare_parameter('escape_path_length', 1.50)
+        self.declare_parameter('escape_retry_reverse_s', 1.0)
 
         self.safety_distance = self.get_parameter('safety_distance').value
         self.hard_stop_distance = self.get_parameter('hard_stop_distance').value
@@ -183,6 +192,10 @@ class AvoidanceNode(Node):
             self.get_parameter('escape_waypoint_tolerance').value
         self.escape_early_exit_distance = \
             self.get_parameter('escape_early_exit_distance').value
+        self.escape_path_length = \
+            self.get_parameter('escape_path_length').value
+        self.escape_retry_reverse_s = \
+            self.get_parameter('escape_retry_reverse_s').value
 
         self.obstacles = []
         self.pose = None          # odom 系下 (x, y, yaw)
@@ -205,6 +218,9 @@ class AvoidanceNode(Node):
         self.escape_path = []        # odom 系路径点 [(x, y), ...]
         self.escape_idx = 0
         self.escape_stop_until = 0.0
+        # 脱困路径无法规划时的后退重试状态
+        self.escape_retrying = False
+        self.escape_retry_until = 0.0
         # 网页遥控接管状态（/ugv/operator/heartbeat）
         self.operator_active = False
         self.operator_time = 0.0
@@ -289,6 +305,19 @@ class AvoidanceNode(Node):
             self.pub_cmd.publish(cmd)
             return
 
+        # 脱困路径无法规划时的后退重试：沿原方向后退 escape_retry_reverse_s，
+        # 之后重新尝试规划脱困路径
+        if self.escape_retrying:
+            if now < self.escape_retry_until:
+                cmd.linear.x = -self.reverse_speed
+                cmd.angular.z = 0.0
+                self.pub_cmd.publish(cmd)
+                return
+            self.escape_retrying = False
+            if self._enter_escape_path_mode():
+                self.pub_cmd.publish(cmd)
+                return
+
         # 脱困路径模式（原地往复检测触发）：先停车 escape_stop_time，
         # 再沿规划路径逐个路径点前进（仍走扇区避障），走完交回常规避障
         desired_angle = None
@@ -320,28 +349,6 @@ class AvoidanceNode(Node):
                     wx, wy = self.escape_path[self.escape_idx]
                     desired_angle = self._normalize_angle(math.atan2(
                         wy - self.pose[1], wx - self.pose[0]) - self.pose[2])
-
-        # 期望方向：有目标朝目标，否则巡航（前方）或待命
-        if desired_angle is None:
-            if self.goal is not None and self.pose is not None:
-                dx = self.goal.pose.position.x - self.pose[0]
-                dy = self.goal.pose.position.y - self.pose[1]
-                dist_goal = math.hypot(dx, dy)
-                if dist_goal < 0.2:
-                    # 到达目标
-                    self.goal = None
-                    self.pub_cmd.publish(cmd)
-                    self.get_logger().info('已到达目标点')
-                    return
-                goal_bearing = math.atan2(dy, dx)
-                desired_angle = \
-                    self._normalize_angle(goal_bearing - self.pose[2])
-            elif self.enable_cruise:
-                desired_angle = 0.0
-            else:
-                # 原地待命
-                self.pub_cmd.publish(cmd)
-                return
 
         # 脱困状态优先于一切目标跟随逻辑：倒车/蠕动脱困中车头会甩向
         # 空旷侧，往往偏离目标方向；若先做目标跟随（尤其 |desired|>90°
@@ -393,6 +400,35 @@ class AvoidanceNode(Node):
                 cmd.linear.x = self.creep_speed
                 cmd.angular.z = self._clamp(
                     1.5 * self.escape_angle, -self.max_angular, self.max_angular)
+                self.pub_cmd.publish(cmd)
+                return
+
+        # 期望方向：有目标朝目标，否则巡航（前方）或待命
+        # 脱困状态（recovering / escaping / escape_pathing / escape_retrying）
+        # 激活时禁用常规巡航与目标跟随，直到脱困完全结束或人工介入
+        escape_active = (self.recovering or self.escaping or
+                         self.escape_pathing or self.escape_retrying)
+        if desired_angle is None:
+            if escape_active:
+                self.pub_cmd.publish(cmd)
+                return
+            if self.goal is not None and self.pose is not None:
+                dx = self.goal.pose.position.x - self.pose[0]
+                dy = self.goal.pose.position.y - self.pose[1]
+                dist_goal = math.hypot(dx, dy)
+                if dist_goal < 0.2:
+                    # 到达目标
+                    self.goal = None
+                    self.pub_cmd.publish(cmd)
+                    self.get_logger().info('已到达目标点')
+                    return
+                goal_bearing = math.atan2(dy, dx)
+                desired_angle = \
+                    self._normalize_angle(goal_bearing - self.pose[2])
+            elif self.enable_cruise:
+                desired_angle = 0.0
+            else:
+                # 原地待命
                 self.pub_cmd.publish(cmd)
                 return
 
@@ -534,22 +570,33 @@ class AvoidanceNode(Node):
         return triggered
 
     def _enter_escape_path_mode(self):
-        """停车 escape_stop_time 并生成脱困路径；无路可规划返回 False。"""
+        """停车 escape_stop_time 并生成脱困路径；无法规划时进入后退重试状态。
+
+        路径终点距当前位置直线距离约 escape_path_length（默认 1.5m），
+        按步长折算点数。若当前环境无法规划出可行路径，先沿原方向后退
+        escape_retry_reverse_s，之后重新尝试规划。
+        """
         if self.pose is None:
             return False
-        # 脱困路径不得超出当前雷达感知范围：以当前最远障碍距离为可用
-        # 范围（未看到的区域不能视为空旷），再用 escape_path_max_range
-        # 硬封顶，按步长折算路径点数
+        # 路径长度目标 escape_path_length，按步长折算点数；同时不超过
+        # 当前雷达实际感知范围（未看到的区域不能视为空旷）和硬封顶
         if self.obstacles:
             seen_range = max(o.distance for o in self.obstacles)
         else:
             seen_range = self.escape_path_max_range
-        max_range = min(seen_range, self.escape_path_max_range)
-        points = max(2, min(self.escape_path_points,
-                            int(max_range / self.escape_path_step)))
+        target_length = min(self.escape_path_length, seen_range,
+                            self.escape_path_max_range)
+        points = max(2, int(math.ceil(target_length / self.escape_path_step)))
         path = self._plan_escape_path(points)
         if not path:
-            return False
+            # 无法规划：沿原方向后退 escape_retry_reverse_s 后重新规划
+            now = self.get_clock().now().nanoseconds * 1e-9
+            self.escape_retrying = True
+            self.escape_retry_until = now + self.escape_retry_reverse_s
+            self.get_logger().warn(
+                f'脱困路径无法规划，沿原方向后退 '
+                f'{self.escape_retry_reverse_s:.1f}s 后重新规划')
+            return True
         now = self.get_clock().now().nanoseconds * 1e-9
         self.escape_path = path
         self.escape_idx = 0
@@ -585,7 +632,7 @@ class AvoidanceNode(Node):
         margin = 0.05
         vx, vy, heading = x, y, yaw
         path = []
-        for _ in range(num_points):
+        for i in range(num_points):
             best_score, best_dir = -float('inf'), heading
             fb_clear, fb_dir = -float('inf'), heading  # 全不可行时的兜底
             for k in range(self.num_sectors):
@@ -607,12 +654,14 @@ class AvoidanceNode(Node):
                 if score > best_score:
                     best_score, best_dir = score, d
             if best_score == -float('inf'):
-                best_dir = fb_dir  # 被围死：选"最不差"方向缓慢拱
+                if i == 0:
+                    return None  # 第一步就无法规划
+                break  # 后续点无法规划，返回已有路径
             heading = best_dir
             vx += self.escape_path_step * math.cos(heading)
             vy += self.escape_path_step * math.sin(heading)
             path.append((vx, vy))
-        return path
+        return path if path else None
 
     def _record_blocked_direction(self):
         """把触发脱困前 1s 内的平均行进方向标记为"已碰壁"。

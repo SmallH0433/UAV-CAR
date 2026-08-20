@@ -317,9 +317,10 @@ def test_repeated_identical_scan_triggers_escape_path(node):
     cmd = _run(node, obs)
     assert node.escape_pathing
     assert cmd.linear.x == 0.0 and cmd.angular.z == 0.0  # 停止一切动作
-    # 路径点数按当前雷达范围收缩：最远障碍 1.2m / 步长 0.4m = 3 点
-    expected = max(2, min(node.escape_path_points,
-                          int(1.2 / node.escape_path_step)))
+    # 路径点数按 escape_path_length（默认 1.5m）与当前雷达范围取小后
+    # 除以步长向上取整
+    expected = max(2, int(math.ceil(min(node.escape_path_length, 1.2) /
+                                    node.escape_path_step)))
     assert len(node.escape_path) == expected
     _reset_escape_state(node)
 
@@ -381,19 +382,20 @@ def test_escape_path_early_exit_when_clear(node):
 
 
 def test_escape_path_limited_to_lidar_range(node):
-    # 脱困路线不得超过当前雷达范围：最远障碍 1.0m 时路径只有 2 个点
+    # 脱困路线不得超过当前雷达范围：最远障碍 1.0m 时路径点数按
+    # ceil(1.0 / step) 折算
     _reset_escape_state(node)
     node.pose = (0.0, 0.0, 0.0)
     node.obstacles = [FakeObstacle(0.0, 1.0, 0.15)]
     assert node._enter_escape_path_mode()
     assert len(node.escape_path) == max(
-        2, int(1.0 / node.escape_path_step))
-    # 无障碍时按硬封顶 escape_path_max_range 折算
+        2, int(math.ceil(min(node.escape_path_length, 1.0) /
+                         node.escape_path_step)))
+    # 无障碍时按 escape_path_length 折算
     node.obstacles = []
     assert node._enter_escape_path_mode()
-    expected = max(2, min(node.escape_path_points,
-                          int(node.escape_path_max_range /
-                              node.escape_path_step)))
+    expected = max(2, int(math.ceil(node.escape_path_length /
+                                    node.escape_path_step)))
     assert len(node.escape_path) == expected
     _reset_escape_state(node)
 
@@ -466,3 +468,63 @@ def test_sector_lock_released_when_side_blocked(node):
     ]
     assert node._select_sector(0.0) is None
     node.detour_side = 0
+
+
+# ---------- 脱困路径延长与重试测试 ----------
+
+def test_plan_escape_path_reaches_target_length(node):
+    # 无障碍环境：路径累计长度应接近 escape_path_length（默认 1.5m）
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    node.obstacles = []
+    node.escape_path_length = 1.5
+    node.escape_path_step = 0.4
+    points = max(2, int(math.ceil(node.escape_path_length /
+                                  node.escape_path_step)))
+    path = node._plan_escape_path(points)
+    assert path is not None
+    total = 0.0
+    px, py = 0.0, 0.0
+    for x, y in path:
+        total += math.hypot(x - px, y - py)
+        px, py = x, y
+    assert total >= 1.3  # 至少接近 1.5m
+
+
+def test_plan_escape_path_returns_none_when_blocked(node):
+    # 正前方被大障碍完全封堵：第一步就无法规划，应返回 None
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    # 正前方 0.3m 处放一个半径 0.5m 的大障碍，覆盖整个前方
+    node.obstacles = [FakeObstacle(0.0, 0.3, 0.5)]
+    assert node._plan_escape_path(5) is None
+    node.obstacles = []
+
+
+def test_escape_retrying_backs_up_and_retries(node):
+    # 无法规划时进入后退重试状态，1s 后重新尝试规划
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    node.obstacles = [FakeObstacle(0.0, 0.3, 0.5)]
+    now = node.get_clock().now().nanoseconds * 1e-9
+    node.escape_retry_until = now + 1.0
+    node.escape_retrying = True
+    cmd = _run(node, node.obstacles)
+    assert cmd is not None
+    assert cmd.linear.x < 0.0   # 后退
+    node.escape_retrying = False
+    node.obstacles = []
+
+
+def test_escape_active_disables_cruise(node):
+    # 脱困状态激活时，即使 enable_cruise=True 也不应巡航
+    _reset_escape_state(node)
+    node.escape_pathing = True
+    node.escape_path = [(0.4, 0.0)]
+    node.escape_stop_until = node.get_clock().now().nanoseconds * 1e-9 + 1.0
+    node.enable_cruise = True
+    cmd = _run(node, [])
+    assert cmd.linear.x == 0.0
+    assert cmd.angular.z == 0.0
+    node.escape_pathing = False
+    node.enable_cruise = False
