@@ -555,12 +555,13 @@
 
   function loadNavMap() {
     fetch("/api/auto_cruise/status").then(function (r) { return r.json(); }).then(function (d) {
-      if (d.initial) {
+      if (d.initial && d.map_info) {
         navStart.textContent = "(" + d.initial[0].toFixed(2) + ", " + d.initial[1].toFixed(2) + ")";
+        navMapInfo = d.map_info;
         navMapContainer.style.display = "block";
         loadNavMapImage();
       } else {
-        navHint.textContent = "无法获取初始点";
+        navHint.textContent = "无法获取初始点或地图信息";
       }
     }).catch(function () {
       navHint.textContent = "获取巡航状态失败";
@@ -582,6 +583,26 @@
     if (!navMapData) { return; }
     var ctx = navMap.getContext("2d");
     ctx.drawImage(navMapData, 0, 0);
+    // 绘制初始点
+    if (navMapInfo && navMapInfo.origin) {
+      var pos = worldToNavMap(navMapInfo.origin[0], navMapInfo.origin[1]);
+      if (pos) {
+        ctx.fillStyle = "#e08080";
+        ctx.beginPath();
+        ctx.arc(pos[0], pos[1], 6, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "10px sans-serif";
+        ctx.fillText("初始点", pos[0] - 15, pos[1] - 10);
+      }
+    }
+  }
+
+  function worldToNavMap(x, y) {
+    if (!navMapInfo) { return null; }
+    var gx = (x - navMapInfo.origin[0]) / navMapInfo.resolution;
+    var gy = (y - navMapInfo.origin[1]) / navMapInfo.resolution;
+    return [gx, navMap.height - gy];  // 翻转 y 轴
   }
 
   autoCruiseBtn.addEventListener("click", function () {

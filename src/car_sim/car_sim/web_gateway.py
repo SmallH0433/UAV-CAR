@@ -1224,6 +1224,10 @@ class WebGateway(Node):
         self.auto_cruise_active = True
         self.auto_cruise_started = time.monotonic()
         self.auto_cruise_returning = False
+        # 规划绕地图一圈的路径
+        if not self._plan_cruise_path():
+            self.auto_cruise_active = False
+            return False, "no_cruise_path"
         self.get_logger().info('自动巡航已开始')
         return True, "started"
 
@@ -1232,6 +1236,61 @@ class WebGateway(Node):
         self.auto_cruise_active = False
         self.nav_stop()
         self.get_logger().info('自动巡航已停止')
+
+    def _plan_cruise_path(self):
+        """规划绕地图可行走区域一圈的路径。"""
+        if self.nav_map_data is None:
+            return False
+        import numpy as np
+        # 找到所有可通行栅格
+        traversable = np.where(self.nav_map_data == 0)
+        if len(traversable[0]) == 0:
+            return False
+        # 找到可通行区域的边界
+        min_gx, max_gx = np.min(traversable[1]), np.max(traversable[1])
+        min_gy, max_gy = np.min(traversable[0]), np.max(traversable[0])
+        # 规划一条绕边界的路径：从初始点出发，沿边界顺时针走一圈
+        path = []
+        # 从初始点开始
+        start_g = self._world_to_grid(*self.auto_cruise_initial)
+        if start_g is None:
+            return False
+        # 沿边界顺时针走一圈
+        # 上边：从左到右
+        for gx in range(min_gx, max_gx + 1):
+            if self._is_traversable(gx, min_gy):
+                path.append((gx, min_gy))
+        # 右边：从上到下
+        for gy in range(min_gy + 1, max_gy + 1):
+            if self._is_traversable(max_gx, gy):
+                path.append((max_gx, gy))
+        # 下边：从右到左
+        for gx in range(max_gx - 1, min_gx - 1, -1):
+            if self._is_traversable(gx, max_gy):
+                path.append((gx, max_gy))
+        # 左边：从下到上
+        for gy in range(max_gy - 1, min_gy, -1):
+            if self._is_traversable(min_gx, gy):
+                path.append((min_gx, gy))
+        if not path:
+            return False
+        # 转换为 odom 系坐标
+        path_world = [self._grid_to_world(gx, gy) for gx, gy in path]
+        path_world = [p for p in path_world if p is not None]
+        if not path_world:
+            return False
+        # 简化路径
+        path_world = self._smooth_path(path_world)
+        with self.lock:
+            self.nav_path = path_world
+            self.nav_goal = self.auto_cruise_initial
+            self.nav_active = True
+        self.get_logger().info(
+            f'自动巡航路径已规划：{len(path_world)} 点')
+        # 发布第一个目标点给避障节点
+        if path_world:
+            self._publish_nav_goal(path_world[0])
+        return True
 
     def _find_initial_point(self):
         """在地图上找到可行走区域的中心作为初始点。"""
@@ -1256,9 +1315,18 @@ class WebGateway(Node):
 
     def auto_cruise_snapshot(self):
         """返回自动巡航状态。"""
+        # 如果初始点未设置，尝试查找
+        if self.auto_cruise_initial is None and self.nav_map_data is not None:
+            self._find_initial_point()
         return {
             "active": self.auto_cruise_active,
-            "initial": self.auto_cruise_initial if hasattr(self, 'auto_cruise_initial') else None,
+            "initial": self.auto_cruise_initial,
+            "map_info": {
+                "width": self.nav_map_data.shape[1] if self.nav_map_data is not None else 0,
+                "height": self.nav_map_data.shape[0] if self.nav_map_data is not None else 0,
+                "resolution": self.nav_map_resolution,
+                "origin": self.nav_map_origin,
+            } if self.nav_map_data is not None else None,
         }
 
     # ---------------- snapshots ----------------
