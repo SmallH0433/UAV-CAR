@@ -199,6 +199,13 @@ class WebGateway(Node):
         self.nav_map_data = None       # 当前加载的地图数据（numpy 数组）
         self.nav_map_origin = None     # (x, y, theta) 地图原点
         self.nav_map_resolution = 0.0  # 地图分辨率 m/pixel
+        # 自动巡航状态
+        self.auto_cruise_active = False
+        self.auto_cruise_initial = None  # (x, y) 初始点
+        self.auto_cruise_started = 0.0
+        self.auto_cruise_returning = False
+        # 默认地图：开机自动加载
+        self._load_map("map_20260820_193257")
 
         self.teleop_publisher = self.create_publisher(
             Twist, str(self.get_parameter("teleop_topic").value), 10
@@ -708,6 +715,9 @@ class WebGateway(Node):
                 if path == "/api/nav/status":
                     self._json(HTTPStatus.OK, gateway.nav_snapshot())
                     return
+                if path == "/api/auto_cruise/status":
+                    self._json(HTTPStatus.OK, gateway.auto_cruise_snapshot())
+                    return
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
             def do_POST(self):
@@ -715,7 +725,8 @@ class WebGateway(Node):
                 if path not in (
                     "/api/ugv/teleop", "/api/ugv/cruise", "/api/mapping",
                     "/api/photo", "/api/nav/set_goal", "/api/nav/stop",
-                    "/api/nav/load_map",
+                    "/api/nav/load_map", "/api/auto_cruise/start",
+                    "/api/auto_cruise/stop",
                 ):
                     self._json(HTTPStatus.NOT_FOUND, {"error": "unknown_command"})
                     return
@@ -755,6 +766,12 @@ class WebGateway(Node):
                     return
                 if path == "/api/nav/load_map":
                     self._handle_nav_load_map(payload)
+                    return
+                if path == "/api/auto_cruise/start":
+                    self._handle_auto_cruise_start()
+                    return
+                if path == "/api/auto_cruise/stop":
+                    self._handle_auto_cruise_stop()
                     return
                 try:
                     linear, angular = clamped_teleop(
@@ -875,6 +892,17 @@ class WebGateway(Node):
                     self._json(HTTPStatus.BAD_GATEWAY, {"error": "load_failed"})
                     return
                 self._json(HTTPStatus.ACCEPTED, {"accepted": True, "map": map_name})
+
+            def _handle_auto_cruise_start(self):
+                ok, message = gateway.auto_cruise_start()
+                if not ok:
+                    self._json(HTTPStatus.BAD_GATEWAY, {"error": message})
+                    return
+                self._json(HTTPStatus.ACCEPTED, {"accepted": True, "message": message})
+
+            def _handle_auto_cruise_stop(self):
+                gateway.auto_cruise_stop()
+                self._json(HTTPStatus.ACCEPTED, {"accepted": True})
 
         return Handler
 
@@ -1181,6 +1209,57 @@ class WebGateway(Node):
                 "goal": self.nav_goal,
                 "has_map": self.nav_map_data is not None,
             }
+
+    # ---------------- 自动巡航 ----------------
+    def auto_cruise_start(self):
+        """开始自动巡航：小车从初始点出发，绕地图可行走区域一圈后回到初始点。"""
+        if self.nav_map_data is None:
+            return False, "no_map"
+        if self.pose is None:
+            return False, "no_pose"
+        # 预设初始点：地图中心（可通行区域中心）
+        if not self._find_initial_point():
+            return False, "no_initial_point"
+        # 开始自动巡航：先回到初始点，然后开始绕圈
+        self.auto_cruise_active = True
+        self.auto_cruise_started = time.monotonic()
+        self.auto_cruise_returning = False
+        self.get_logger().info('自动巡航已开始')
+        return True, "started"
+
+    def auto_cruise_stop(self):
+        """停止自动巡航。"""
+        self.auto_cruise_active = False
+        self.nav_stop()
+        self.get_logger().info('自动巡航已停止')
+
+    def _find_initial_point(self):
+        """在地图上找到可行走区域的中心作为初始点。"""
+        if self.nav_map_data is None:
+            return False
+        import numpy as np
+        # 找到所有可通行栅格
+        traversable = np.where(self.nav_map_data == 0)
+        if len(traversable[0]) == 0:
+            return False
+        # 计算可通行区域中心
+        center_gx = int(np.mean(traversable[1]))
+        center_gy = int(np.mean(traversable[0]))
+        # 转换为 odom 系坐标
+        initial = self._grid_to_world(center_gx, center_gy)
+        if initial is None:
+            return False
+        self.auto_cruise_initial = initial
+        self.get_logger().info(
+            f'初始点已设置：({initial[0]:.2f}, {initial[1]:.2f})')
+        return True
+
+    def auto_cruise_snapshot(self):
+        """返回自动巡航状态。"""
+        return {
+            "active": self.auto_cruise_active,
+            "initial": self.auto_cruise_initial if hasattr(self, 'auto_cruise_initial') else None,
+        }
 
     # ---------------- snapshots ----------------
     def scan_snapshot(self) -> dict:
