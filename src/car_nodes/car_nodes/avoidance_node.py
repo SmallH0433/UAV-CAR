@@ -68,8 +68,9 @@
   6. 侧前方提前响应：当某一侧侧前方净空明显小于另一侧时，期望方向
      自动向空旷侧偏移（最大 lateral_bias_max），避免到正前方被堵才急转，
      提升对正侧方/斜前方障碍物的响应能力。
-  7. 绕行扇区锁定：选定绕行侧后只评估该侧扇区，只关注转向路线上的
-     障碍，避免另一侧障碍干扰导致"能转却不敢转"；该侧全堵时自动
+  7. 绕行扇区锁定：选定绕行侧后只评估该侧扇区（A 区 15°~90° 或
+     B 区 -90°~-15°），正前方 C 区（±15°）不评估；只关注转向路线上
+     的障碍，避免另一侧障碍干扰导致"能转却不敢转"；该侧全堵时自动
      解除锁定重新全向评估。
   8. 原地往复检测：每次倒车脱困结束时记录当前雷达签名（前方各扇区净空），
      若与上一次几乎一致（说明退回原处、在原地往复），立即停车
@@ -849,13 +850,19 @@ class AvoidanceNode(Node):
         best_cost = float('inf')
         # 绕行状态下只评估绕行方向一侧的扇区：倒车脱困/绕行时只关注
         # 当前转向路线上的障碍，避免另一侧障碍干扰导致"能转却不敢转"
+        # A 区（左侧 15°~90°）/ B 区（右侧 -90°~-15°）/ C 区（正前 ±15°）
+        # 左/右转向时只识别对应侧扇区，正前方 C 区不评估
         sector_range = range(self.num_sectors)
         if self.sector_lock_enable and self.detour_side != 0:
-            half = self.num_sectors // 2
-            if self.detour_side > 0:
-                sector_range = range(half, self.num_sectors)
-            else:
-                sector_range = range(0, half)
+            lock_margin = math.radians(15.0)
+            sector_range = []
+            for k in range(self.num_sectors):
+                sector_angle = -math.pi / 2.0 + \
+                    (k + 0.5) * math.pi / self.num_sectors
+                if self.detour_side > 0 and sector_angle >= lock_margin:
+                    sector_range.append(k)
+                elif self.detour_side < 0 and sector_angle <= -lock_margin:
+                    sector_range.append(k)
         for k in sector_range:
             # 扇区中心角：-90° ~ +90°
             sector_angle = -math.pi / 2.0 + \
