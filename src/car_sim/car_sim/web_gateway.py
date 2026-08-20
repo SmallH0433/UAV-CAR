@@ -30,11 +30,13 @@ import signal
 import subprocess
 import threading
 import time
+from collections import deque
 from datetime import datetime
 from typing import Optional, Tuple
 from urllib.parse import urlparse
 
-from geometry_msgs.msg import Twist
+import yaml
+from geometry_msgs.msg import Twist, PoseStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from rcl_interfaces.srv import GetParameters, SetParameters
@@ -190,6 +192,13 @@ class WebGateway(Node):
         self.mapping_active = False
         self.mapping_started = 0.0
         self.mapping_procs = []
+        # 自主导航状态
+        self.nav_active = False
+        self.nav_path = []             # [(x, y), ...] odom 系路径点
+        self.nav_goal = None           # (x, y) 目标点
+        self.nav_map_data = None       # 当前加载的地图数据（numpy 数组）
+        self.nav_map_origin = None     # (x, y, theta) 地图原点
+        self.nav_map_resolution = 0.0  # 地图分辨率 m/pixel
 
         self.teleop_publisher = self.create_publisher(
             Twist, str(self.get_parameter("teleop_topic").value), 10
@@ -226,6 +235,17 @@ class WebGateway(Node):
             str(self.get_parameter("fix_topic").value),
             self._on_fix,
             qos_profile_sensor_data,
+        )
+        # 导航路径点到达通知：avoidance_node 到达当前目标点后发布
+        self.create_subscription(
+            Bool,
+            "/nav/goal_reached",
+            self._on_nav_goal_reached,
+            10,
+        )
+        # 发布目标点给避障节点
+        self.nav_goal_publisher = self.create_publisher(
+            PoseStamped, "/goal_pose", 10
         )
         # SLAM 地图（slam_toolbox 以 transient_local 发布 /map，订阅需匹配才能
         # 立即收到最近一次地图；未启动 SLAM 时 /api/map.png 返回 503）
@@ -369,6 +389,31 @@ class WebGateway(Node):
             }
             self.map_time = time.monotonic()
             self.topic_times["map"] = self.map_time
+
+    def _on_nav_goal_reached(self, message: Bool) -> None:
+        """避障节点到达当前目标点：发布下一个路径点或结束导航。"""
+        if not message.data:
+            return
+        with self.lock:
+            if not self.nav_active or not self.nav_path:
+                return
+            self.nav_path.pop(0)  # 移除已到达的路径点
+            if not self.nav_path:
+                # 所有路径点已到达，导航完成
+                self.nav_active = False
+                self.get_logger().info('自主导航完成')
+                return
+            next_goal = self.nav_path[0]
+        # 发布下一个目标点给避障节点
+        msg = PoseStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "odom"
+        msg.pose.position.x = next_goal[0]
+        msg.pose.position.y = next_goal[1]
+        msg.pose.orientation.w = 1.0
+        self.nav_goal_publisher.publish(msg)
+        self.get_logger().info(
+            f'发布下一个导航目标点：({next_goal[0]:.2f}, {next_goal[1]:.2f})')
 
     def _on_image(self, message: Image, rear: bool = False) -> None:
         now = time.monotonic()
@@ -660,13 +705,17 @@ class WebGateway(Node):
                 if path == "/api/photo/download":
                     gateway._serve_photo_download(self)
                     return
+                if path == "/api/nav/status":
+                    self._json(HTTPStatus.OK, gateway.nav_snapshot())
+                    return
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
             def do_POST(self):
                 path = urlparse(self.path).path
                 if path not in (
                     "/api/ugv/teleop", "/api/ugv/cruise", "/api/mapping",
-                    "/api/photo",
+                    "/api/photo", "/api/nav/set_goal", "/api/nav/stop",
+                    "/api/nav/load_map",
                 ):
                     self._json(HTTPStatus.NOT_FOUND, {"error": "unknown_command"})
                     return
@@ -697,6 +746,15 @@ class WebGateway(Node):
                     return
                 if path == "/api/photo":
                     self._handle_photo()
+                    return
+                if path == "/api/nav/set_goal":
+                    self._handle_nav_set_goal(payload)
+                    return
+                if path == "/api/nav/stop":
+                    self._handle_nav_stop()
+                    return
+                if path == "/api/nav/load_map":
+                    self._handle_nav_load_map(payload)
                     return
                 try:
                     linear, angular = clamped_teleop(
@@ -763,6 +821,48 @@ class WebGateway(Node):
                     return
                 self._json(
                     HTTPStatus.ACCEPTED, {"accepted": True, "path": result})
+
+            def _handle_nav_set_goal(self, payload: dict):
+                if not isinstance(payload, dict):
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "json_object_required"})
+                    return
+                x = payload.get("x")
+                y = payload.get("y")
+                if x is None or y is None:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "x_y_required"})
+                    return
+                try:
+                    x = float(x)
+                    y = float(y)
+                except (TypeError, ValueError):
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid_coordinate"})
+                    return
+                ok, result = gateway.nav_set_goal(x, y)
+                if not ok:
+                    self._json(HTTPStatus.BAD_GATEWAY, {"error": result})
+                    return
+                self._json(
+                    HTTPStatus.ACCEPTED,
+                    {"accepted": True, "path": result, "goal": [x, y]},
+                )
+
+            def _handle_nav_stop(self):
+                gateway.nav_stop()
+                self._json(HTTPStatus.ACCEPTED, {"accepted": True})
+
+            def _handle_nav_load_map(self, payload: dict):
+                if not isinstance(payload, dict):
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "json_object_required"})
+                    return
+                map_name = payload.get("name")
+                if not map_name:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "name_required"})
+                    return
+                ok = gateway._load_map(str(map_name))
+                if not ok:
+                    self._json(HTTPStatus.BAD_GATEWAY, {"error": "load_failed"})
+                    return
+                self._json(HTTPStatus.ACCEPTED, {"accepted": True, "map": map_name})
 
         return Handler
 
@@ -893,6 +993,175 @@ class WebGateway(Node):
             handler.wfile.write(image)
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             pass
+
+    # ---------------- 自主导航 ----------------
+    def _load_map(self, map_name: str):
+        """加载 ~/maps/<name>.pgm 和 .yaml，返回是否成功。"""
+        if not map_name or not all(c.isalnum() or c in "_-" for c in map_name):
+            return False
+        pgm_path = os.path.join(self._MAPS_DIR, map_name + ".pgm")
+        yaml_path = os.path.join(self._MAPS_DIR, map_name + ".yaml")
+        if not os.path.isfile(pgm_path) or not os.path.isfile(yaml_path):
+            return False
+        if cv2 is None:
+            return False
+        import numpy as np
+        import yaml
+        try:
+            with open(yaml_path, "r") as f:
+                meta = yaml.safe_load(f)
+            img = cv2.imread(pgm_path, cv2.IMREAD_GRAYSCALE)
+            if img is None:
+                return False
+            # pgm：0=占据 254=空闲 205=未知；翻转回地图坐标系
+            img = cv2.flip(img, 0)
+            # 转换为占用概率：0=空闲 100=占据 -1=未知
+            data = np.full(img.shape, -1, dtype=np.int8)
+            data[img == 254] = 0    # 空闲
+            data[img == 0] = 100    # 占据
+            data[img == 205] = -1   # 未知
+            self.nav_map_data = data
+            self.nav_map_resolution = float(meta.get("resolution", 0.05))
+            origin = meta.get("origin", [0.0, 0.0, 0.0])
+            self.nav_map_origin = (float(origin[0]), float(origin[1]))
+            self.get_logger().info(
+                f'地图 {map_name} 已加载：{data.shape[1]}x{data.shape[0]}，'
+                f'分辨率 {self.nav_map_resolution:.3f}m')
+            return True
+        except Exception as e:
+            self.get_logger().error(f'加载地图失败：{e}')
+            return False
+
+    def _world_to_grid(self, x: float, y: float):
+        """odom 系坐标 → 地图栅格坐标。"""
+        if self.nav_map_data is None or self.nav_map_origin is None:
+            return None
+        gx = int((x - self.nav_map_origin[0]) / self.nav_map_resolution)
+        gy = int((y - self.nav_map_origin[1]) / self.nav_map_resolution)
+        if 0 <= gx < self.nav_map_data.shape[1] and \
+                0 <= gy < self.nav_map_data.shape[0]:
+            return (gx, gy)
+        return None
+
+    def _grid_to_world(self, gx: int, gy: int):
+        """地图栅格坐标 → odom 系坐标。"""
+        if self.nav_map_data is None or self.nav_map_origin is None:
+            return None
+        x = self.nav_map_origin[0] + (gx + 0.5) * self.nav_map_resolution
+        y = self.nav_map_origin[1] + (gy + 0.5) * self.nav_map_resolution
+        return (x, y)
+
+    def _is_traversable(self, gx: int, gy: int) -> bool:
+        """栅格是否可通行：空闲且不在地图边界外。"""
+        if self.nav_map_data is None:
+            return False
+        if gx < 0 or gy < 0 or gx >= self.nav_map_data.shape[1] or \
+                gy >= self.nav_map_data.shape[0]:
+            return False
+        return self.nav_map_data[gy, gx] == 0
+
+    def _plan_path(self, start, goal):
+        """BFS 在地图上规划从 start 到 goal 的路径（栅格坐标）。
+
+        返回栅格坐标路径列表，无法规划返回 None。
+        """
+        if self.nav_map_data is None:
+            return None
+        start_g = self._world_to_grid(*start)
+        goal_g = self._world_to_grid(*goal)
+        if start_g is None or goal_g is None:
+            return None
+        if not self._is_traversable(*start_g) or \
+                not self._is_traversable(*goal_g):
+            return None
+        visited = {start_g}
+        queue = deque([(start_g, [start_g])])
+        while queue:
+            (gx, gy), path = queue.popleft()
+            if (gx, gy) == goal_g:
+                return path
+            for dx, dy in ((0, 1), (1, 0), (0, -1), (-1, 0),
+                           (1, 1), (1, -1), (-1, 1), (-1, -1)):
+                nx, ny = gx + dx, gy + dy
+                if (nx, ny) in visited or not self._is_traversable(nx, ny):
+                    continue
+                visited.add((nx, ny))
+                queue.append(((nx, ny), path + [(nx, ny)]))
+        return None
+
+    def _smooth_path(self, path):
+        """简化路径：移除共线点，只保留拐点。"""
+        if len(path) <= 2:
+            return path
+        simplified = [path[0]]
+        for i in range(1, len(path) - 1):
+            prev = path[i - 1]
+            curr = path[i]
+            next_pt = path[i + 1]
+            # 检查是否共线
+            dx1, dy1 = curr[0] - prev[0], curr[1] - prev[1]
+            dx2, dy2 = next_pt[0] - curr[0], next_pt[1] - curr[1]
+            if dx1 * dy2 != dy1 * dx2:  # 不共线
+                simplified.append(curr)
+        simplified.append(path[-1])
+        return simplified
+
+    def nav_set_goal(self, goal_x: float, goal_y: float):
+        """设置导航目标点，返回 (是否成功, 路径或错误码)。"""
+        if self.pose is None:
+            return False, "no_pose"
+        if self.nav_map_data is None:
+            return False, "no_map"
+        # 规划路径
+        path_grid = self._plan_path(self.pose[:2], (goal_x, goal_y))
+        if path_grid is None:
+            return False, "no_path"
+        # 转换为 odom 系坐标
+        path_world = [self._grid_to_world(gx, gy) for gx, gy in path_grid]
+        path_world = [p for p in path_world if p is not None]
+        if not path_world:
+            return False, "path_conversion_failed"
+        # 简化路径
+        path_world = self._smooth_path(path_world)
+        with self.lock:
+            self.nav_path = path_world
+            self.nav_goal = (goal_x, goal_y)
+            self.nav_active = True
+        self.get_logger().info(
+            f'导航路径已规划：{len(path_world)} 点，终点 ({goal_x:.2f}, '
+            f'{goal_y:.2f})')
+        # 发布第一个目标点给避障节点
+        if path_world:
+            self._publish_nav_goal(path_world[0])
+        return True, path_world
+
+    def _publish_nav_goal(self, goal):
+        """发布导航目标点给避障节点。"""
+        msg = PoseStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "odom"
+        msg.pose.position.x = goal[0]
+        msg.pose.position.y = goal[1]
+        msg.pose.orientation.w = 1.0
+        self.nav_goal_publisher.publish(msg)
+
+    def nav_stop(self):
+        """停止自主导航。"""
+        with self.lock:
+            self.nav_active = False
+            self.nav_path = []
+            self.nav_goal = None
+        self.get_logger().info('自主导航已停止')
+
+    def nav_snapshot(self):
+        """返回当前导航状态。"""
+        with self.lock:
+            return {
+                "active": self.nav_active,
+                "path": self.nav_path,
+                "goal": self.nav_goal,
+                "has_map": self.nav_map_data is not None,
+            }
 
     # ---------------- snapshots ----------------
     def scan_snapshot(self) -> dict:

@@ -201,6 +201,10 @@ class AvoidanceNode(Node):
         self.obstacles = []
         self.pose = None          # odom 系下 (x, y, yaw)
         self.goal = None          # odom 系下 PoseStamped
+        # 自主导航路径点序列
+        self.nav_path = []        # [(x, y), ...] odom 系路径点
+        self.nav_path_idx = 0
+        self.nav_active = False
         # 绕行状态
         self.recovering = False   # 倒车脱困中
         self.recover_start = 0.0
@@ -234,6 +238,8 @@ class AvoidanceNode(Node):
         self.create_subscription(
             Bool, '/ugv/operator/heartbeat', self.operator_cb, 10)
         self.pub_cmd = self.create_publisher(Twist, '/cmd_vel', 10)
+        # 导航路径点到达通知：web_gateway 订阅后发布下一个目标点
+        self.pub_goal_reached = self.create_publisher(Bool, '/nav/goal_reached', 10)
         self.create_service(SetGoal, '/avoidance/set_goal', self.set_goal_cb)
         # enable_cruise 支持运行时动态修改（网页巡航开关 / ros2 param set）
         self.add_on_set_parameters_callback(self.on_set_params)
@@ -421,7 +427,28 @@ class AvoidanceNode(Node):
             if escape_active:
                 self.pub_cmd.publish(cmd)
                 return
-            if self.goal is not None and self.pose is not None:
+            # 自主导航路径点跟踪：优先于普通目标点
+            if self.nav_active and self.nav_path and self.pose is not None:
+                # 到达当前路径点，切换到下一个
+                while self.nav_path_idx < len(self.nav_path):
+                    wx, wy = self.nav_path[self.nav_path_idx]
+                    dist = math.hypot(wx - self.pose[0], wy - self.pose[1])
+                    if dist > 0.15:  # 路径点到达判定半径
+                        break
+                    self.nav_path_idx += 1
+                if self.nav_path_idx >= len(self.nav_path):
+                    # 所有路径点已到达，导航完成
+                    self.nav_active = False
+                    self.nav_path = []
+                    self.nav_path_idx = 0
+                    self.pub_cmd.publish(cmd)
+                    self.get_logger().info('自主导航完成')
+                    return
+                wx, wy = self.nav_path[self.nav_path_idx]
+                goal_bearing = math.atan2(wy - self.pose[1], wx - self.pose[0])
+                desired_angle = \
+                    self._normalize_angle(goal_bearing - self.pose[2])
+            elif self.goal is not None and self.pose is not None:
                 dx = self.goal.pose.position.x - self.pose[0]
                 dy = self.goal.pose.position.y - self.pose[1]
                 dist_goal = math.hypot(dx, dy)
@@ -430,6 +457,10 @@ class AvoidanceNode(Node):
                     self.goal = None
                     self.pub_cmd.publish(cmd)
                     self.get_logger().info('已到达目标点')
+                    # 通知 web_gateway 发布下一个路径点
+                    msg = Bool()
+                    msg.data = True
+                    self.pub_goal_reached.publish(msg)
                     return
                 goal_bearing = math.atan2(dy, dx)
                 desired_angle = \

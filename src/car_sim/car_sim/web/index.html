@@ -163,6 +163,19 @@
         <select id="savedMaps"></select>
       </div>
     </div>
+
+    <div class="card">
+      <h2>自主导航</h2>
+      <button id="navBtn" class="off" title="自主导航">▶ 开始导航</button>
+      <div class="hint" style="margin-top:6px">在地图上点击设置目标点，小车将沿规划路径自主导航（结合激光雷达实时避障）</div>
+      <div id="navMapContainer" style="position:relative; margin-top:10px; display:none;">
+        <canvas id="navMap" class="media" width="320" height="320" style="cursor:crosshair;"></canvas>
+        <div class="cam-label" id="navHint">点击地图设置目标点</div>
+      </div>
+      <div class="row" style="margin-top:8px"><span>导航状态</span>
+        <span id="navStatus">未启动</span>
+      </div>
+    </div>
   </div>
 
 <script>
@@ -519,6 +532,152 @@
       photoHint.textContent = "点击拍照下载当前画面到本地";
     }, 2000);
   });
+
+  // ---------- 自主导航 ----------
+  var navBtn = document.getElementById("navBtn");
+  var navStatus = document.getElementById("navStatus");
+  var navMapContainer = document.getElementById("navMapContainer");
+  var navMap = document.getElementById("navMap");
+  var navHint = document.getElementById("navHint");
+  var navOn = false;
+  var navMapData = null;
+  var navMapInfo = null;
+  var navCurrentPose = null;
+
+  function renderNav() {
+    navBtn.textContent = navOn ? "■ 停止导航" : "▶ 开始导航";
+    navBtn.className = navOn ? "on" : "off";
+    navStatus.textContent = navOn ? "导航中" : "未启动";
+  }
+
+  function loadNavMap() {
+    fetch("/api/maps").then(function (r) { return r.json(); }).then(function (d) {
+      if (d.maps && d.maps.length > 0) {
+        var latestMap = d.maps[0];
+        fetch("/api/nav/load_map", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: latestMap })
+        }).then(function (r) { return r.json(); }).then(function (resp) {
+          if (resp.accepted) {
+            navHint.textContent = "地图已加载：" + latestMap + "，点击设置目标点";
+            navMapContainer.style.display = "block";
+            loadNavMapImage(latestMap);
+          } else {
+            navHint.textContent = "地图加载失败：" + (resp.error || "未知错误");
+          }
+        }).catch(function () {
+          navHint.textContent = "地图加载请求失败";
+        });
+      } else {
+        navHint.textContent = "暂无已保存地图，请先建图";
+      }
+    }).catch(function () {
+      navHint.textContent = "获取地图列表失败";
+    });
+  }
+
+  function loadNavMapImage(mapName) {
+    var img = new Image();
+    img.onload = function () {
+      navMap.width = img.width;
+      navMap.height = img.height;
+      navMapData = img;
+      drawNavMap();
+    };
+    img.src = "/api/maps/" + encodeURIComponent(mapName) + ".png";
+  }
+
+  function drawNavMap() {
+    if (!navMapData) { return; }
+    var ctx = navMap.getContext("2d");
+    ctx.drawImage(navMapData, 0, 0);
+    // 绘制当前位置
+    if (navCurrentPose) {
+      var pos = worldToNavMap(navCurrentPose[0], navCurrentPose[1]);
+      if (pos) {
+        ctx.fillStyle = "#4a7dd4";
+        ctx.beginPath();
+        ctx.arc(pos[0], pos[1], 5, 0, 2 * Math.PI);
+        ctx.fill();
+      }
+    }
+    // 绘制目标点
+    if (navGoal) {
+      var goalPos = worldToNavMap(navGoal[0], navGoal[1]);
+      if (goalPos) {
+        ctx.fillStyle = "#e08080";
+        ctx.beginPath();
+        ctx.arc(goalPos[0], goalPos[1], 5, 0, 2 * Math.PI);
+        ctx.fill();
+      }
+    }
+  }
+
+  function worldToNavMap(x, y) {
+    if (!navMapInfo) { return null; }
+    var gx = (x - navMapInfo.origin[0]) / navMapInfo.resolution;
+    var gy = (y - navMapInfo.origin[1]) / navMapInfo.resolution;
+    return [gx, navMap.height - gy];  // 翻转 y 轴
+  }
+
+  var navGoal = null;
+
+  navMap.addEventListener("click", function (e) {
+    if (!navOn || !navMapInfo) { return; }
+    var rect = navMap.getBoundingClientRect();
+    var scaleX = navMap.width / rect.width;
+    var scaleY = navMap.height / rect.height;
+    var gx = (e.clientX - rect.left) * scaleX;
+    var gy = navMap.height - (e.clientY - rect.top) * scaleY;  // 翻转 y 轴
+    var worldX = navMapInfo.origin[0] + gx * navMapInfo.resolution;
+    var worldY = navMapInfo.origin[1] + gy * navMapInfo.resolution;
+    navGoal = [worldX, worldY];
+    fetch("/api/nav/set_goal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ x: worldX, y: worldY })
+    }).then(function (r) { return r.json(); }).then(function (resp) {
+      if (resp.accepted) {
+        navHint.textContent = "目标点已设置，路径规划成功";
+        drawNavMap();
+      } else {
+        navHint.textContent = "路径规划失败：" + (resp.error || "未知错误");
+      }
+    }).catch(function () {
+      navHint.textContent = "路径规划请求失败";
+    });
+  });
+
+  navBtn.addEventListener("click", function () {
+    if (!navOn) {
+      loadNavMap();
+      fetch("/api/nav/status").then(function (r) { return r.json(); }).then(function (d) {
+        if (d.has_map) {
+          navOn = true;
+          renderNav();
+        } else {
+          navHint.textContent = "请先加载地图";
+        }
+      }).catch(function () {
+        navHint.textContent = "无法获取导航状态";
+      });
+    } else {
+      fetch("/api/nav/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}"
+      }).then(function (r) { return r.json(); }).then(function (resp) {
+        if (resp.accepted) {
+          navOn = false;
+          renderNav();
+          navHint.textContent = "导航已停止";
+        }
+      }).catch(function () { /* 状态轮询会纠正显示 */ });
+    }
+  });
+
+  renderNav();
 })();
 </script>
 </body>
