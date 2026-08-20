@@ -10,7 +10,8 @@ default and exposes:
   GET  /api/scan.json    latest /scan downsampled to polar points for the lidar canvas
   POST /api/ugv/teleop   {"linear": m/s, "angular": rad/s} operator command
   POST /api/mapping      {"enable": bool, "auto_cruise": bool} 一键建图启停
-  POST /api/photo        保存当前前摄帧到 ~/photos/photo_<时间戳>.jpg
+  POST /api/photo        保存当前前摄帧到 ~/photos/photo_<时间戳>.jpg（已保留）
+  GET  /api/photo/download  最新前摄帧 JPEG，带 Content-Disposition 供浏览器直接下载
   GET  /api/camera.jpg   latest gz-bridge front camera frame as JPEG (503 if absent)
   GET  /api/camera_rear.jpg  latest gz-bridge rear camera frame as JPEG (503 if absent)
 
@@ -656,6 +657,9 @@ class WebGateway(Node):
                 if path == "/api/camera_rear.jpg":
                     gateway._serve_camera(self, rear=True)
                     return
+                if path == "/api/photo/download":
+                    gateway._serve_photo_download(self)
+                    return
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
             def do_POST(self):
@@ -856,6 +860,36 @@ class WebGateway(Node):
             return
         try:
             handler._headers(HTTPStatus.OK, "image/jpeg", len(image))
+            handler.wfile.write(image)
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            pass
+
+    def _serve_photo_download(self, handler) -> None:
+        """把最新前摄帧作为可下载文件返回给浏览器客户端。"""
+        if not _CAMERA_AVAILABLE:
+            handler._json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {"error": "camera_backend_unavailable"},
+            )
+            return
+        with self.lock:
+            image = self.image_jpeg
+        if image is None:
+            handler._json(
+                HTTPStatus.SERVICE_UNAVAILABLE, {"error": "camera_not_ready"}
+            )
+            return
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"photo_{stamp}.jpg"
+        try:
+            handler.send_response(HTTPStatus.OK)
+            handler.send_header("Content-Type", "image/jpeg")
+            handler.send_header("Content-Length", str(len(image)))
+            handler.send_header(
+                "Content-Disposition",
+                f'attachment; filename="{filename}"',
+            )
+            handler.end_headers()
             handler.wfile.write(image)
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             pass
