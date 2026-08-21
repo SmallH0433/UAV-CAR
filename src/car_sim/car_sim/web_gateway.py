@@ -1232,10 +1232,12 @@ class WebGateway(Node):
         return True, "started"
 
     def auto_cruise_stop(self):
-        """停止自动巡航。"""
+        """停止自动巡航，并发送停止运动指令。"""
         self.auto_cruise_active = False
         self.nav_stop()
-        self.get_logger().info('自动巡航已停止')
+        # 发送停止运动指令，确保小车立即停止
+        self.publish_teleop(0.0, 0.0)
+        self.get_logger().info('自动巡航已停止，小车已停止运动')
 
     def _plan_cruise_path(self):
         """规划绕地图可行走区域一圈的路径。"""
