@@ -504,12 +504,15 @@ def test_plan_escape_path_returns_none_when_blocked(node):
 
 
 def test_escape_retrying_backs_up_and_retries(node):
-    # 无法规划时进入后退重试状态，1s 后重新尝试规划
+    # 无法规划时进入后退重试状态：按算出的目标距离直线后退，
+    # 里程计位移未到位前持续后退
     _reset_escape_state(node)
     node.pose = (0.0, 0.0, 0.0)
     node.obstacles = [FakeObstacle(0.0, 0.3, 0.5)]
     now = node.get_clock().now().nanoseconds * 1e-9
-    node.escape_retry_until = now + 1.0
+    node.escape_retry_target_dist = 0.5
+    node.escape_retry_start_pose = (0.0, 0.0, 0.0)
+    node.escape_retry_until = now + 30.0
     node.escape_retrying = True
     cmd = _run(node, node.obstacles)
     assert cmd is not None
@@ -573,3 +576,100 @@ def test_escape_pathing_unlocks_on_exit(node):
     cmd = _run(node, node.obstacles)
     assert node.escape_pathing is False
     assert node.escape_path == []
+
+
+# ---------- 脱困三原则：允许失败 / 不碰撞 / 算距离后退 ----------
+
+def test_escape_planning_allowed_to_fail(node):
+    # 原则1+2：正前方贴脸墙（0.25m，半径 0.3m，膨胀后 0.5m）封死所有
+    # 前向扇区时，规划必须失败返回 None，绝不输出可能碰撞的路径
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    node.obstacles = [FakeObstacle(0.0, 0.25, 0.3)]
+    assert node._plan_escape_path(3) is None
+
+
+def test_escape_reverse_distance_computed_with_overrun(node):
+    # 原则3：规划失败时模拟后退试规划，首个能规划出完整路径的后退距离
+    # ×overrun（1.1）作为目标后退距离；后方空旷时不应被安全上限截断
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    node.obstacles = [FakeObstacle(0.0, 0.25, 0.3)]
+    dist = node._compute_escape_reverse_distance(3)
+    assert dist is not None
+    # 侧向绕开只需后退约 0.3m（×1.1 ≈ 0.33），给宽松区间防脆弱断言
+    assert 0.1 < dist <= 0.7
+    # 未被后方安全上限截断（后方无障碍，上限为 +inf）
+    assert dist <= node.escape_reverse_max_dist * node.escape_reverse_overrun
+
+
+def test_escape_reverse_distance_none_when_rear_blocked(node):
+    # 原则2 优先于原则3：后方也贴障时没有安全后退空间，返回 None
+    # （调用方停车等待接管，绝不盲目倒车）
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    node.obstacles = [
+        FakeObstacle(0.0, 0.25, 0.3),    # 前方贴脸墙
+        FakeObstacle(180.0, 0.2, 0.2),   # 后方贴障：接触距离 0.2-0.4 < 0
+    ]
+    assert node._compute_escape_reverse_distance(3) is None
+
+
+def test_escape_reverse_distance_capped_by_rear_obstacle(node):
+    # 原则2 约束原则3：算出的后退距离（含冗余）不得超过后方走廊的
+    # 安全接触距离（后方 0.6m 障碍 → 安全上限 0.6-0.3=0.3m）
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    node.obstacles = [
+        FakeObstacle(0.0, 0.25, 0.3),
+        FakeObstacle(180.0, 0.6, 0.1),
+    ]
+    dist = node._compute_escape_reverse_distance(3)
+    assert dist is not None
+    assert dist <= 0.3 + 1e-9
+
+
+def test_escape_retry_reverses_until_target_distance(node):
+    # 后退重试按距离（而非固定时长）执行：里程计位移到位后退出并重规划
+    _reset_escape_state(node)
+    node.escape_retrying = True
+    node.escape_retry_target_dist = 0.5
+    node.escape_retry_start_pose = (0.0, 0.0, 0.0)
+    node.escape_retry_until = node.get_clock().now().nanoseconds * 1e-9 + 30.0
+    node.pose = (0.0, 0.0, 0.0)  # 尚未移动
+    node.obstacles = [FakeObstacle(0.0, 0.25, 0.3)]  # 前方墙，后方空
+    cmd = _run(node, node.obstacles)
+    assert node.escape_retrying  # 距离未到，继续后退
+    assert cmd.linear.x < 0.0 and cmd.angular.z == 0.0
+    # 模拟后退到位（odom 后移 0.5m，障碍在世界系不动 → 体坐标距离
+    # 从 0.25m 变为 0.75m）→ 应退出重试并成功重新规划。
+    # 注意：_run 辅助函数会把 pose 重置为原点，这里手动驱动 control_loop
+    node.pose = (-0.5, 0.0, 0.0)
+    node.obstacles = [FakeObstacle(0.0, 0.75, 0.3)]
+    recorder = CmdRecorder()
+    real_pub = node.pub_cmd
+    node.pub_cmd = recorder
+    try:
+        node.control_loop()
+    finally:
+        node.pub_cmd = real_pub
+    assert node.escape_retrying is False
+    _reset_escape_state(node)
+
+
+def test_escape_retry_stops_when_rear_blocked(node):
+    # 后退过程中后方突然贴障：立即停止后退（不碰撞优先于脱困）
+    _reset_escape_state(node)
+    node.escape_retrying = True
+    node.escape_retry_target_dist = 0.5
+    node.escape_retry_start_pose = (0.0, 0.0, 0.0)
+    node.escape_retry_until = node.get_clock().now().nanoseconds * 1e-9 + 30.0
+    node.pose = (-0.1, 0.0, 0.0)  # 后退途中
+    node.obstacles = [
+        FakeObstacle(0.0, 0.25, 0.3),
+        FakeObstacle(180.0, 0.2, 0.1),  # 后方 0.2m < hard_stop 0.3
+    ]
+    cmd = _run(node, node.obstacles)
+    assert node.escape_retrying is False
+    assert cmd.linear.x == 0.0 and cmd.angular.z == 0.0  # 立即停车
+    _reset_escape_state(node)

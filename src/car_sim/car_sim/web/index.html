@@ -547,6 +547,8 @@
   var navMapData = null;
   var navMapInfo = null;
   var navInitialPoint = null;
+  var navMapName = null;
+  var robotMapPose = null;  // [x, y, yaw] map 系（Nav2/AMCL 定位，无定位时为 null）
 
   function renderAutoCruise() {
     autoCruiseBtn.textContent = autoCruiseOn ? "■ 停止巡航" : "▶ 自动巡航";
@@ -560,6 +562,7 @@
         navStart.textContent = "(" + d.initial[0].toFixed(2) + ", " + d.initial[1].toFixed(2) + ")";
         navInitialPoint = d.initial;
         navMapInfo = d.map_info;
+        navMapName = d.map_name || null;
         navMapContainer.style.display = "block";
         loadNavMapImage();
       } else {
@@ -571,6 +574,7 @@
   }
 
   function loadNavMapImage() {
+    if (!navMapName) { return; }
     var img = new Image();
     img.onload = function () {
       navMap.width = img.width;
@@ -578,8 +582,17 @@
       navMapData = img;
       drawNavMap();
     };
-    img.src = "/api/maps/map_20260820_193257.png";
+    img.src = "/api/maps/" + navMapName + ".png";
   }
+
+  // 小车定位标记轮询（2Hz，与状态轮询同频；定位由 AMCL 提供 map 系位姿）
+  function pollRobotPose() {
+    fetch("/api/status").then(function (r) { return r.json(); }).then(function (s) {
+      robotMapPose = (s.localization && s.localization.map_pose) || null;
+      if (navMapData) { drawNavMap(); }
+    }).catch(function () { robotMapPose = null; });
+  }
+  setInterval(pollRobotPose, 500);
 
   function drawNavMap() {
     if (!navMapData) { return; }
@@ -596,6 +609,26 @@
         ctx.fillStyle = "#ffffff";
         ctx.font = "10px sans-serif";
         ctx.fillText("初始点", pos[0] - 15, pos[1] - 10);
+      }
+    }
+    // 绘制小车实时位置（AMCL 定位，绿色圆点 + 朝向线）
+    if (robotMapPose) {
+      var rp = worldToNavMap(robotMapPose[0], robotMapPose[1]);
+      if (rp) {
+        var yaw = robotMapPose[2];
+        // canvas y 轴翻转（worldToNavMap 内 gy 取反），朝向线 y 分量需取反
+        var hx = rp[0] + Math.cos(yaw) * 12;
+        var hy = rp[1] - Math.sin(yaw) * 12;
+        ctx.strokeStyle = "#40c080";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(rp[0], rp[1]);
+        ctx.lineTo(hx, hy);
+        ctx.stroke();
+        ctx.fillStyle = "#40c080";
+        ctx.beginPath();
+        ctx.arc(rp[0], rp[1], 5, 0, 2 * Math.PI);
+        ctx.fill();
       }
     }
   }

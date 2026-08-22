@@ -1,7 +1,7 @@
 """Minimal UGV web gateway: static teleop page, JSON status API, camera JPEG.
 
 Trimmed from the air_ground_sim dashboard gateway to the UGV teleop subset:
-no missions, no UAV, no Nav2, no audit/auth machinery. Binds to localhost by
+no missions, no UAV, no audit/auth machinery. Binds to localhost by
 default and exposes:
 
   GET  /                 static teleop page (car_sim/web/index.html)
@@ -45,6 +45,11 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy
 from sensor_msgs.msg import Image, LaserScan, NavSatFix
 from std_msgs.msg import Bool, String
+
+import tf2_ros
+from action_msgs.msg import GoalStatus
+from nav2_msgs.action import NavigateToPose
+from rclpy.action import ActionClient
 
 from .runtime_timing import create_steady_timer
 
@@ -149,6 +154,11 @@ class WebGateway(Node):
         self.declare_parameter("mapping_lidar_z", 0.15)
         self.declare_parameter("avoidance_node_name", "/avoidance_node")
         self.declare_parameter("mux_node_name", "/ugv_control_mux")
+        # 自主导航后端：avoidance=自研避障节点（/goal_pose 话题，odom 系）；
+        # nav2=AMCL+Nav2（NavigateToPose action，map 系）
+        self.declare_parameter("nav_backend", "avoidance")
+        # 网页导航/巡航加载的地图名（~/maps/<name>.pgm/.yaml）
+        self.declare_parameter("nav_map_name", "map_20260820_193257")
 
         self.bind_address = str(self.get_parameter("bind_address").value)
         self.port = int(self.get_parameter("port").value)
@@ -165,6 +175,8 @@ class WebGateway(Node):
             float(self.get_parameter("camera_stale_after_s").value),
         )
         self.jpeg_quality = int(self.get_parameter("jpeg_quality").value)
+        self.nav_backend = str(self.get_parameter("nav_backend").value)
+        self.nav_map_name = str(self.get_parameter("nav_map_name").value)
 
         self.lock = threading.RLock()
         self.started_at = time.monotonic()
@@ -204,8 +216,13 @@ class WebGateway(Node):
         self.auto_cruise_initial = None  # (x, y) 初始点
         self.auto_cruise_started = 0.0
         self.auto_cruise_returning = False
+        # Nav2 导航后端（nav_backend=nav2）：当前 NavigateToPose 目标句柄
+        self.nav2_goal_handle = None
+        # TF 查询（map→base_footprint，定位模式下网页地图小车位置显示）
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         # 默认地图：开机自动加载
-        self._load_map("map_20260820_193257")
+        self._load_map(self.nav_map_name)
 
         self.teleop_publisher = self.create_publisher(
             Twist, str(self.get_parameter("teleop_topic").value), 10
@@ -254,6 +271,13 @@ class WebGateway(Node):
         self.nav_goal_publisher = self.create_publisher(
             PoseStamped, "/goal_pose", 10
         )
+        # 取消避障节点的当前目标/巡航（停止导航、停止自动巡航时下发）
+        self.nav_cancel_publisher = self.create_publisher(
+            Bool, "/nav/cancel", 10
+        )
+        # Nav2 后端：NavigateToPose action 客户端（nav_backend=nav2 时使用）
+        self.nav2_client = ActionClient(
+            self, NavigateToPose, "navigate_to_pose")
         # SLAM 地图（slam_toolbox 以 transient_local 发布 /map，订阅需匹配才能
         # 立即收到最近一次地图；未启动 SLAM 时 /api/map.png 返回 503）
         map_qos = QoSProfile(depth=1)
@@ -401,26 +425,86 @@ class WebGateway(Node):
         """避障节点到达当前目标点：发布下一个路径点或结束导航。"""
         if not message.data:
             return
+        self._advance_nav_queue()
+
+    def _advance_nav_queue(self) -> None:
+        """当前路径点已到达：弹出并发下一个点；全部走完则结束导航。
+
+        avoidance 模式由 /nav/goal_reached 话题触发，nav2 模式由
+        NavigateToPose action 成功结果触发。
+        """
         with self.lock:
-            if not self.nav_active or not self.nav_path:
+            if not self.nav_active:
+                return
+            if not self.nav_path:
+                # 无本地队列（nav2 单目标直发）：本次导航完成
+                self.nav_active = False
+                self.nav_goal = None
+                self.get_logger().info('自主导航完成')
                 return
             self.nav_path.pop(0)  # 移除已到达的路径点
             if not self.nav_path:
                 # 所有路径点已到达，导航完成
                 self.nav_active = False
+                self.nav_goal = None
                 self.get_logger().info('自主导航完成')
                 return
             next_goal = self.nav_path[0]
-        # 发布下一个目标点给避障节点
-        msg = PoseStamped()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "odom"
-        msg.pose.position.x = next_goal[0]
-        msg.pose.position.y = next_goal[1]
-        msg.pose.orientation.w = 1.0
-        self.nav_goal_publisher.publish(msg)
+        self._publish_nav_goal(next_goal)
         self.get_logger().info(
             f'发布下一个导航目标点：({next_goal[0]:.2f}, {next_goal[1]:.2f})')
+
+    # ---------------- Nav2 导航后端 ----------------
+    def _send_nav2_goal(self, goal) -> None:
+        """向 Nav2 bt_navigator 发送导航目标（map 系，NavigateToPose action）。"""
+        if not self.nav2_client.server_is_ready():
+            self.get_logger().error(
+                'Nav2 navigate_to_pose action 不可用（nav2 模式未启动？）')
+            with self.lock:
+                self.nav_active = False
+                self.nav_path = []
+                self.nav_goal = None
+            return
+        goal_msg = NavigateToPose.Goal()
+        goal_msg.pose.header.frame_id = "map"
+        goal_msg.pose.header.stamp = self.get_clock().now().to_msg()
+        goal_msg.pose.pose.position.x = goal[0]
+        goal_msg.pose.pose.position.y = goal[1]
+        goal_msg.pose.pose.orientation.w = 1.0
+        future = self.nav2_client.send_goal_async(goal_msg)
+        future.add_done_callback(self._on_nav2_goal_response)
+
+    def _on_nav2_goal_response(self, future) -> None:
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().warning('Nav2 目标被拒绝')
+            with self.lock:
+                self.nav_active = False
+                self.nav_path = []
+                self.nav_goal = None
+            return
+        self.nav2_goal_handle = goal_handle
+        goal_handle.get_result_async().add_done_callback(self._on_nav2_result)
+
+    def _on_nav2_result(self, future) -> None:
+        self.nav2_goal_handle = None
+        status = future.result().status
+        if status == GoalStatus.STATUS_SUCCEEDED:
+            self.get_logger().info('Nav2 已到达目标点')
+            self._advance_nav_queue()
+        elif status != GoalStatus.STATUS_CANCELED:
+            # 中止/失败：结束本次导航（取消由 nav_stop 触发，状态已清理）
+            self.get_logger().warning(f'Nav2 导航中止（状态 {status}）')
+            with self.lock:
+                self.nav_active = False
+                self.nav_path = []
+                self.nav_goal = None
+
+    def _cancel_nav2_goal(self) -> None:
+        """取消正在执行的 Nav2 导航目标（有则取消，无则跳过）。"""
+        if self.nav2_goal_handle is not None:
+            self.nav2_goal_handle.cancel_goal_async()
+            self.nav2_goal_handle = None
 
     def _on_image(self, message: Image, rear: bool = False) -> None:
         now = time.monotonic()
@@ -563,25 +647,18 @@ class WebGateway(Node):
     def set_mapping(self, enable: bool, auto_cruise: bool = True):
         """HTTP 线程调用：启动/停止建图流水线。返回 (ok, message)。
 
-        启动 = static TF(base_link→laser_frame) + slam_toolbox + 可选自动巡航
-        （巡航 wander 让小车自主在区域内走动，SLAM 同步建图）；
+        启动 = slam_toolbox + 可选自动巡航（巡航 wander 让小车自主在区域内
+        走动，SLAM 同步建图）；base_footprint→laser_frame 静态 TF 由
+        real_bringup 常驻发布，建图不再单独启动。
         停止 = 退巡航 → map_saver_cli 保存 ~/maps/map_<时间戳> → 终止子进程。
         """
         if enable == self.mapping_active:
             return True, "already_active" if enable else "already_inactive"
         if enable:
-            x = float(self.get_parameter("mapping_lidar_x").value)
-            y = float(self.get_parameter("mapping_lidar_y").value)
-            z = float(self.get_parameter("mapping_lidar_z").value)
             procs = []
             try:
                 # start_new_session：子进程独立进程组，停止时按组发信号——
                 # ros2 CLI 包装脚本会吞掉 SIGINT，直接 signal 包装进程杀不死节点
-                procs.append(subprocess.Popen([
-                    "ros2", "run", "tf2_ros", "static_transform_publisher",
-                    str(x), str(y), str(z), "0", "0", "0",
-                    "base_footprint", "laser_frame"],
-                    start_new_session=True))
                 procs.append(subprocess.Popen([
                     "ros2", "run", "slam_toolbox", "async_slam_toolbox_node",
                     "--ros-args",
@@ -596,7 +673,7 @@ class WebGateway(Node):
             self.mapping_procs = procs
             self.mapping_active = True
             self.mapping_started = time.monotonic()
-            self.get_logger().info("建图流水线已启动（static TF + slam_toolbox）")
+            self.get_logger().info("建图流水线已启动（slam_toolbox）")
             if auto_cruise:
                 ok, error = self.set_cruise(True)
                 if not ok:
@@ -1150,7 +1227,21 @@ class WebGateway(Node):
         """设置导航目标点，返回 (是否成功, 路径或错误码)。
 
         若提供 start_x/start_y，则从该点规划路径；否则从当前位置规划。
+        nav2 模式下全局规划由 NavFn 承担，本地 BFS 路径规划跳过，
+        目标点直接经 NavigateToPose action 下发（返回空路径）。
         """
+        if self.nav_backend == "nav2":
+            if not self.nav2_client.server_is_ready():
+                return False, "nav2_not_ready"
+            with self.lock:
+                # 单目标直发 Nav2，本地路径点队列不启用
+                self.nav_path = []
+                self.nav_goal = (goal_x, goal_y)
+                self.nav_active = True
+            self._send_nav2_goal((goal_x, goal_y))
+            self.get_logger().info(
+                f'Nav2 目标已下发：({goal_x:.2f}, {goal_y:.2f})')
+            return True, []
         if start_x is None or start_y is None:
             if self.pose is None:
                 return False, "no_pose"
@@ -1183,7 +1274,11 @@ class WebGateway(Node):
         return True, path_world
 
     def _publish_nav_goal(self, goal):
-        """发布导航目标点给避障节点。"""
+        """发布导航目标点：avoidance 模式发 /goal_pose 话题（odom 系），
+        nav2 模式发 NavigateToPose action（map 系）。"""
+        if self.nav_backend == "nav2":
+            self._send_nav2_goal(goal)
+            return
         msg = PoseStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "odom"
@@ -1193,11 +1288,18 @@ class WebGateway(Node):
         self.nav_goal_publisher.publish(msg)
 
     def nav_stop(self):
-        """停止自主导航。"""
+        """停止自主导航：清空本地路径队列，取消避障节点/Nav2 的当前目标。"""
         with self.lock:
             self.nav_active = False
             self.nav_path = []
             self.nav_goal = None
+        # 通知避障节点清除正在跟踪的目标点（否则心跳过期后它会继续
+        # 朝旧目标行驶，表现为"停不下来"）
+        cancel = Bool()
+        cancel.data = True
+        self.nav_cancel_publisher.publish(cancel)
+        # Nav2 模式：取消正在执行的导航 action
+        self._cancel_nav2_goal()
         self.get_logger().info('自主导航已停止')
 
     def nav_snapshot(self):
@@ -1323,6 +1425,7 @@ class WebGateway(Node):
         return {
             "active": self.auto_cruise_active,
             "initial": self.auto_cruise_initial,
+            "map_name": self.nav_map_name,
             "map_info": {
                 "width": self.nav_map_data.shape[1] if self.nav_map_data is not None else 0,
                 "height": self.nav_map_data.shape[0] if self.nav_map_data is not None else 0,
@@ -1349,8 +1452,23 @@ class WebGateway(Node):
             "camera_backend": _CAMERA_AVAILABLE,
         }
 
+    def _lookup_map_pose(self):
+        """查询 map→base_footprint 变换（AMCL 定位），返回 [x, y, yaw]；
+        无定位输出（avoidance 模式或未收敛）时为 None。"""
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                "map", "base_footprint", rclpy.time.Time())
+        except (tf2_ros.LookupException,
+                tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException):
+            return None
+        translation = transform.transform.translation
+        yaw = _yaw_from_quaternion(transform.transform.rotation)
+        return [round(translation.x, 3), round(translation.y, 3), round(yaw, 3)]
+
     def status_snapshot(self) -> dict:
         now = time.monotonic()
+        map_pose = self._lookup_map_pose()
         with self.lock:
             mux = dict(self.latest["ugv_control_mux"])
             gateway_status = dict(self.latest["ugv_command_gateway"])
@@ -1379,6 +1497,10 @@ class WebGateway(Node):
                 "cruise_enabled": cruise_state,
             },
             "odom": {"pose": pose, "speed_mps": speed},
+            "localization": {
+                "backend": self.nav_backend,
+                "map_pose": map_pose,
+            },
             "battery_voltage": None,  # reserved for the real motor driver
             "gps": {"fix": fix, "age_s": fix_age},
             "map": {"info": map_info, "age_s": map_age},

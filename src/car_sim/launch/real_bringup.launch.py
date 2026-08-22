@@ -30,6 +30,11 @@ N10P 电机上电即转，无需开工令；如需停转/恢复：
 
 GPS（WHEELTEC G60）：默认随车启动（gps_port:=/dev/wheeltec_gps），
 不需要时 gps_port:='' 关闭；定位输出 `ros2 topic echo /fix` 查看。
+
+注意：Nav2 地图自主导航（AMCL + Nav2）因 Pi 4B 同时跑桌面环境性能不足
+（雷达 460800 波特串口丢包、AMCL 无法收敛）已屏蔽——launch 不再提供
+nav_mode 参数，相关文件（config/nav2_params.yaml、launch/nav2_stack.launch.py）
+保留备用。自主巡航/避障仍由 avoidance_node 承担（原有功能不受影响）。
 """
 
 import os
@@ -62,6 +67,9 @@ def generate_launch_description():
     gps_port = LaunchConfiguration('gps_port')
     front_camera = LaunchConfiguration('front_camera')
     k210_port = LaunchConfiguration('k210_port')
+    lidar_tf_x = LaunchConfiguration('lidar_tf_x')
+    lidar_tf_y = LaunchConfiguration('lidar_tf_y')
+    lidar_tf_z = LaunchConfiguration('lidar_tf_z')
 
     n10p_params = os.path.join(
         get_package_share_directory('car_nodes'), 'config', 'lslidar_n10p_uart.yaml')
@@ -218,6 +226,18 @@ def generate_launch_description():
         parameters=[g60_params, {'port': gps_port}],
         condition=has_gps,
     )
+    # 常驻静态 TF base_footprint→laser_frame（雷达安装位置，建图依赖；
+    # 数值需与 web_gateway 建图参数 mapping_lidar_x/y/z 一致）
+    lidar_static_tf = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='laser_frame_static_tf',
+        output='screen',
+        arguments=[lidar_tf_x, lidar_tf_y, lidar_tf_z,
+                   '0', '0', '0', 'base_footprint', 'laser_frame'],
+    )
+    # Nav2 地图自主导航已屏蔽（Pi 4B 桌面环境性能不足）：不再 include
+    # nav2_stack.launch.py；文件保留备用，恢复时重新接入并传 nav_mode 参数。
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -277,6 +297,15 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'k210_port', default_value='/dev/ttyUSB0',
             description='K210 USB 串口设备（front_camera:=k210 时生效）'),
+        DeclareLaunchArgument(
+            'lidar_tf_x', default_value='0.1',
+            description='雷达相对 base_footprint 的 X 偏移 m（与建图参数一致）'),
+        DeclareLaunchArgument(
+            'lidar_tf_y', default_value='0.0',
+            description='雷达相对 base_footprint 的 Y 偏移 m'),
+        DeclareLaunchArgument(
+            'lidar_tf_z', default_value='0.15',
+            description='雷达相对 base_footprint 的 Z 偏移 m'),
         lidar_vendor,
         lidar_sim,
         camera,
@@ -290,4 +319,5 @@ def generate_launch_description():
         motor_driver,
         web_gateway,
         gps,
+        lidar_static_tf,
     ])

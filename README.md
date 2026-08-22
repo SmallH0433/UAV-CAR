@@ -18,7 +18,8 @@
   `launch/n10p_lidar.launch.py` + `config/lslidar_n10p_uart.yaml` 为雷达单独启动入口；
   `launch/g60_gps.launch.py` + `config/g60_gps.yaml` 为 GPS 单独启动入口
 - `src/car_sim` — 运行基础设施（包名沿用主仓）：控制权 mux（含巡航转向辅助
-  steering_assist）、指令网关、网页遥控（前后双画面）、`real_bringup.launch.py`
+  steering_assist）、指令网关、网页遥控（前后双画面）、`real_bringup.launch.py`、
+  `config/nav2_params.yaml`（Nav2/AMCL 参数，nav_mode:=nav2 时使用）
 - `src/vendor/lslidar_ros2` — 镭神 N10P 厂商 ROS2 SDK（lslidar_driver + lslidar_msgs +
   wheeltec_udev.sh），随工作区一起 colcon build，无需再从 GitHub 拉取
 - `src/vendor/wheeltec_gps` — WHEELTEC G60 GPS 厂商 ROS2 SDK（nmea_msgs +
@@ -102,6 +103,20 @@ GPS，但控制板规则需补实际 serial 过滤（见 `config/99-car-devices.
 网页控制台：同一局域网的电脑/手机浏览器打开 `http://<树莓派IP>:8765`
 （默认监听 0.0.0.0；WASD 组合按键弧线遥控，遥控优先于避障；前视画面，
 接了后摄时前后双画面；巡航开启后可用 A/D 手动微调方向，即转向辅助）。
+
+## Nav2 自主导航（已屏蔽）
+
+Nav2 地图自主导航（AMCL 定位 + NavFn 规划 + RPP 跟踪 + costmap 实时避障）
+**因性能不足已屏蔽**：Pi 4B 同时运行 GNOME 桌面/远程桌面/VS Code 时，
+雷达 460800 波特串口大量丢包（/scan 掉到 3Hz），AMCL 无法收敛，导航不可用。
+`real_bringup.launch.py` 已移除 `nav_mode` 参数，不再启动 Nav2 栈。
+
+相关实现保留备用：`car_sim/config/nav2_params.yaml`、
+`car_sim/launch/nav2_stack.launch.py`、web_gateway 的 `nav_backend` 后端。
+如需恢复：关掉 Pi 的桌面环境（纯 SSH 运行）释放算力后，在 real_bringup
+重新 include nav2_stack.launch.py 并恢复 nav_mode/map 参数即可（改动见
+git 历史或该 launch 文件头部注释）。自主巡航/避障不受影响，仍由
+avoidance_node 承担。
 
 ## 实机联调顺序（重要）
 
