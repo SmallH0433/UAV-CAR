@@ -14,6 +14,7 @@
   lidar_driver（仅空载仿真用；实机雷达为镭神 N10P，用厂商驱动 lslidar_driver）、
   camera_driver（V4L2，支持前摄 + USB 后摄双实例）、
   k210_camera_driver（K210 串口推流前摄）、uav_bridge、
+  ultrasonic_driver（HC-SR04 车尾超声波，脱困倒车盲区急停）、
   sim_motor_bridge（承载运动学函数 + 空载测试用）；
   `launch/n10p_lidar.launch.py` + `config/lslidar_n10p_uart.yaml` 为雷达单独启动入口；
   `launch/g60_gps.launch.py` + `config/g60_gps.yaml` 为 GPS 单独启动入口

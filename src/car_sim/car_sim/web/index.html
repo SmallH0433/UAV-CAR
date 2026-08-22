@@ -53,7 +53,7 @@
   .row { display: flex; justify-content: space-between; margin: 6px 0; font-size: 14px; }
   .row span:first-child { color: #93a1b7; }
   .row span:last-child { font-family: Consolas, monospace; color: #9fd3a8; }
-  #conn.bad { color: #e08080; }
+  .bad { color: #e08080; }
   .media {
     width: 100%; background: #0b0e12; border-radius: 8px; display: block;
     border: 1px solid #232b38;
@@ -127,6 +127,7 @@
       <div class="row"><span>控制权</span><span id="authority">-</span></div>
       <div class="row"><span>mux 原因</span><span id="reason">-</span></div>
       <div class="row"><span>网关输出 v / w</span><span id="gw">-</span></div>
+      <div class="row"><span>车尾超声波</span><span id="ultrasonic">-</span></div>
       <h2 style="margin-top:16px">GPS 定位</h2>
       <div class="row"><span>定位状态</span><span id="gpsStatus">-</span></div>
       <div class="row"><span>纬度 / 经度</span><span id="gpsPos">-</span></div>
@@ -320,6 +321,18 @@
         (gw.output_linear_mps !== undefined)
           ? gw.output_linear_mps.toFixed(2) + " / " + gw.output_angular_rps.toFixed(2)
           : "-";
+      // 车尾超声波：<25cm 标红警示（脱困倒车急停阈值），离线显示 "-"
+      var us = s.ultrasonic || {};
+      var usEl = document.getElementById("ultrasonic");
+      var usValid = (us.range !== null && us.range !== undefined) &&
+        (us.age_s === null || us.age_s === undefined || us.age_s <= 1.0);
+      if (usValid) {
+        usEl.textContent = us.range.toFixed(2) + " m";
+        usEl.className = (us.range < 0.25) ? "bad" : "";
+      } else {
+        usEl.textContent = "-";
+        usEl.className = "";
+      }
       var av = s.avoidance || {};
       cruiseAvail = !!av.available;
       if (av.cruise_enabled !== null && av.cruise_enabled !== undefined) {
@@ -381,6 +394,19 @@
       var x = cx - d * Math.sin(a) * scale;
       var y = cy - d * Math.cos(a) * scale;
       lctx.fillRect(x - 1.5, y - 1.5, 3, 3);
+    }
+    // 脱困路径（绿色实线，车体系 x 前 y 左，从车底中心连到各路径点）
+    var ep = data.escape_path || [];
+    if (ep.length > 0) {
+      lctx.strokeStyle = "#2ecc71";
+      lctx.lineWidth = 2;
+      lctx.beginPath();
+      lctx.moveTo(cx, cy);
+      for (var j = 0; j < ep.length; j++) {
+        lctx.lineTo(cx - ep[j][1] * scale, cy - ep[j][0] * scale);
+      }
+      lctx.stroke();
+      lctx.lineWidth = 1;
     }
     // 车体（指向上方的三角）
     lctx.fillStyle = "#3f6db3";

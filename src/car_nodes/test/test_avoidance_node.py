@@ -673,3 +673,98 @@ def test_escape_retry_stops_when_rear_blocked(node):
     assert node.escape_retrying is False
     assert cmd.linear.x == 0.0 and cmd.angular.z == 0.0  # 立即停车
     _reset_escape_state(node)
+
+
+# ---------- 车尾超声波：脱困倒车急停 ----------
+
+def test_recovering_stops_on_ultrasonic_rear_block(node):
+    # 倒车脱困中超声波 <25cm：立即停止倒车并进入脱困路径规划
+    _reset_escape_state(node)
+    now = node.get_clock().now().nanoseconds * 1e-9
+    node.recovering = True
+    node.recover_start = now
+    node.detour_side = 1
+    node.ultrasonic_range = 0.08
+    node.ultrasonic_time = now
+    cmd = _run(node, [FakeObstacle(0.0, 0.25, 0.15)])
+    assert node.recovering is False
+    assert cmd.linear.x == 0.0 and cmd.angular.z == 0.0  # 立即停车
+    # 已尝试规划脱困路径（成功→escape_pathing；失败→后退重试）
+    assert node.escape_pathing or node.escape_retrying
+    _reset_escape_state(node)
+
+
+def test_recovering_ignores_stale_ultrasonic(node):
+    # 超声波数据过期（>0.5s，传感器离线）时不启用急停，按原逻辑倒车
+    _reset_escape_state(node)
+    now = node.get_clock().now().nanoseconds * 1e-9
+    node.recovering = True
+    node.recover_start = now
+    node.detour_side = 1
+    node.ultrasonic_range = 0.05
+    node.ultrasonic_time = now - 2.0  # 过期数据
+    cmd = _run(node, [FakeObstacle(0.0, 0.25, 0.15)])
+    assert node.recovering is True
+    assert cmd.linear.x < 0.0  # 继续倒车脱困
+    node.recovering = False
+    _reset_escape_state(node)
+
+
+def test_escape_retry_stops_on_ultrasonic(node):
+    # 后退重试中超声波 <25cm：立即停止；几乎没退动 → 停车等待（防循环）
+    _reset_escape_state(node)
+    now = node.get_clock().now().nanoseconds * 1e-9
+    node.escape_retrying = True
+    node.escape_retry_target_dist = 0.5
+    node.escape_retry_start_pose = (0.0, 0.0, 0.0)  # _run 重置 pose 到原点
+    node.escape_retry_until = now + 30.0
+    node.ultrasonic_range = 0.07
+    node.ultrasonic_time = now
+    cmd = _run(node, [FakeObstacle(0.0, 0.25, 0.3)])
+    assert node.escape_retrying is False
+    assert cmd.linear.x == 0.0 and cmd.angular.z == 0.0
+    _reset_escape_state(node)
+
+
+def test_ultrasonic_safe_distance_does_not_block(node):
+    # 超声波距离 ≥25cm 时不触发急停，倒车正常进行
+    _reset_escape_state(node)
+    now = node.get_clock().now().nanoseconds * 1e-9
+    node.recovering = True
+    node.recover_start = now
+    node.detour_side = 1
+    node.ultrasonic_range = 0.35
+    node.ultrasonic_time = now
+    cmd = _run(node, [FakeObstacle(0.0, 0.25, 0.15)])
+    assert node.recovering is True
+    assert cmd.linear.x < 0.0
+    node.recovering = False
+    _reset_escape_state(node)
+
+
+def test_escape_path_published_in_body_frame(node):
+    # 脱困路径发布时从 odom 系转到车体系（x 前 y 左）
+    _reset_escape_state(node)
+    node.pose = (1.0, 0.0, math.pi / 2.0)  # 车在 (1,0)，朝 +y
+    node.escape_pathing = True
+    node.escape_path = [(1.0, 1.0)]
+    node.escape_idx = 0
+    received = []
+
+    class _Rec:
+        def publish(self, m):
+            received.append(m)
+
+    real_pub = node.pub_escape_path
+    node.pub_escape_path = _Rec()
+    try:
+        node._publish_escape_path()
+    finally:
+        node.pub_escape_path = real_pub
+    assert len(received) == 1
+    assert received[0].header.frame_id == 'base_footprint'
+    pt = received[0].poses[0].pose.position
+    # 目标在 odom (1,1)，车朝 +y：体坐标应为正前方 1m（x=1, y=0）
+    assert pt.x == pytest.approx(1.0, abs=1e-6)
+    assert pt.y == pytest.approx(0.0, abs=1e-6)
+    _reset_escape_state(node)

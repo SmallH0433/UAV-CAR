@@ -54,6 +54,9 @@
       距离"的上限 m
   escape_reverse_overrun (float, 1.1) 后退距离冗余系数（算出的距离
       乘以该系数后退，默认 110%）
+  ultrasonic_stop_distance (float, 0.25) 车尾超声波急停阈值 m：脱困
+      倒车中后方距离小于该值立即停止并规划脱困路径（雷达 <0.15m
+      盲区补充；无数据或过期不启用）
 
 绕行策略（阿克曼不能原地自旋，全程保持 |v| > 0 或停车）：
   1. 正常：前方 180° 扇区选代价最低的可通行方向，速度随净空缩放；
@@ -98,7 +101,8 @@ import math
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped, Twist
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import Odometry, Path
+from sensor_msgs.msg import Range
 from std_msgs.msg import Bool
 from rcl_interfaces.msg import SetParametersResult
 
@@ -153,6 +157,8 @@ class AvoidanceNode(Node):
         # 脱困规划失败时的后退距离计算：搜索上限 m + 冗余系数
         self.declare_parameter('escape_reverse_max_dist', 2.0)
         self.declare_parameter('escape_reverse_overrun', 1.1)
+        # 车尾超声波：脱困倒车中距离小于该值立即停止并规划脱困路径 m
+        self.declare_parameter('ultrasonic_stop_distance', 0.25)
 
         self.safety_distance = self.get_parameter('safety_distance').value
         self.hard_stop_distance = self.get_parameter('hard_stop_distance').value
@@ -207,6 +213,8 @@ class AvoidanceNode(Node):
             self.get_parameter('escape_reverse_max_dist').value
         self.escape_reverse_overrun = \
             self.get_parameter('escape_reverse_overrun').value
+        self.ultrasonic_stop_distance = \
+            self.get_parameter('ultrasonic_stop_distance').value
 
         self.obstacles = []
         self.pose = None          # odom 系下 (x, y, yaw)
@@ -238,6 +246,9 @@ class AvoidanceNode(Node):
         self.escape_retry_until = 0.0
         self.escape_retry_target_dist = 0.0   # 需后退的距离（含冗余）m
         self.escape_retry_start_pose = None   # 开始后退时的 odom 位姿
+        # 车尾超声波（/ultrasonic/range）：脱困倒车急停用
+        self.ultrasonic_range = None   # 最近一次有效测距 m
+        self.ultrasonic_time = 0.0
         # 网页遥控接管状态（/ugv/operator/heartbeat）
         self.operator_active = False
         self.operator_time = 0.0
@@ -252,7 +263,12 @@ class AvoidanceNode(Node):
         # 导航/巡航取消：web_gateway 停止按钮下发，清除目标并停车
         self.create_subscription(
             Bool, '/nav/cancel', self.nav_cancel_cb, 10)
+        # 车尾超声波：脱困倒车时后方贴障急停
+        self.create_subscription(
+            Range, '/ultrasonic/range', self.ultrasonic_cb, 10)
         self.pub_cmd = self.create_publisher(Twist, '/cmd_vel', 10)
+        # 脱困路径可视化（车体系，escape_pathing 期间持续发布，网页雷达图叠加）
+        self.pub_escape_path = self.create_publisher(Path, '/escape_path', 10)
         # 导航路径点到达通知：web_gateway 订阅后发布下一个目标点
         self.pub_goal_reached = self.create_publisher(Bool, '/nav/goal_reached', 10)
         self.create_service(SetGoal, '/avoidance/set_goal', self.set_goal_cb)
@@ -304,6 +320,24 @@ class AvoidanceNode(Node):
         if had_goal:
             self.get_logger().info('收到取消指令，已清除目标并停车')
 
+    def ultrasonic_cb(self, msg):
+        """车尾超声波测距（ultrasonic_driver 10Hz）：脱困倒车急停用"""
+        self.ultrasonic_range = msg.range
+        self.ultrasonic_time = self.get_clock().now().nanoseconds * 1e-9
+
+    def _ultrasonic_rear_blocked(self):
+        """车尾超声波是否探测到贴障（< ultrasonic_stop_distance）。
+
+        无数据或数据过期（>0.5s，传感器离线/故障）时返回 False，
+        不干扰原有脱困逻辑——超声波只是雷达盲区（<0.15m）的补充。
+        """
+        if self.ultrasonic_range is None:
+            return False
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if now - self.ultrasonic_time > 0.5:
+            return False
+        return self.ultrasonic_range < self.ultrasonic_stop_distance
+
     def odom_cb(self, msg):
         p = msg.pose.pose.position
         yaw = yaw_from_quaternion(msg.pose.pose.orientation)
@@ -337,6 +371,11 @@ class AvoidanceNode(Node):
         fwd_dist = self._forward_obstacle_distance()
         now = self.get_clock().now().nanoseconds * 1e-9
 
+        # 脱困路径可视化：escape_pathing 期间持续发布车体系路径点，
+        # 网页雷达图叠加绿线；退出后停发，网页按数据过期自动清除
+        if self.escape_pathing and self.escape_path and self.pose is not None:
+            self._publish_escape_path()
+
         # 网页遥控优先于一切自主逻辑：操作员活跃（心跳 0.6s 内，与 mux 的
         # operator_timeout 一致）时立即取消包括自主脱困在内的全部自主状态
         # 并停车；底盘输出由 mux 切到遥控链路
@@ -366,6 +405,21 @@ class AvoidanceNode(Node):
                 traveled = math.hypot(
                     self.pose[0] - self.escape_retry_start_pose[0],
                     self.pose[1] - self.escape_retry_start_pose[1])
+            # 车尾超声波（雷达 <0.15m 盲区的补充）：后方 <25cm 立即停止
+            # 倒车并规划脱困路径；几乎没退动就再次触发说明原地无法脱困，
+            # 停车等待（防"退一点→报警→重规划失败→再退"的循环）
+            if self._ultrasonic_rear_blocked():
+                self.escape_retrying = False
+                self.pub_cmd.publish(cmd)
+                if traveled < 0.03:
+                    self.get_logger().error(
+                        '超声波报警且后方无可退空间，停车等待人工接管')
+                else:
+                    self.get_logger().warn(
+                        f'超声波探测后方 {self.ultrasonic_range:.2f}m 贴障，'
+                        f'停止倒车，立即规划脱困路径')
+                    self._enter_escape_path_mode()
+                return
             if traveled < self.escape_retry_target_dist and \
                     now < self.escape_retry_until:
                 cmd.linear.x = -self.reverse_speed
@@ -433,6 +487,16 @@ class AvoidanceNode(Node):
         # 杂物多的环境永远达不到，车会一直倒车转圈"不回正"）；
         # 超时强制退出，杜绝无限倒车死循环
         if self.recovering:
+            # 车尾超声波（雷达 <0.15m 盲区的补充）：倒车中后方 <25cm
+            # 立即停止倒车，立刻开始规划脱困路径
+            if self._ultrasonic_rear_blocked():
+                self.recovering = False
+                self.get_logger().warn(
+                    f'超声波探测后方 {self.ultrasonic_range:.2f}m 贴障，'
+                    f'停止倒车，立即规划脱困路径')
+                self.pub_cmd.publish(cmd)  # 立即停车
+                self._enter_escape_path_mode()
+                return
             timed_out = now - self.recover_start >= self.recover_max_time
             if (fwd_dist > self.recover_exit_distance and
                     now - self.recover_start >= self.recover_min_time) \
@@ -667,6 +731,25 @@ class AvoidanceNode(Node):
                 triggered = self._enter_escape_path_mode()
         self.recover_snapshots = (self.recover_snapshots + [sig])[-2:]
         return triggered
+
+    def _publish_escape_path(self):
+        """把 odom 系脱困路径（未走的部分）转换到车体系并发布。
+
+        车体系约定与雷达图一致：x 前、y 左（base_footprint）。
+        """
+        x, y, yaw = self.pose
+        cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
+        msg = Path()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'base_footprint'
+        for wx, wy in self.escape_path[self.escape_idx:]:
+            dx, dy = wx - x, wy - y
+            pose = PoseStamped()
+            pose.pose.position.x = cos_yaw * dx + sin_yaw * dy
+            pose.pose.position.y = -sin_yaw * dx + cos_yaw * dy
+            pose.pose.orientation.w = 1.0
+            msg.poses.append(pose)
+        self.pub_escape_path.publish(msg)
 
     def _enter_escape_path_mode(self):
         """停车 escape_stop_time 并生成脱困路径；无法规划时进入后退重试状态。

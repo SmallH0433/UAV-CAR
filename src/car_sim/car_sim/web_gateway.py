@@ -37,13 +37,13 @@ from urllib.parse import urlparse
 
 import yaml
 from geometry_msgs.msg import Twist, PoseStamped
-from nav_msgs.msg import OccupancyGrid, Odometry
+from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from rcl_interfaces.srv import GetParameters, SetParameters
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy
-from sensor_msgs.msg import Image, LaserScan, NavSatFix
+from sensor_msgs.msg import Image, LaserScan, NavSatFix, Range
 from std_msgs.msg import Bool, String
 
 import tf2_ros
@@ -148,6 +148,8 @@ class WebGateway(Node):
         self.declare_parameter("scan_topic", "/scan")
         self.declare_parameter("scan_max_points", 720)
         self.declare_parameter("fix_topic", "/fix")
+        self.declare_parameter("ultrasonic_topic", "/ultrasonic/range")
+        self.declare_parameter("escape_path_topic", "/escape_path")
         self.declare_parameter("map_topic", "/map")
         self.declare_parameter("mapping_lidar_x", 0.1)
         self.declare_parameter("mapping_lidar_y", 0.0)
@@ -196,6 +198,12 @@ class WebGateway(Node):
         self.scan_time = 0.0
         self.fix = None                # {status, latitude, longitude, altitude}
         self.fix_time = 0.0
+        # 车尾超声波测距缓存（/ultrasonic/range）
+        self.ultrasonic_range = None   # 最近一次测距 m
+        self.ultrasonic_time = 0.0
+        # 脱困路径缓存（/escape_path，车体系 x 前 y 左，雷达图叠加显示）
+        self.escape_path_points = []
+        self.escape_path_time = 0.0
         # SLAM 地图缓存（/map OccupancyGrid → PNG）
         self.map_png: Optional[bytes] = None
         self.map_info = None           # {width, height, resolution}
@@ -259,6 +267,18 @@ class WebGateway(Node):
             str(self.get_parameter("fix_topic").value),
             self._on_fix,
             qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            Range,
+            str(self.get_parameter("ultrasonic_topic").value),
+            self._on_ultrasonic,
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            Path,
+            str(self.get_parameter("escape_path_topic").value),
+            self._on_escape_path,
+            10,
         )
         # 导航路径点到达通知：avoidance_node 到达当前目标点后发布
         self.create_subscription(
@@ -391,6 +411,21 @@ class WebGateway(Node):
             }
             self.fix_time = time.monotonic()
             self.topic_times["fix"] = self.fix_time
+
+    def _on_ultrasonic(self, message: Range) -> None:
+        with self.lock:
+            self.ultrasonic_range = round(float(message.range), 3)
+            self.ultrasonic_time = time.monotonic()
+            self.topic_times["ultrasonic"] = self.ultrasonic_time
+
+    def _on_escape_path(self, message: Path) -> None:
+        with self.lock:
+            self.escape_path_points = [
+                [round(p.pose.position.x, 3), round(p.pose.position.y, 3)]
+                for p in message.poses
+            ]
+            self.escape_path_time = time.monotonic()
+            self.topic_times["escape_path"] = self.escape_path_time
 
     def _on_map(self, message: OccupancyGrid) -> None:
         """OccupancyGrid → PNG：黑=占据 白=空闲 灰=未知；行序翻转为上北显示。"""
@@ -1441,7 +1476,18 @@ class WebGateway(Node):
             age = None if not self.scan_time else round(now - self.scan_time, 2)
             points = self.scan_points
             range_max = self.scan_range_max
-        return {"age_s": age, "range_max": range_max, "points": points}
+            # 脱困路径超过 1s 未更新视为已退出脱困模式，不再显示
+            escape_path = (
+                self.escape_path_points
+                if self.escape_path_time and now - self.escape_path_time < 1.0
+                else None
+            )
+        return {
+            "age_s": age,
+            "range_max": range_max,
+            "points": points,
+            "escape_path": escape_path,
+        }
 
     def health_snapshot(self) -> dict:
         return {
@@ -1485,6 +1531,11 @@ class WebGateway(Node):
             )
             fix = dict(self.fix) if self.fix is not None else None
             fix_age = None if not self.fix_time else round(now - self.fix_time, 2)
+            ultrasonic = self.ultrasonic_range
+            ultrasonic_age = (
+                None if not self.ultrasonic_time
+                else round(now - self.ultrasonic_time, 2)
+            )
             map_info = dict(self.map_info) if self.map_info is not None else None
             map_age = None if not self.map_time else round(now - self.map_time, 2)
         return {
@@ -1503,6 +1554,7 @@ class WebGateway(Node):
             },
             "battery_voltage": None,  # reserved for the real motor driver
             "gps": {"fix": fix, "age_s": fix_age},
+            "ultrasonic": {"range": ultrasonic, "age_s": ultrasonic_age},
             "map": {"info": map_info, "age_s": map_age},
             "mapping": {
                 "active": self.mapping_active,

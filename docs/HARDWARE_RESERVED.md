@@ -32,7 +32,10 @@
 
 - 下发：订阅 `/ackermann_cmd`（car_interfaces/AckermannCommand：float32[2] 后轮速
   rad/s，左后/右后 + float32 前轮转向角 rad），换算成车体 (vx, vz) 后按
-  WHEELTEC 串口协议写入 STM32（转向角→舵机由固件内部完成；v≈0 时 vz 强制为 0）。
+  WHEELTEC 串口协议写入 STM32（转向角→舵机由固件内部完成；v≈0 时 vz 强制为 0；
+  **倒车 vx<0 时 vz 翻号**——固件由 vz 解算舵机角按前进假设处理、不随 vx 符号
+  自动反向，不翻号则前进/倒车共用同一舵机角，车沿同一弧线往复，见
+  `motor_driver.ackermann_to_firmware_velocity`）。
 - 回读：发布 `/motor_feedback`（car_interfaces/MotorFeedback：float32[2] 实际后轮速
   rad/s 同序 + float32 转向角 rad + float32 电压 V），10Hz 即可。
 - `motor_driver.py` 已实现 WHEELTEC 二进制协议（实机时 `simulate:=false`），编解码
@@ -100,3 +103,10 @@ Linux 上设备一般为 `/dev/ttyACM*`（节点默认 `/dev/ttyACM0`，参数 `
   `rear_camera_device`）。遥控页前后双画面（`/api/camera.jpg` / `/api/camera_rear.jpg`）。
 - `/imu/data`：仿真已桥接备用；实机由 `motor_driver` 从上行帧中的 STM32 板载 IMU
   原始数据发布（`publish_imu` 参数控制，默认开）。
+- `/ultrasonic/range`（sensor_msgs/Range）：车尾 **HC-SR04 超声波**（GPIO 直驱，
+  Trig=GPIO14/TXD1，Echo=GPIO15/RXD1，**Echo 5V 电平必须经分压模块**再接 GPIO），
+  由 `ultrasonic_driver` 节点以 10Hz 发布（仅有效测量；超时/无回波不发布）。
+  用途：雷达 <0.15m 盲区补充——avoidance_node 在脱困倒车（recovering /
+  escape_retrying）中检测到后方 < `ultrasonic_stop_distance`（默认 0.25m）时
+  立即停止倒车并规划脱困路径；无数据或数据过期（>0.5s）不影响原有逻辑。
+  依赖 `sudo apt install python3-libgpiod gpiod`。

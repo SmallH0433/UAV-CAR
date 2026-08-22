@@ -210,6 +210,13 @@ def generate_launch_description():
             'simulate': motor_simulate,
         }],
     )
+    # HC-SR04 车尾超声波（GPIO14/15 直驱）：脱困倒车后方盲区急停
+    ultrasonic = Node(
+        package='car_nodes',
+        executable='ultrasonic_driver_node',
+        name='ultrasonic_driver_node',
+        output='screen',
+    )
     web_gateway = Node(
         package='car_sim',
         executable='web_gateway',
@@ -317,6 +324,7 @@ def generate_launch_description():
         command_gateway,
         chassis_controller,
         motor_driver,
+        ultrasonic,
         web_gateway,
         gps,
         lidar_static_tf,
