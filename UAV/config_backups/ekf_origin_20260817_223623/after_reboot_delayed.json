@@ -1,0 +1,73 @@
+{
+  "scope": "read_only_ekf_origin_audit",
+  "device": "COM8",
+  "heartbeats": [
+    {
+      "armed": false,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3
+    },
+    {
+      "armed": false,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3
+    },
+    {
+      "armed": false,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3
+    },
+    {
+      "armed": false,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3
+    },
+    {
+      "armed": false,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3
+    }
+  ],
+  "all_heartbeats_disarmed": true,
+  "parameters": {
+    "AHRS_OPTIONS": {
+      "value": 24.0,
+      "type": 4
+    },
+    "AHRS_ORIGIN_LAT": {
+      "value": 22.135278701782227,
+      "type": 9
+    },
+    "AHRS_ORIGIN_LON": {
+      "value": 113.54499816894531,
+      "type": 9
+    },
+    "AHRS_ORIGIN_ALT": {
+      "value": 0.0,
+      "type": 9
+    }
+  },
+  "runtime": {
+    "GLOBAL_POSITION_INT": {
+      "latitude_e7": 0,
+      "longitude_e7": 0,
+      "altitude_msl_mm": 260,
+      "relative_altitude_mm": 240
+    },
+    "EKF_STATUS_REPORT": {
+      "flags": 231,
+      "velocity_variance": 0.0,
+      "position_horizontal_variance": 0.000871853728312999,
+      "position_vertical_variance": 0.003804628038778901
+    }
+  },
+  "parameter_writes": 0,
+  "mode_commands": 0,
+  "arm_commands": 0,
+  "motor_commands": 0
+}

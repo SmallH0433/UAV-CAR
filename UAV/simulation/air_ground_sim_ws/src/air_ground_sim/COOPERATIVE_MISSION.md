@@ -30,8 +30,9 @@ Gazebo Harmonic（动力学、碰撞、传感器、空域可视物）
                           │
                           ▼
 ROS 2 感知与定位
-  ├─ UAV: 2D/3D LiDAR + stereo depth + ultrasonic → 扇区/斥力融合
-  ├─ UAV: 下视相机 → AprilTag 位姿/图像误差
+  ├─ UAV: 3D LiDAR + OV9281 stereo depth → 扇区/斥力融合
+  ├─ UAV: 下视 OV9281 + ToF → 光流、AprilTag、甲板相对高度
+  ├─ UAV: GNSS + HMC5883 + barometer + IMU → 飞行状态估计输入
   └─ UGV: wheel odom + IMU + AMCL + scan → EKF/map pose
                           │
                           ▼
@@ -52,25 +53,19 @@ ROS 2 感知与定位
 
 | 载荷 | 仿真实现 | ROS 2 输出 | 主要用途 |
 |---|---|---|---|
-| 两轴云台 RGB | yaw/pitch 关节相机 | `/uav/gimbal/image_raw`、`camera_info` | 搜索、观察、人工态势感知 |
-| 固定下视相机 | 向下光学坐标系 | `/vision/image_raw` | AprilTag 精准降落 |
-| 双目左右目 | 10 cm 基线 | `/uav/stereo/{left,right}/image_raw` | 双目视觉算法输入 |
-| 双目深度代理 | Gazebo RGB-D | `/uav/stereo/depth/depth_image` | 近场深度避障 |
-| 2D LiDAR | 水平 360° 扫描 | `/uav/scan` | 平面避障与兼容传统算法 |
+| GNSS / HMC5883 / 气压计 | NavSat、Magnetometer、AirPressure | `/uav/gnss/fix`、`/uav/magnetometer`、`/uav/barometer` | 位置、航向和气压高度输入 |
+| 下视 OV9281 | 640×400、20 Hz、单色全局快门等效 | `/vision/image_raw` | 光流与 AprilTag 精准降落 |
+| 下视 ToF | 9 ray 窄视场、30 Hz | `/uav/downward_tof/scan` | 光流尺度和甲板相对高度 |
+| 双目 OV9281 | 12 cm 基线、同步参数 | `/uav/stereo/{left,right}/image_raw` | 双目深度与 VIO 输入 |
+| 双目深度处理输出 | Gazebo RGB-D 代理实机 stereo_image_proc | `/uav/stereo/depth/depth_image` | 近场深度避障 |
 | 3D LiDAR | 多线球形 GPU ray | `/uav/lidar3d/points` | 上下/侧向三维障碍 |
-| 六向超声波 | 共用三维几何采样，独立噪声/延迟/丢包 | `/uav/range/{front,rear,left,right,up,down}` | 近场冗余与离地高度 |
-
-Gazebo Harmonic 8 没有与真实超声换能器完全等价的原生 sonar 传播模型，所以六向超声
-波不重复运行六套昂贵 ray tracer：它从同一份 3D 几何中提取各方向锥体距离，再分别
-注入量程、饱和、噪声、延迟和丢包。这样可以验证 ROS 驱动契约、融合与故障逻辑，
-但不声称模拟软材料吸声、镜面反射、串扰和温湿度效应。
 
 默认传感器分辨率/频率采用 WSL 软件渲染性能档。它们用于稳定的多传感器闭环测试，
-不是相机或雷达最终选型参数；实机配置中的超时更严格。
+不是 OV9281 的 120 Hz 硬件上限；实机配置中的超时更严格。
 
 ## 4. 无人机避障逻辑
 
-`uav_perception` 将四类传感器转换到机体 FLU 坐标系并输出：
+`uav_perception` 将 3D LiDAR、双目深度和下视 ToF 转换到机体 FLU 坐标系并输出：
 
 - 前、后、左、右、上、下六个最近障碍距离；
 - 各来源最小值和帧率/数据年龄；

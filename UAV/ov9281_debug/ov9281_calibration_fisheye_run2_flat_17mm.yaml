@@ -1,0 +1,25 @@
+%YAML:1.0
+---
+camera_model: fisheye
+camera_matrix: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ 7.9776709632302493e+02, 0., 6.4974110070522295e+02, 0.,
+       8.0558982760114282e+02, 4.3028534496839427e+02, 0., 0., 1. ]
+distortion_coefficients: !!opencv-matrix
+   rows: 4
+   cols: 1
+   dt: d
+   data: [ -5.8237347119390381e-02, 3.9079239711689984e-01,
+       -3.3717017566394096e+00, 1.9544633102697681e+01 ]
+image_width: 1280
+image_height: 800
+checkerboard_corners_cols: 9
+checkerboard_corners_rows: 6
+checkerboard_square_size_m: 1.7000000000000001e-02
+rms_reprojection_error_px: 2.4921118541989690e-01
+mean_view_rms_px: 2.3983272822553273e-01
+max_view_rms_px: 5.1715641070355056e-01
+usable_images: 20
+rejected_images: 0

@@ -61,6 +61,7 @@ class FollowModeManager:
         mode_request_timeout_s: float = 3.0,
         mode_request_retry_s: float = 0.5,
         allowed_entry_modes: tuple[str, ...] = ("ALT_HOLD", "LOITER", "POSHOLD"),
+        allow_preexisting_guided: bool = True,
     ) -> None:
         if guided_confirmations < 1:
             raise ValueError("guided_confirmations must be positive")
@@ -70,6 +71,7 @@ class FollowModeManager:
         self.mode_request_timeout_s = mode_request_timeout_s
         self.mode_request_retry_s = mode_request_retry_s
         self.allowed_entry_modes = tuple(mode.upper() for mode in allowed_entry_modes)
+        self.allow_preexisting_guided = bool(allow_preexisting_guided)
         self.state = ModeManagerState.DISABLED
         self._entry_mode: str | None = None
         self._owns_guided = False
@@ -149,6 +151,15 @@ class FollowModeManager:
 
         if self.state in (ModeManagerState.DISABLED, ModeManagerState.WAIT_PREREQUISITES):
             if mode == "GUIDED":
+                if not self.allow_preexisting_guided:
+                    self.state = ModeManagerState.FAULT_LOCKOUT
+                    return self._decision(
+                        request_mode=None,
+                        allow_follow=False,
+                        send_zero=False,
+                        lockout=True,
+                        reason="PREEXISTING_GUIDED_NOT_OWNED",
+                    )
                 self._entry_mode = None
                 self._owns_guided = False
             elif mode in self.allowed_entry_modes:

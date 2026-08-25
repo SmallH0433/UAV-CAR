@@ -1,0 +1,15 @@
+[Unit]
+Description=OV9281 dual-tag follow-readiness tone (manual, no control)
+Requires=ov9281-vision.service
+After=ov9281-vision.service
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=/home/PI/ov9281_debug
+ExecStart=/home/PI/venvs/landing/bin/python /home/PI/ov9281_debug/ov9281_follow_readiness_tone.py --config /home/PI/ov9281_debug/ov9281_follow_readiness_tone_20260817.json
+Restart=no
+KillSignal=SIGINT
+TimeoutStopSec=5
+
+# Deliberately no [Install] section: a serial-owning monitor must not autostart.

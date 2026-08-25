@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "scope": "ov9281_candidate_offline_sitl_and_real_receive_only",
+  "flight_use_approved": false,
+  "vision": {
+    "status_url": "http://127.0.0.1:8765/api/status",
+    "poll_hz": 10.0,
+    "camera_owner": "ov9281-vision.service",
+    "adapter_opens_camera": false,
+    "adapter_opens_web_port": false
+  },
+  "camera": {
+    "model": "OV9281",
+    "analysis_size": [1280, 800],
+    "preview_size": [640, 400],
+    "pixel_source": "Y_MONO",
+    "calibration": "/home/PI/ov9281_debug/ov9281_calibration_fisheye_run2_flat_17mm.yaml",
+    "range_correction": "/home/PI/ov9281_debug/ov9281_range_correction_20260813.json",
+    "measured_analysis_hz": 10.0
+  },
+  "target": {
+    "family": "tag36h11",
+    "id": 0,
+    "size_m": 0.135
+  },
+  "tracker": {
+    "alpha": 0.65,
+    "beta": 0.08,
+    "max_residual_m": 0.25,
+    "acquire_count": 5,
+    "predict_until_s": 0.25,
+    "hold_after_s": 0.70
+  },
+  "controller_candidate": {
+    "coordinate_frame": "MAV_FRAME_LOCAL_NED",
+    "command_rate_hz": 10.0,
+    "kp_xy": 0.4,
+    "deadband_m": 0.05,
+    "max_speed_mps": 1.0,
+    "max_accel_mps2": 1.0,
+    "max_feedforward_mps": 0.5,
+    "vertical_velocity_mps": 0.0,
+    "yaw_rate_rad_s": 0.0,
+    "approved_scope": "offline_and_local_sitl_only"
+  },
+  "pixhawk": {
+    "serial": "/dev/serial0",
+    "baud": 57600,
+    "receive_only": true
+  },
+  "rc_authorization": {
+    "channel": 7,
+    "enable_pwm_min": 1800,
+    "disable_pwm_max": 1200,
+    "timeout_s": 0.5,
+    "fail_closed": true
+  },
+  "camera_to_body": {
+    "enabled": true,
+    "frame": "CAMERA_OPTICAL_TO_BODY_FRD_ORIENTATION_MEASURED",
+    "status": "nominal_orientation_and_zero_translation_confirmed",
+    "orientation_observed_20260813": {
+      "image_left": "BODY_FORWARD",
+      "image_bottom": "BODY_LEFT",
+      "image_right": "BODY_BACK",
+      "image_top": "BODY_RIGHT",
+      "body_down": "CAMERA_OPTICAL_Z"
+    },
+    "rotation_camera_optical_to_body_frd": [
+      [-1.0, 0.0, 0.0],
+      [0.0, -1.0, 0.0],
+      [0.0, 0.0, 1.0]
+    ],
+    "translation_m": [0.0, 0.0, 0.0],
+    "formula": {
+      "body_forward_m": "-camera_x_m",
+      "body_right_m": "-camera_y_m",
+      "body_down_m": "camera_z_m"
+    },
+    "rotation_enabled_for_real_control": false,
+    "translation_source": "user_confirmed_camera_installed_at_body_center",
+    "approved_scope": "disarmed_bench_and_sitl_only",
+    "legacy_imx296_extrinsics_allowed": false
+  },
+  "safety": {
+    "control_enabled": false,
+    "mavlink_transmit": false,
+    "parameter_write": false,
+    "mode_change": false,
+    "arm_command": false,
+    "motor_command": false,
+    "real_vehicle_velocity_output_blocked": true
+  }
+}

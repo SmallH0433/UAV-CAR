@@ -1,0 +1,86 @@
+{
+  "source_file": "D:\\Codex\\UAV\\qav280_migration\\stage1_enable_interfaces.json",
+  "requested": 11,
+  "written": 6,
+  "unchanged": 5,
+  "failed": 0,
+  "results": [
+    {
+      "name": "FRAME_CLASS",
+      "before": 0.0,
+      "requested": 1.0,
+      "after": 1.0,
+      "status": "WRITTEN"
+    },
+    {
+      "name": "FRAME_TYPE",
+      "before": 1.0,
+      "requested": 1.0,
+      "after": 1.0,
+      "status": "UNCHANGED"
+    },
+    {
+      "name": "PLND_ENABLED",
+      "before": 0.0,
+      "requested": 1.0,
+      "after": 1.0,
+      "status": "WRITTEN"
+    },
+    {
+      "name": "FLOW_TYPE",
+      "before": 0.0,
+      "requested": 5.0,
+      "after": 5.0,
+      "status": "WRITTEN"
+    },
+    {
+      "name": "RNGFND1_TYPE",
+      "before": 0.0,
+      "requested": 10.0,
+      "after": 10.0,
+      "status": "WRITTEN"
+    },
+    {
+      "name": "SERIAL1_PROTOCOL",
+      "before": 2.0,
+      "requested": 2.0,
+      "after": 2.0,
+      "status": "UNCHANGED"
+    },
+    {
+      "name": "SERIAL1_BAUD",
+      "before": 57.0,
+      "requested": 57.0,
+      "after": 57.0,
+      "status": "UNCHANGED"
+    },
+    {
+      "name": "SERIAL1_OPTIONS",
+      "before": 0.0,
+      "requested": 0.0,
+      "after": 0.0,
+      "status": "UNCHANGED"
+    },
+    {
+      "name": "SERIAL2_PROTOCOL",
+      "before": 2.0,
+      "requested": 1.0,
+      "after": 1.0,
+      "status": "WRITTEN"
+    },
+    {
+      "name": "SERIAL2_BAUD",
+      "before": 57.0,
+      "requested": 115.0,
+      "after": 115.0,
+      "status": "WRITTEN"
+    },
+    {
+      "name": "SERIAL2_OPTIONS",
+      "before": 0.0,
+      "requested": 0.0,
+      "after": 0.0,
+      "status": "UNCHANGED"
+    }
+  ]
+}

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sys
 import time
 from collections import Counter
@@ -37,14 +38,18 @@ from target_tracker import (  # noqa: E402
 )
 
 
-SITL_ENDPOINT = "udpin:127.0.0.1:14550"
+SITL_ENDPOINT = os.environ.get("UAV_FOLLOW_SITL_ENDPOINT", "udpin:127.0.0.1:14550")
 RATE_HZ = 10.0
 CONTROL_DURATION_S = 32.0
 TAKEOFF_ALT_M = 3.0
-MAX_COMMAND_SPEED_MPS = 0.20
+MAX_COMMAND_SPEED_MPS = float(os.environ.get("UAV_FOLLOW_MAX_SPEED_MPS", "0.20"))
+MAX_COMMAND_ACCEL_MPS2 = float(os.environ.get("UAV_FOLLOW_MAX_ACCEL_MPS2", "0.20"))
 MAX_FOLLOW_ERROR_M = 0.30
-OUTPUT_JSONL = WORKSPACE / "output/apriltag_follow_sitl_closed_loop_20260807.jsonl"
-OUTPUT_SUMMARY = WORKSPACE / "output/apriltag_follow_sitl_closed_loop_20260807_summary.json"
+OUTPUT_STEM = os.environ.get(
+    "UAV_FOLLOW_OUTPUT_STEM", "apriltag_follow_sitl_closed_loop_20260807"
+)
+OUTPUT_JSONL = WORKSPACE / f"output/{OUTPUT_STEM}.jsonl"
+OUTPUT_SUMMARY = WORKSPACE / f"output/{OUTPUT_STEM}_summary.json"
 
 
 def set_message_interval(connection, message_id: int, rate_hz: float) -> None:
@@ -249,8 +254,12 @@ def land_and_wait(connection, timeout_s: float = 30.0) -> bool:
 
 
 def run() -> tuple[list[dict], dict]:
-    if SITL_ENDPOINT != "udpin:127.0.0.1:14550":
+    if not SITL_ENDPOINT.startswith("udpin:127.0.0.1:"):
         raise RuntimeError("non-local MAVLink endpoints are forbidden in this test")
+    if not 0.0 < MAX_COMMAND_SPEED_MPS <= 1.0:
+        raise RuntimeError("SITL candidate speed limit must be in (0, 1.0] m/s")
+    if not 0.0 < MAX_COMMAND_ACCEL_MPS2 <= 1.0:
+        raise RuntimeError("SITL candidate acceleration limit must be in (0, 1.0] m/s^2")
     connection = mavutil.mavlink_connection(
         SITL_ENDPOINT,
         source_system=250,
@@ -260,7 +269,7 @@ def run() -> tuple[list[dict], dict]:
     heartbeat = connection.wait_heartbeat(timeout=20)
     if heartbeat is None or connection.target_system != 1:
         raise RuntimeError("local ArduCopter SITL heartbeat not received")
-    print("SITL_ONLY_ENDPOINT_OK udpin:127.0.0.1:14550")
+    print(f"SITL_ONLY_ENDPOINT_OK {SITL_ENDPOINT}")
 
     for message_id in (0, 30, 33):
         set_message_interval(connection, message_id, 20.0)
@@ -300,7 +309,7 @@ def run() -> tuple[list[dict], dict]:
     tracker = AlphaBetaTargetTracker()
     controller = HorizontalFollowController(
         max_speed_mps=MAX_COMMAND_SPEED_MPS,
-        max_accel_mps2=0.20,
+        max_accel_mps2=MAX_COMMAND_ACCEL_MPS2,
     )
     state_machine = FollowSafetyStateMachine(predict_s=0.25, hold_s=0.70)
     state = {
@@ -452,6 +461,7 @@ def run() -> tuple[list[dict], dict]:
         "max_command_speed_mps": max_speed,
         "max_follow_error_m": max_follow_error,
         "speed_limit_mps": MAX_COMMAND_SPEED_MPS,
+        "acceleration_limit_mps2": MAX_COMMAND_ACCEL_MPS2,
         "follow_error_limit_m": MAX_FOLLOW_ERROR_M,
         "target_loss_hold_observed": hold_observed,
         "rc_disable_observed": disabled_observed,

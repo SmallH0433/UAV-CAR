@@ -13,6 +13,8 @@
     <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
     <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
     <plugin filename="gz-sim-navsat-system" name="gz::sim::systems::NavSat"/>
+    <plugin filename="gz-sim-magnetometer-system" name="gz::sim::systems::Magnetometer"/>
+    <plugin filename="gz-sim-air-pressure-system" name="gz::sim::systems::AirPressure"/>
     <scene><ambient>0.78 0.78 0.78 1</ambient><background>0.55 0.70 0.87 1</background><sky/></scene>
     <spherical_coordinates>
       <latitude_deg>22.1350000</latitude_deg><longitude_deg>113.5447296</longitude_deg>

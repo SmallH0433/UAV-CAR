@@ -1,0 +1,12 @@
+[Unit]
+Description=OV9281 propeller-free AprilTag follow observer
+After=ov9281-vision.service
+Requires=ov9281-vision.service
+
+[Service]
+Type=simple
+ExecStart=/home/PI/venvs/landing/bin/python /home/PI/ov9281_debug/ov9281_follow_observer.py --config /home/PI/ov9281_debug/ov9281_follow_candidate_1ms_20260813.json --duration-s 3600 --output /home/PI/ov9281_debug/follow_observer_latest.jsonl --status /home/PI/ov9281_debug/follow_observer_status.json --buzzer
+Restart=no
+
+[Install]
+WantedBy=default.target

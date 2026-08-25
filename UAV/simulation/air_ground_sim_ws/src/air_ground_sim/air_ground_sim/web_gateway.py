@@ -22,8 +22,16 @@ from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import Odometry, Path
 import rclpy
 from rclpy.action import ActionClient
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    DurabilityPolicy,
+    HistoryPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 from sensor_msgs.msg import Image, LaserScan
 from std_msgs.msg import Bool, String
 from std_srvs.srv import SetBool, Trigger
@@ -41,7 +49,6 @@ from .security_policy import (
 
 
 CAMERA_TOPICS = {
-    "gimbal": "/uav/gimbal/image_raw",
     "downward": "/vision/image_raw",
     "landing": "/apriltag/debug_image",
     "stereo_left": "/uav/stereo/left/image_raw",
@@ -64,6 +71,38 @@ def requested_camera_keys(
         for key, deadline in interest_until.items()
         if key in CAMERA_TOPICS and float(deadline) > float(now_s)
     }
+
+
+def camera_frame_is_fresh(
+    timestamp: Optional[float], now_s: float, stale_after_s: float
+) -> bool:
+    """Return whether a JPEG cache entry is recent enough to serve as live video."""
+
+    return (
+        timestamp is not None
+        and float(now_s) >= float(timestamp)
+        and float(now_s) - float(timestamp) <= float(stale_after_s)
+    )
+
+
+def camera_qos_profile(reliability: str) -> QoSProfile:
+    """Use depth one so live video never queues stale frames."""
+
+    normalized = str(reliability).strip().lower()
+    if normalized not in {"reliable", "best_effort"}:
+        raise ValueError(
+            "camera_qos_reliability must be 'reliable' or 'best_effort'"
+        )
+    return QoSProfile(
+        history=HistoryPolicy.KEEP_LAST,
+        depth=1,
+        reliability=(
+            ReliabilityPolicy.RELIABLE
+            if normalized == "reliable"
+            else ReliabilityPolicy.BEST_EFFORT
+        ),
+        durability=DurabilityPolicy.VOLATILE,
+    )
 
 
 @dataclass
@@ -112,6 +151,9 @@ class DashboardGateway(Node):
         self.declare_parameter("camera_max_rate_hz", 5.0)
         self.declare_parameter("camera_stream_idle_timeout_s", 3.0)
         self.declare_parameter("camera_stale_after_s", 3.0)
+        self.declare_parameter("camera_encoder_threads", 2)
+        self.declare_parameter("executor_threads", 4)
+        self.declare_parameter("camera_qos_reliability", "best_effort")
         self.declare_parameter("jpeg_quality", 72)
         self.declare_parameter("production_mode", False)
         self.declare_parameter("auth_token_env", "AIR_GROUND_CONTROL_TOKEN")
@@ -188,6 +230,15 @@ class DashboardGateway(Node):
             self.camera_interval * 2.0,
             float(self.get_parameter("camera_stale_after_s").value),
         )
+        self.camera_encoder_threads = max(
+            1, min(4, int(self.get_parameter("camera_encoder_threads").value))
+        )
+        self.executor_threads = max(
+            2, min(8, int(self.get_parameter("executor_threads").value))
+        )
+        self.camera_qos = camera_qos_profile(
+            str(self.get_parameter("camera_qos_reliability").value)
+        )
         self.jpeg_quality = int(self.get_parameter("jpeg_quality").value)
         self.production_mode = bool(self.get_parameter("production_mode").value)
         self.require_request_id = bool(self.get_parameter("require_request_id").value)
@@ -221,7 +272,6 @@ class DashboardGateway(Node):
             if not self.audit.available:
                 raise RuntimeError("production command control requires a writable audit journal")
 
-        self.bridge = CvBridge()
         self.lock = threading.RLock()
         self.commands: queue.Queue[GatewayCommand] = queue.Queue(maxsize=64)
         self.shutdown_event = threading.Event()
@@ -244,19 +294,41 @@ class DashboardGateway(Node):
             "docking": {},
             "navigation": {},
             "command_mux": {},
-            "gimbal": {},
-            "ultrasonic": {},
+            "optical_flow": {},
             "system": {},
             "ugv": {"pose": None, "speed_mps": 0.0, "minimum_scan_m": None},
             "ugv_control_mux": {},
             "chassis_adapter": {},
             "ugv_gateway": {},
-            "paths": {"ugv_global": []},
+            "paths": {
+                "ugv_global": [],
+                "ugv_global_for_state": "",
+                "ugv_global_for_transition": None,
+                "ugv_global_for_goal_status": "",
+            },
         }
         self.topic_times: Dict[str, float] = {}
         self.images: Dict[str, bytes] = {}
         self.image_times: Dict[str, float] = {}
+        self.image_source_times: Dict[str, float] = {}
+        self.image_enqueue_times: Dict[str, float] = {}
+        self.pending_images: Dict[str, tuple[Image, float]] = {}
+        self.queued_cameras: set[str] = set()
+        self.camera_encode_queue: queue.Queue[Optional[str]] = queue.Queue()
+        self.camera_workers = [
+            threading.Thread(
+                target=self.camera_encode_worker,
+                name=f"camera-jpeg-{index + 1}",
+                daemon=True,
+            )
+            for index in range(self.camera_encoder_threads)
+        ]
+        for worker in self.camera_workers:
+            worker.start()
         self.camera_subscriptions = {}
+        # Isolate image reception from control/status callbacks and allow
+        # lower-rate streams to run even when another image topic is ready.
+        self.camera_callback_group = ReentrantCallbackGroup()
         self.dashboard_clients = 0
         self.camera_interest_until: Dict[str, float] = {}
 
@@ -267,8 +339,7 @@ class DashboardGateway(Node):
             ("/uav/docking/status", "docking"),
             ("/uav/navigation/status", "navigation"),
             ("/uav/command_mux/status", "command_mux"),
-            ("/uav/gimbal/status", "gimbal"),
-            ("/uav/ultrasonic/status", "ultrasonic"),
+            ("/uav/optical_flow/status", "optical_flow"),
             ("/system/health", "system"),
             ("/ugv/control_mux/status", "ugv_control_mux"),
             ("/ugv/chassis_adapter/status", "chassis_adapter"),
@@ -418,7 +489,10 @@ class DashboardGateway(Node):
                         return
                     with gateway.lock:
                         image = gateway.images.get(name)
-                    if image is None:
+                        image_time = gateway.image_times.get(name)
+                    if image is None or not camera_frame_is_fresh(
+                        image_time, time.monotonic(), gateway.camera_stale_after
+                    ):
                         self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "camera_not_ready", "camera": name})
                         return
                     try:
@@ -589,7 +663,8 @@ class DashboardGateway(Node):
                 Image,
                 CAMERA_TOPICS[key],
                 lambda message, name=key: self.on_image(name, message),
-                qos_profile_sensor_data,
+                self.camera_qos,
+                callback_group=self.camera_callback_group,
             )
             with self.lock:
                 self.camera_subscriptions[key] = subscription
@@ -632,15 +707,70 @@ class DashboardGateway(Node):
             for pose in poses[::stride]
         ]
         with self.lock:
+            mission = self.latest.get("mission") or {}
             self.latest["paths"]["ugv_global"] = points
+            self.latest["paths"]["ugv_global_for_state"] = str(
+                mission.get("state", "")
+            )
+            self.latest["paths"]["ugv_global_for_transition"] = mission.get(
+                "transitions"
+            )
+            self.latest["paths"]["ugv_global_for_goal_status"] = str(
+                mission.get("ugv_goal_status", "")
+            )
             self.topic_times["ugv_path"] = time.monotonic()
 
     def on_image(self, key: str, message: Image) -> None:
         now = time.monotonic()
-        if now - self.image_times.get(key, 0.0) < self.camera_interval:
-            return
+        should_enqueue = False
+        with self.lock:
+            self.image_source_times[key] = now
+            if now - self.image_enqueue_times.get(key, 0.0) < self.camera_interval:
+                return
+            self.image_enqueue_times[key] = now
+            self.pending_images[key] = (message, now)
+            if key not in self.queued_cameras:
+                self.queued_cameras.add(key)
+                should_enqueue = True
+        if should_enqueue:
+            self.camera_encode_queue.put_nowait(key)
+
+    def camera_encode_worker(self) -> None:
+        """Encode only the newest pending frame without blocking ROS callbacks."""
+
+        bridge = CvBridge()
+        while not self.shutdown_event.is_set():
+            try:
+                key = self.camera_encode_queue.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            if key is None:
+                self.camera_encode_queue.task_done()
+                break
+            with self.lock:
+                pending = self.pending_images.pop(key, None)
+            if pending is None:
+                with self.lock:
+                    self.queued_cameras.discard(key)
+                self.camera_encode_queue.task_done()
+                continue
+            message, source_time = pending
+            self.encode_camera_frame(bridge, key, message, source_time)
+            requeue = False
+            with self.lock:
+                if key in self.pending_images:
+                    requeue = True
+                else:
+                    self.queued_cameras.discard(key)
+            if requeue:
+                self.camera_encode_queue.put_nowait(key)
+            self.camera_encode_queue.task_done()
+
+    def encode_camera_frame(
+        self, bridge: CvBridge, key: str, message: Image, source_time: float
+    ) -> None:
         try:
-            frame = self.bridge.imgmsg_to_cv2(message, desired_encoding="bgr8")
+            frame = bridge.imgmsg_to_cv2(message, desired_encoding="bgr8")
             if frame.shape[1] > 800:
                 scale = 800.0 / frame.shape[1]
                 frame = cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
@@ -651,10 +781,11 @@ class DashboardGateway(Node):
             self.get_logger().warning(f"Camera {key} conversion failed: {error}")
             return
         if success:
+            encoded_at = time.monotonic()
             with self.lock:
                 self.images[key] = encoded.tobytes()
-                self.image_times[key] = now
-                self.topic_times[f"camera_{key}"] = now
+                self.image_times[key] = encoded_at
+                self.topic_times[f"camera_{key}"] = source_time
 
     def health_snapshot(self) -> dict:
         return {
@@ -774,19 +905,35 @@ class DashboardGateway(Node):
             topic_ages = {
                 key: round(now - timestamp, 2) for key, timestamp in self.topic_times.items()
             }
+            path_timestamp = self.topic_times.get("ugv_path")
+            copied["paths"]["ugv_global_age_s"] = (
+                None
+                if path_timestamp is None
+                else round(max(0.0, now - path_timestamp), 2)
+            )
             active_cameras = set(self.camera_subscriptions)
             cameras = {}
             for key in CAMERA_TOPICS:
                 timestamp = self.image_times.get(key)
                 age = None if timestamp is None else max(0.0, now - timestamp)
+                source_timestamp = self.image_source_times.get(key)
+                source_age = (
+                    None
+                    if source_timestamp is None
+                    else max(0.0, now - source_timestamp)
+                )
                 cameras[key] = {
                     "active": key in active_cameras,
                     "ready": bool(
                         key in active_cameras
-                        and age is not None
-                        and age <= self.camera_stale_after
+                        and camera_frame_is_fresh(
+                            timestamp, now, self.camera_stale_after
+                        )
                     ),
                     "age_s": None if age is None else round(age, 2),
+                    "source_age_s": (
+                        None if source_age is None else round(source_age, 2)
+                    ),
                 }
         copied.update(
             {
@@ -1055,6 +1202,10 @@ class DashboardGateway(Node):
 
     def destroy_node(self):
         self.shutdown_event.set()
+        for _ in self.camera_workers:
+            self.camera_encode_queue.put_nowait(None)
+        for worker in self.camera_workers:
+            worker.join(timeout=1.0)
         if rclpy.ok():
             self._cancel_operator_control()
         self.http_server.shutdown()
@@ -1065,11 +1216,14 @@ class DashboardGateway(Node):
 def main(args=None) -> None:
     rclpy.init(args=args)
     node = DashboardGateway()
+    executor = MultiThreadedExecutor(num_threads=node.executor_threads)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
+        executor.shutdown()
         try:
             node.destroy_node()
         except KeyboardInterrupt:

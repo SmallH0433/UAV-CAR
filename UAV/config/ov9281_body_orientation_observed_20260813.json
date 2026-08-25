@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "sensor": "OV9281",
+  "observation_date": "2026-08-13",
+  "evidence_image": "D:/Codex/UAV/ov9281_debug/installed_direction_marked.jpg",
+  "direction_source": "user visual confirmation after installation",
+  "image_to_body": {
+    "image_left": "BODY_FORWARD",
+    "image_bottom": "BODY_LEFT",
+    "image_right": "BODY_BACK",
+    "image_top": "BODY_RIGHT"
+  },
+  "camera_optical_axes": {
+    "x": "image_right",
+    "y": "image_bottom",
+    "z": "through_lens_downward"
+  },
+  "rotation_camera_optical_to_body_frd": [
+    [-1.0, 0.0, 0.0],
+    [0.0, -1.0, 0.0],
+    [0.0, 0.0, 1.0]
+  ],
+  "translation_m": [0.0, 0.0, 0.0],
+  "translation_source": "user_confirmed_camera_installed_at_body_center",
+  "formula": {
+    "body_forward_m": "-camera_x_m",
+    "body_right_m": "-camera_y_m",
+    "body_down_m": "camera_z_m"
+  },
+  "flight_use_approved": false,
+  "block_reason": "real flight output remains separately disabled pending complete flight-readiness checks"
+}

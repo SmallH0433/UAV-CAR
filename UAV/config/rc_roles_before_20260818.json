@@ -1,0 +1,122 @@
+{
+  "created_utc": "2026-08-18T07:08:05Z",
+  "vehicle": "real Pixhawk system 1 component 1",
+  "armed": false,
+  "switch_gate": "RC6_RC7_RC8_LOW",
+  "roles": {
+    "CH5": "flight_mode",
+    "CH6": "companion_follow",
+    "CH7_LOW": "optical_flow_source_set_1",
+    "CH7_MIDDLE_HIGH": "gps_source_sets_2_3",
+    "CH8": "companion_auto_landing"
+  },
+  "parameters": {
+    "EK3_SRC_OPTIONS": {
+      "value": 0.0,
+      "type": 4
+    },
+    "EK3_SRC1_POSXY": {
+      "value": 0.0,
+      "type": 2
+    },
+    "EK3_SRC1_VELXY": {
+      "value": 5.0,
+      "type": 2
+    },
+    "EK3_SRC1_POSZ": {
+      "value": 1.0,
+      "type": 2
+    },
+    "EK3_SRC1_VELZ": {
+      "value": 0.0,
+      "type": 2
+    },
+    "EK3_SRC1_YAW": {
+      "value": 1.0,
+      "type": 2
+    },
+    "EK3_SRC2_POSXY": {
+      "value": 0.0,
+      "type": 2
+    },
+    "EK3_SRC2_VELXY": {
+      "value": 5.0,
+      "type": 2
+    },
+    "EK3_SRC2_POSZ": {
+      "value": 2.0,
+      "type": 2
+    },
+    "EK3_SRC2_VELZ": {
+      "value": 0.0,
+      "type": 2
+    },
+    "EK3_SRC2_YAW": {
+      "value": 1.0,
+      "type": 2
+    },
+    "EK3_SRC3_POSXY": {
+      "value": 0.0,
+      "type": 2
+    },
+    "EK3_SRC3_VELXY": {
+      "value": 5.0,
+      "type": 2
+    },
+    "EK3_SRC3_POSZ": {
+      "value": 2.0,
+      "type": 2
+    },
+    "EK3_SRC3_VELZ": {
+      "value": 0.0,
+      "type": 2
+    },
+    "EK3_SRC3_YAW": {
+      "value": 1.0,
+      "type": 2
+    },
+    "FLTMODE_CH": {
+      "value": 5.0,
+      "type": 2
+    },
+    "RC5_OPTION": {
+      "value": 0.0,
+      "type": 4
+    },
+    "RC6_OPTION": {
+      "value": 0.0,
+      "type": 4
+    },
+    "RC8_OPTION": {
+      "value": 0.0,
+      "type": 4
+    },
+    "RC7_OPTION": {
+      "value": 0.0,
+      "type": 4
+    }
+  },
+  "desired": {
+    "EK3_SRC_OPTIONS": 0.0,
+    "EK3_SRC1_POSXY": 0.0,
+    "EK3_SRC1_VELXY": 5.0,
+    "EK3_SRC1_POSZ": 1.0,
+    "EK3_SRC1_VELZ": 0.0,
+    "EK3_SRC1_YAW": 1.0,
+    "EK3_SRC2_POSXY": 3.0,
+    "EK3_SRC2_VELXY": 3.0,
+    "EK3_SRC2_POSZ": 1.0,
+    "EK3_SRC2_VELZ": 3.0,
+    "EK3_SRC2_YAW": 1.0,
+    "EK3_SRC3_POSXY": 3.0,
+    "EK3_SRC3_VELXY": 3.0,
+    "EK3_SRC3_POSZ": 1.0,
+    "EK3_SRC3_VELZ": 3.0,
+    "EK3_SRC3_YAW": 1.0,
+    "FLTMODE_CH": 5.0,
+    "RC5_OPTION": 0.0,
+    "RC6_OPTION": 0.0,
+    "RC8_OPTION": 0.0,
+    "RC7_OPTION": 90.0
+  }
+}

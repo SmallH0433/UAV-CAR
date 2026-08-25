@@ -6,7 +6,7 @@
   qos_profile: CLOCK
 
 - ros_topic_name: /vision/image_raw
-  gz_topic_name: /world/air_ground/model/uav/link/imx296_sim_link/sensor/imx296/image
+  gz_topic_name: /uav/downward/image
   ros_type_name: sensor_msgs/msg/Image
   gz_type_name: gz.msgs.Image
   direction: GZ_TO_ROS
@@ -14,12 +14,40 @@
   lazy: true
 
 - ros_topic_name: /vision/camera_info
-  gz_topic_name: /world/air_ground/model/uav/link/imx296_sim_link/sensor/imx296/camera_info
+  gz_topic_name: /uav/downward/camera_info
   ros_type_name: sensor_msgs/msg/CameraInfo
   gz_type_name: gz.msgs.CameraInfo
   direction: GZ_TO_ROS
   qos_profile: SENSOR_DATA
   lazy: true
+
+- ros_topic_name: /uav/gnss/fix
+  gz_topic_name: /uav/gnss/fix
+  ros_type_name: sensor_msgs/msg/NavSatFix
+  gz_type_name: gz.msgs.NavSat
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+
+- ros_topic_name: /uav/magnetometer
+  gz_topic_name: /uav/magnetometer
+  ros_type_name: sensor_msgs/msg/MagneticField
+  gz_type_name: gz.msgs.Magnetometer
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+
+- ros_topic_name: /uav/barometer
+  gz_topic_name: /uav/barometer
+  ros_type_name: sensor_msgs/msg/FluidPressure
+  gz_type_name: gz.msgs.FluidPressure
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+
+- ros_topic_name: /uav/downward_tof/scan
+  gz_topic_name: /uav/downward_tof
+  ros_type_name: sensor_msgs/msg/LaserScan
+  gz_type_name: gz.msgs.LaserScan
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
 
 - ros_topic_name: /ugv/sim/cmd_vel
   gz_topic_name: /model/ground_vehicle/cmd_vel

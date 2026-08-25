@@ -75,8 +75,8 @@ def _make_nodes(context):
                 ),
                 Node(
                     package="air_ground_sim",
-                    executable="uav_gimbal_controller",
-                    name="uav_gimbal_controller",
+                    executable="uav_optical_flow",
+                    name="uav_optical_flow",
                     output="screen",
                     parameters=node_parameters,
                 ),
@@ -96,16 +96,6 @@ def _make_nodes(context):
                 ),
             ]
         )
-        if profile == "sim":
-            nodes.append(
-                Node(
-                    package="air_ground_sim",
-                    executable="uav_ultrasonic_adapter",
-                    name="uav_ultrasonic_adapter",
-                    output="screen",
-                    parameters=node_parameters,
-                )
-            )
     start_demo_motion = LaunchConfiguration("start_demo_motion").perform(context).lower()
     if profile == "sim" and start_demo_motion in ("1", "true", "yes", "on"):
         nodes.append(

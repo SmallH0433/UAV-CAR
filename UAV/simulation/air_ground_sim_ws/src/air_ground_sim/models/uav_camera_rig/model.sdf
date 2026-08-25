@@ -23,10 +23,9 @@
       <child>dock_link</child>
     </joint>
 
-    <link name="imx296_sim_link">
-      <!-- External belly-mounted nadir camera.  The 130-degree precision-
-           landing lens below preserves an unobstructed optical path and keeps
-           the coded part of the 360 mm marker visible at deck contact. -->
+    <link name="ov9281_down_link">
+      <!-- Belly-mounted monochrome global-shutter OV9281. The 2x2-binned
+           640x400 stream is shared by optical flow and AprilTag tracking. -->
       <pose relative_to="iris_with_standoffs::base_link">0.05 0 -0.09 0 0 0</pose>
       <gravity>false</gravity>
       <inertial>
@@ -46,16 +45,13 @@
           <diffuse>0.08 0.08 0.08 1</diffuse>
         </material>
       </visual>
-      <sensor name="imx296" type="camera">
+      <sensor name="ov9281_down" type="camera">
         <!-- Gazebo cameras look along +X; +90 deg pitch points +X toward world -Z. -->
         <pose>0 0 -0.012 0 1.57079632679 0</pose>
         <topic>/uav/downward/image</topic>
         <gz_frame_id>uav_camera_optical_frame</gz_frame_id>
         <always_on>true</always_on>
-        <!-- The control graph is resolution-independent. This performance
-             profile keeps SITL near real time under software rendering; the
-             real IMX296 driver still publishes its calibrated native stream. -->
-        <update_rate>3</update_rate>
+        <update_rate>20</update_rate>
         <visualize>false</visualize>
         <camera>
           <!-- 130-degree horizontal FOV gives about 116 degrees vertically at
@@ -63,12 +59,9 @@
                capture gate while retaining roughly 30 px at acquisition. -->
           <horizontal_fov>2.26892802759</horizontal_fov>
           <image>
-            <!-- Precision landing keeps more pixels than the monitoring
-                 cameras so a 360 mm deck marker remains decodable at the
-                 2.6 m acquisition height without an excessive render load. -->
             <width>640</width>
-            <height>480</height>
-            <format>R8G8B8</format>
+            <height>400</height>
+            <format>L8</format>
           </image>
           <clip>
             <near>0.04</near>
@@ -83,166 +76,125 @@
       </sensor>
     </link>
 
-    <joint name="imx296_mount" type="fixed">
+    <joint name="ov9281_down_mount" type="fixed">
       <parent>iris_with_standoffs::base_link</parent>
-      <child>imx296_sim_link</child>
+      <child>ov9281_down_link</child>
     </joint>
 
-    <!-- A real deployment uses a horizontal range sensor (or a 3D lidar
-         projected to LaserScan) for local collision avoidance.  This sensor
-         exposes the same /uav/scan contract without bypassing ArduPilot. -->
-    <link name="front_lidar_link">
-      <pose relative_to="iris_with_standoffs::base_link">0.10 0 0.03 0 0 0</pose>
-      <gravity>false</gravity>
-      <inertial>
-        <mass>0.08</mass>
-        <inertia><ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz></inertia>
-      </inertial>
-      <visual name="lidar_body">
-        <geometry><cylinder><radius>0.035</radius><length>0.04</length></cylinder></geometry>
-        <material><ambient>0.04 0.04 0.04 1</ambient><diffuse>0.10 0.10 0.10 1</diffuse></material>
-      </visual>
-      <sensor name="front_lidar" type="gpu_lidar">
-        <topic>/model/uav/front_scan</topic>
-        <gz_frame_id>uav_lidar_frame</gz_frame_id>
-        <always_on>true</always_on>
-        <update_rate>5</update_rate>
-        <visualize>false</visualize>
-        <lidar>
-          <scan>
-            <horizontal>
-              <samples>240</samples><resolution>1</resolution>
-              <min_angle>-3.14159265359</min_angle><max_angle>3.14159265359</max_angle>
-            </horizontal>
-          </scan>
-          <range><min>0.18</min><max>15.0</max><resolution>0.01</resolution></range>
-          <noise><type>gaussian</type><mean>0.0</mean><stddev>0.015</stddev></noise>
-        </lidar>
-      </sensor>
-    </link>
-
-    <joint name="front_lidar_mount" type="fixed">
-      <parent>iris_with_standoffs::base_link</parent>
-      <child>front_lidar_link</child>
-    </joint>
-
-    <!-- Two-axis EO gimbal. The camera looks along +X when both joints are at
-         zero. Positive pitch points the optical axis down, so the same camera
-         can inspect the route and acquire the landing tag. -->
-    <link name="gimbal_yaw_link">
-      <pose relative_to="iris_with_standoffs::base_link">0.12 0 -0.055 0 0 0</pose>
+    <!-- Flight-navigation sensor pod. The included Iris already owns the
+         1 kHz flight IMU; this link adds the external sensors that map to a
+         real GNSS/compass mast and flight-controller barometer. -->
+    <link name="avionics_sensor_link">
+      <pose relative_to="iris_with_standoffs::base_link">0 0 0.11 0 0 0</pose>
       <gravity>false</gravity>
       <inertial>
         <mass>0.045</mass>
-        <inertia><ixx>0.00004</ixx><iyy>0.00004</iyy><izz>0.00005</izz></inertia>
+        <inertia><ixx>0.00004</ixx><iyy>0.00004</iyy><izz>0.00004</izz></inertia>
       </inertial>
-      <visual name="yaw_motor">
-        <geometry><cylinder><radius>0.025</radius><length>0.025</length></cylinder></geometry>
-        <material><ambient>0.04 0.04 0.05 1</ambient><diffuse>0.10 0.10 0.12 1</diffuse></material>
+      <visual name="gnss_compass_body">
+        <geometry><cylinder><radius>0.030</radius><length>0.018</length></cylinder></geometry>
+        <material><ambient>0.08 0.08 0.08 1</ambient><diffuse>0.16 0.16 0.16 1</diffuse></material>
       </visual>
-    </link>
-    <joint name="gimbal_yaw_joint" type="revolute">
-      <parent>iris_with_standoffs::base_link</parent>
-      <child>gimbal_yaw_link</child>
-      <axis>
-        <xyz>0 0 1</xyz>
-        <limit><lower>-2.967</lower><upper>2.967</upper><effort>2.0</effort><velocity>2.0</velocity></limit>
-        <dynamics><damping>0.06</damping><friction>0.01</friction></dynamics>
-      </axis>
-    </joint>
-
-    <link name="gimbal_pitch_link">
-      <pose relative_to="gimbal_yaw_link">0.025 0 0 0 0 0</pose>
-      <gravity>false</gravity>
-      <inertial>
-        <mass>0.085</mass>
-        <inertia><ixx>0.00008</ixx><iyy>0.00010</iyy><izz>0.00010</izz></inertia>
-      </inertial>
-      <visual name="camera_body">
-        <geometry><box><size>0.07 0.055 0.045</size></box></geometry>
-        <material><ambient>0.03 0.03 0.035 1</ambient><diffuse>0.08 0.08 0.09 1</diffuse></material>
-      </visual>
-      <visual name="lens">
-        <pose>0.038 0 0 0 1.57079632679 0</pose>
-        <geometry><cylinder><radius>0.012</radius><length>0.008</length></cylinder></geometry>
-        <material><ambient>0.02 0.10 0.16 1</ambient><diffuse>0.03 0.18 0.28 1</diffuse></material>
-      </visual>
-      <sensor name="gimbal_rgb" type="camera">
-        <topic>/uav/gimbal/image</topic>
-        <gz_frame_id>uav_gimbal_optical_frame</gz_frame_id>
-        <!-- Subscriber-driven stream. The perception monitor normally keeps
-             it active for health evidence; dashboard JPEG work is on demand. -->
-        <always_on>false</always_on>
-        <update_rate>5</update_rate>
-        <visualize>false</visualize>
-        <camera>
-          <horizontal_fov>1.2217304764</horizontal_fov>
-          <image><width>320</width><height>180</height><format>R8G8B8</format></image>
-          <clip><near>0.08</near><far>80.0</far></clip>
-          <noise><type>gaussian</type><mean>0.0</mean><stddev>0.0025</stddev></noise>
-        </camera>
+      <sensor name="gnss_receiver" type="navsat">
+        <topic>/uav/gnss/fix</topic>
+        <gz_frame_id>uav_gnss_link</gz_frame_id>
+        <always_on>true</always_on>
+        <update_rate>10</update_rate>
+      </sensor>
+      <sensor name="hmc5883_magnetometer" type="magnetometer">
+        <topic>/uav/magnetometer</topic>
+        <gz_frame_id>uav_magnetometer_link</gz_frame_id>
+        <always_on>true</always_on>
+        <update_rate>100</update_rate>
+        <magnetometer>
+          <x><noise type="gaussian"><mean>0</mean><stddev>0.000002</stddev></noise></x>
+          <y><noise type="gaussian"><mean>0</mean><stddev>0.000002</stddev></noise></y>
+          <z><noise type="gaussian"><mean>0</mean><stddev>0.0000025</stddev></noise></z>
+        </magnetometer>
+      </sensor>
+      <sensor name="barometer" type="air_pressure">
+        <topic>/uav/barometer</topic>
+        <gz_frame_id>uav_barometer_link</gz_frame_id>
+        <always_on>true</always_on>
+        <update_rate>50</update_rate>
+        <air_pressure>
+          <pressure><noise type="gaussian"><mean>0</mean><stddev>0.8</stddev></noise></pressure>
+        </air_pressure>
       </sensor>
     </link>
-    <joint name="gimbal_pitch_joint" type="revolute">
-      <parent>gimbal_yaw_link</parent>
-      <child>gimbal_pitch_link</child>
-      <axis>
-        <xyz>0 1 0</xyz>
-        <limit><lower>-0.436</lower><upper>1.5708</upper><effort>2.0</effort><velocity>2.0</velocity></limit>
-        <dynamics><damping>0.06</damping><friction>0.01</friction></dynamics>
-      </axis>
-    </joint>
-    <plugin filename="gz-sim-joint-position-controller-system"
-            name="gz::sim::systems::JointPositionController">
-      <joint_name>gimbal_yaw_joint</joint_name>
-      <topic>/uav/gimbal/cmd_yaw</topic>
-      <p_gain>3.0</p_gain><i_gain>0.03</i_gain><d_gain>0.12</d_gain>
-      <cmd_max>2.0</cmd_max><cmd_min>-2.0</cmd_min>
-    </plugin>
-    <plugin filename="gz-sim-joint-position-controller-system"
-            name="gz::sim::systems::JointPositionController">
-      <joint_name>gimbal_pitch_joint</joint_name>
-      <topic>/uav/gimbal/cmd_pitch</topic>
-      <p_gain>3.0</p_gain><i_gain>0.03</i_gain><d_gain>0.12</d_gain>
-      <cmd_max>2.0</cmd_max><cmd_min>-2.0</cmd_min>
-    </plugin>
 
-    <!-- Forward stereo pair (10 cm baseline) plus an RGB-D sensor. Gazebo
-         Harmonic has no multicamera synchronization system, so both cameras
-         deliberately share update rate, resolution and optical parameters.
-         The RGB-D depth stream is the simulation equivalent of the disparity
-         output produced by a real stereo driver. -->
+    <joint name="avionics_sensor_mount" type="fixed">
+      <parent>iris_with_standoffs::base_link</parent>
+      <child>avionics_sensor_link</child>
+    </joint>
+
+    <!-- Downward ToF/LiDAR gives optical-flow scale and deck-relative height.
+         A narrow nine-ray fan is used instead of a perfect single ray so
+         small pitch/roll excursions do not immediately lose the deck. -->
+    <link name="downward_tof_link">
+      <pose relative_to="iris_with_standoffs::base_link">-0.04 0 -0.10 0 0 0</pose>
+      <gravity>false</gravity>
+      <inertial>
+        <mass>0.012</mass>
+        <inertia><ixx>0.000004</ixx><iyy>0.000004</iyy><izz>0.000004</izz></inertia>
+      </inertial>
+      <visual name="tof_body">
+        <geometry><box><size>0.025 0.025 0.012</size></box></geometry>
+        <material><ambient>0.04 0.04 0.05 1</ambient><diffuse>0.10 0.10 0.12 1</diffuse></material>
+      </visual>
+      <sensor name="downward_tof" type="gpu_lidar">
+        <pose>0 0 -0.012 0 1.57079632679 0</pose>
+        <topic>/uav/downward_tof</topic>
+        <gz_frame_id>uav_downward_tof_frame</gz_frame_id>
+        <always_on>true</always_on>
+        <update_rate>30</update_rate>
+        <visualize>false</visualize>
+        <lidar>
+          <scan><horizontal><samples>9</samples><resolution>1</resolution><min_angle>-0.05236</min_angle><max_angle>0.05236</max_angle></horizontal></scan>
+          <range><min>0.05</min><max>8.0</max><resolution>0.005</resolution></range>
+          <noise><type>gaussian</type><mean>0.0</mean><stddev>0.01</stddev></noise>
+        </lidar>
+      </sensor>
+    </link>
+    <joint name="downward_tof_mount" type="fixed">
+      <parent>iris_with_standoffs::base_link</parent><child>downward_tof_link</child>
+    </joint>
+
+    <!-- Frame-synchronized forward OV9281 pair. Gazebo renders complete frames
+         (global-shutter equivalent); equal timing and intrinsics model the
+         shared hardware trigger. RGB-D is a simulation-only stand-in for the
+         disparity/depth product generated by stereo_image_proc on hardware. -->
     <link name="stereo_rig_link">
       <pose relative_to="iris_with_standoffs::base_link">0.16 0 0.02 0 0 0</pose>
       <gravity>false</gravity>
       <inertial>
-        <mass>0.12</mass>
+        <mass>0.070</mass>
         <inertia><ixx>0.00012</ixx><iyy>0.00014</iyy><izz>0.00014</izz></inertia>
       </inertial>
       <visual name="stereo_bar">
         <geometry><box><size>0.055 0.14 0.04</size></box></geometry>
         <material><ambient>0.03 0.03 0.03 1</ambient><diffuse>0.08 0.08 0.08 1</diffuse></material>
       </visual>
-      <sensor name="stereo_left" type="camera">
-        <pose>0 0.05 0 0 0 0</pose>
+      <sensor name="ov9281_stereo_left" type="camera">
+        <pose>0 0.06 0 0 0 0</pose>
         <topic>/uav/stereo/left/image</topic>
         <gz_frame_id>uav_stereo_left_optical_frame</gz_frame_id>
-        <always_on>false</always_on><update_rate>4</update_rate><visualize>false</visualize>
+        <always_on>false</always_on><update_rate>20</update_rate><visualize>false</visualize>
         <camera>
-          <horizontal_fov>1.2217304764</horizontal_fov>
-          <image><width>256</width><height>144</height><format>R8G8B8</format></image>
+          <horizontal_fov>1.57079632679</horizontal_fov>
+          <image><width>640</width><height>400</height><format>L8</format></image>
           <clip><near>0.10</near><far>30.0</far></clip>
           <noise><type>gaussian</type><mean>0.0</mean><stddev>0.003</stddev></noise>
         </camera>
       </sensor>
-      <sensor name="stereo_right" type="camera">
-        <pose>0 -0.05 0 0 0 0</pose>
+      <sensor name="ov9281_stereo_right" type="camera">
+        <pose>0 -0.06 0 0 0 0</pose>
         <topic>/uav/stereo/right/image</topic>
         <gz_frame_id>uav_stereo_right_optical_frame</gz_frame_id>
-        <always_on>false</always_on><update_rate>4</update_rate><visualize>false</visualize>
+        <always_on>false</always_on><update_rate>20</update_rate><visualize>false</visualize>
         <camera>
-          <horizontal_fov>1.2217304764</horizontal_fov>
-          <image><width>256</width><height>144</height><format>R8G8B8</format></image>
+          <horizontal_fov>1.57079632679</horizontal_fov>
+          <image><width>640</width><height>400</height><format>L8</format></image>
           <clip><near>0.10</near><far>30.0</far></clip>
           <noise><type>gaussian</type><mean>0.0</mean><stddev>0.003</stddev></noise>
         </camera>
@@ -250,10 +202,10 @@
       <sensor name="stereo_depth" type="rgbd_camera">
         <topic>/uav/stereo/depth</topic>
         <gz_frame_id>uav_stereo_depth_optical_frame</gz_frame_id>
-        <always_on>true</always_on><update_rate>4</update_rate><visualize>false</visualize>
+        <always_on>true</always_on><update_rate>10</update_rate><visualize>false</visualize>
         <camera>
-          <horizontal_fov>1.2217304764</horizontal_fov>
-          <image><width>160</width><height>90</height><format>R8G8B8</format></image>
+          <horizontal_fov>1.57079632679</horizontal_fov>
+          <image><width>320</width><height>200</height><format>R8G8B8</format></image>
           <clip><near>0.10</near><far>30.0</far></clip>
           <depth_camera><output>depths</output></depth_camera>
         </camera>
@@ -299,46 +251,6 @@
     <joint name="lidar_3d_mount" type="fixed">
       <parent>iris_with_standoffs::base_link</parent><child>lidar_3d_link</child>
     </joint>
-
-    <!-- Gazebo Harmonic does not yet implement an acoustic sonar sensor. The
-         six physical transducer bodies remain explicit in the mass model, but
-         uav_ultrasonic_adapter projects the shared spherical 3D geometry scan
-         into six cones and adds independent ultrasonic transport effects. -->
-    <link name="ultrasonic_front_link">
-      <pose relative_to="iris_with_standoffs::base_link">0.19 0 -0.01 0 0 0</pose>
-      <gravity>false</gravity><inertial><mass>0.006</mass><inertia><ixx>0.000001</ixx><iyy>0.000001</iyy><izz>0.000001</izz></inertia></inertial>
-    </link>
-    <joint name="ultrasonic_front_mount" type="fixed"><parent>iris_with_standoffs::base_link</parent><child>ultrasonic_front_link</child></joint>
-
-    <link name="ultrasonic_rear_link">
-      <pose relative_to="iris_with_standoffs::base_link">-0.19 0 -0.01 0 0 3.14159265359</pose>
-      <gravity>false</gravity><inertial><mass>0.006</mass><inertia><ixx>0.000001</ixx><iyy>0.000001</iyy><izz>0.000001</izz></inertia></inertial>
-    </link>
-    <joint name="ultrasonic_rear_mount" type="fixed"><parent>iris_with_standoffs::base_link</parent><child>ultrasonic_rear_link</child></joint>
-
-    <link name="ultrasonic_left_link">
-      <pose relative_to="iris_with_standoffs::base_link">0 0.19 -0.01 0 0 1.57079632679</pose>
-      <gravity>false</gravity><inertial><mass>0.006</mass><inertia><ixx>0.000001</ixx><iyy>0.000001</iyy><izz>0.000001</izz></inertia></inertial>
-    </link>
-    <joint name="ultrasonic_left_mount" type="fixed"><parent>iris_with_standoffs::base_link</parent><child>ultrasonic_left_link</child></joint>
-
-    <link name="ultrasonic_right_link">
-      <pose relative_to="iris_with_standoffs::base_link">0 -0.19 -0.01 0 0 -1.57079632679</pose>
-      <gravity>false</gravity><inertial><mass>0.006</mass><inertia><ixx>0.000001</ixx><iyy>0.000001</iyy><izz>0.000001</izz></inertia></inertial>
-    </link>
-    <joint name="ultrasonic_right_mount" type="fixed"><parent>iris_with_standoffs::base_link</parent><child>ultrasonic_right_link</child></joint>
-
-    <link name="ultrasonic_up_link">
-      <pose relative_to="iris_with_standoffs::base_link">0 0 0.11 0 -1.57079632679 0</pose>
-      <gravity>false</gravity><inertial><mass>0.006</mass><inertia><ixx>0.000001</ixx><iyy>0.000001</iyy><izz>0.000001</izz></inertia></inertial>
-    </link>
-    <joint name="ultrasonic_up_mount" type="fixed"><parent>iris_with_standoffs::base_link</parent><child>ultrasonic_up_link</child></joint>
-
-    <link name="ultrasonic_down_link">
-      <pose relative_to="iris_with_standoffs::base_link">0 0 -0.11 0 1.57079632679 0</pose>
-      <gravity>false</gravity><inertial><mass>0.006</mass><inertia><ixx>0.000001</ixx><iyy>0.000001</iyy><izz>0.000001</izz></inertia></inertial>
-    </link>
-    <joint name="ultrasonic_down_mount" type="fixed"><parent>iris_with_standoffs::base_link</parent><child>ultrasonic_down_link</child></joint>
 
     <!--
       visual markers for debugging

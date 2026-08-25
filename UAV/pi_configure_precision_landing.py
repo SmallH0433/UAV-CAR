@@ -12,6 +12,8 @@ from pymavlink import mavutil
 
 
 PARAMETERS = (
+    "RC7_OPTION",
+    "RC8_OPTION",
     "PLND_ENABLED",
     "PLND_TYPE",
     "PLND_EST_TYPE",
@@ -29,6 +31,18 @@ PARAMETERS = (
     "PLND_ALT_MAX",
     "PLND_XY_DIST_MAX",
 )
+
+
+def moving_target_options(current_value: float) -> float:
+    """Enable only the moving-target bit while preserving other option bits."""
+
+    return float(int(round(current_value)) | 1)
+
+
+def without_moving_target_option(current_value: float) -> float:
+    """Clear only the moving-target bit while preserving other option bits."""
+
+    return float(int(round(current_value)) & ~1)
 
 
 def param_name(message) -> str:
@@ -90,7 +104,16 @@ def set_and_confirm(link, name: str, value: float, param_type: int) -> float | N
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("phase", choices=("backup", "set-enabled", "set-type", "rollback"))
+    parser.add_argument(
+        "phase",
+        choices=(
+            "backup",
+            "set-enabled",
+            "set-type",
+            "set-moving-options",
+            "rollback",
+        ),
+    )
     parser.add_argument("--device", default="/dev/serial0")
     parser.add_argument("--baud", type=int, default=57600)
     parser.add_argument("--backup", type=Path)
@@ -146,19 +169,56 @@ def main() -> int:
         print("MODE=READ_ONLY PARAMETERS_CHANGED=0")
         return 0
 
+    if args.phase != "rollback":
+        for channel in ("RC7_OPTION", "RC8_OPTION"):
+            if channel not in current:
+                print(f"SAFETY_STOP={channel}_NOT_RECEIVED")
+                return 4
+            if abs(float(current[channel]["value"])) > 0.001:
+                print(
+                    f"SAFETY_STOP={channel}_MUST_BE_ZERO_FOR_COMPANION_RAW_CHANNEL_GATE"
+                )
+                return 4
+
     requested: list[tuple[str, float]]
     if args.phase == "set-enabled":
         if current["PLND_TYPE"]["value"] != 0.0:
             print("SAFETY_STOP=PLND_TYPE_NOT_ZERO_BEFORE_ENABLE")
-            return 4
+            return 5
         requested = [("PLND_ENABLED", 1.0)]
     elif args.phase == "set-type":
         if current["PLND_ENABLED"]["value"] != 1.0:
             print("SAFETY_STOP=PLND_ENABLED_NOT_ONE_BEFORE_TYPE")
-            return 5
+            return 6
         requested = [("PLND_TYPE", 1.0)]
+    elif args.phase == "set-moving-options":
+        if current["PLND_ENABLED"]["value"] != 1.0:
+            print("SAFETY_STOP=PLND_ENABLED_NOT_ONE_BEFORE_MOVING_OPTIONS")
+            return 7
+        if current["PLND_TYPE"]["value"] != 1.0:
+            print("SAFETY_STOP=PLND_TYPE_NOT_MAVLINK_BEFORE_MOVING_OPTIONS")
+            return 7
+        if "PLND_OPTIONS" not in current:
+            print("SAFETY_STOP=PLND_OPTIONS_NOT_RECEIVED")
+            return 7
+        requested = [
+            (
+                "PLND_OPTIONS",
+                moving_target_options(float(current["PLND_OPTIONS"]["value"])),
+            )
+        ]
     else:
-        requested = [("PLND_TYPE", 0.0), ("PLND_ENABLED", 0.0)]
+        requested = []
+        if "PLND_OPTIONS" in current:
+            requested.append(
+                (
+                    "PLND_OPTIONS",
+                    without_moving_target_option(
+                        float(current["PLND_OPTIONS"]["value"])
+                    ),
+                )
+            )
+        requested.extend((("PLND_TYPE", 0.0), ("PLND_ENABLED", 0.0)))
 
     for name, value in requested:
         record = current[name]
@@ -166,7 +226,7 @@ def main() -> int:
         print(f"SET {name} requested={value} confirmed={confirmed}")
         if confirmed is None or abs(confirmed - value) > 0.001:
             print(f"FAILED={name}")
-            return 6
+            return 8
     print(
         "SAFETY=DISARMED_PARAMETER_SCOPE_ONLY "
         "ARM_COMMAND=0 MODE_CHANGE=0 MOTOR_COMMAND=0"

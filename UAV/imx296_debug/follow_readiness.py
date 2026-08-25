@@ -52,11 +52,13 @@ def evaluate_readiness(
     *,
     minimum_voltage_v: float = 21.6,
     minimum_remaining_pct: int = 20,
+    battery_telemetry_required: bool = True,
     minimum_range_m: float = 0.55,
     maximum_range_m: float = 0.85,
     minimum_flow_quality: int = 80,
     telemetry_timeout_s: float = 0.75,
     target_timeout_s: float = 0.25,
+    allowed_modes: tuple[str, ...] = ("LOITER", "GUIDED"),
 ) -> ReadinessResult:
     blockers: list[str] = []
     warnings: list[str] = []
@@ -67,10 +69,13 @@ def evaluate_readiness(
         blockers.append("FLIGHT_CONTROLLER_HEARTBEAT_STALE")
     if inputs.armed is None:
         blockers.append("ARM_STATE_UNKNOWN")
+    approved_modes = {mode.upper() for mode in allowed_modes}
+    if not approved_modes:
+        raise ValueError("allowed_modes must not be empty")
     if inputs.mode is None:
         blockers.append("FLIGHT_MODE_UNKNOWN")
-    elif inputs.mode.upper() not in {"LOITER", "GUIDED"}:
-        blockers.append("ENTRY_MODE_NOT_LOITER")
+    elif inputs.mode.upper() not in approved_modes:
+        blockers.append("ENTRY_MODE_NOT_APPROVED")
     if inputs.rc7_pwm is None or inputs.rc_age_s is None or inputs.rc_age_s > telemetry_timeout_s:
         blockers.append("CH7_STALE")
 
@@ -82,19 +87,22 @@ def evaluate_readiness(
     if not inputs.origin_valid:
         blockers.append("EKF_GLOBAL_ORIGIN_MISSING")
 
-    if (
-        inputs.battery_voltage_v is None
-        or inputs.battery_age_s is None
-        or inputs.battery_age_s > telemetry_timeout_s
-    ):
-        blockers.append("BATTERY_TELEMETRY_STALE")
-    elif inputs.battery_voltage_v < minimum_voltage_v:
-        blockers.append("BATTERY_VOLTAGE_LOW")
-    if (
-        inputs.battery_remaining_pct is not None
-        and inputs.battery_remaining_pct < minimum_remaining_pct
-    ):
-        blockers.append("BATTERY_REMAINING_LOW")
+    if battery_telemetry_required:
+        if (
+            inputs.battery_voltage_v is None
+            or inputs.battery_age_s is None
+            or inputs.battery_age_s > telemetry_timeout_s
+        ):
+            blockers.append("BATTERY_TELEMETRY_STALE")
+        elif inputs.battery_voltage_v < minimum_voltage_v:
+            blockers.append("BATTERY_VOLTAGE_LOW")
+        if (
+            inputs.battery_remaining_pct is not None
+            and inputs.battery_remaining_pct < minimum_remaining_pct
+        ):
+            blockers.append("BATTERY_REMAINING_LOW")
+    else:
+        warnings.append("BATTERY_CHECK_DISABLED")
 
     if inputs.range_m is None or inputs.range_age_s is None or inputs.range_age_s > telemetry_timeout_s:
         blockers.append("RANGEFINDER_STALE")
@@ -117,4 +125,3 @@ def evaluate_readiness(
         warnings.append("CH7_FOLLOW_DISABLED")
 
     return ReadinessResult(not blockers, tuple(blockers), tuple(warnings))
-

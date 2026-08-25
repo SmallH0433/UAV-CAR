@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.0",
+  "recorded_at": "2026-08-12T16:10:00+08:00",
+  "audit_result": "SOFTWARE_READY_PHYSICAL_HIL_BLOCKED",
+  "release_authorization": "NOT_HIL_RELEASED",
+  "scope": "Read-only target-host, device, ROS dependency, launch-contract and fail-closed configuration audit",
+  "host": {
+    "platform": "Windows desktop with Ubuntu-22.04 under WSL2",
+    "architecture": "x86_64",
+    "kernel": "6.18.33.2-microsoft-standard-WSL2",
+    "is_jetson": false,
+    "wsl_vcpu": 8,
+    "wsl_memory_gib": 8
+  },
+  "attached_hardware": {
+    "jetson": false,
+    "pixhawk_or_cube": false,
+    "hunter_can_interface": false,
+    "hunter_chassis": false,
+    "docking_contact_and_lock_io": false,
+    "external_estop_or_plc": false,
+    "at9s_pro_receiver_telemetry": false,
+    "serial_devices": [],
+    "can_interfaces": [],
+    "linux_joystick_devices": []
+  },
+  "ros_dependencies_on_current_wsl_host": {
+    "nav2_bringup": "installed",
+    "robot_localization": "installed",
+    "mavros": "installed",
+    "hunter_base": "missing_on_current_host",
+    "joy": "missing_optional"
+  },
+  "dependency_notes": [
+    "The project currently uses its guarded pymavlink bridge for the UAV control contract; installed MAVROS is not the active SIL bridge.",
+    "The AT9S Pro production path is receiver to Pixhawk RC_CHANNELS telemetry, so ros-humble-joy is not required unless a separate USB/gamepad teleoperation path is commissioned.",
+    "hunter_base must be installed and version-pinned on the target Jetson image, then validated against the actual Hunter controller and CAN adapter; installing it only in desktop WSL would not constitute HIL evidence."
+  ],
+  "verified_software_evidence": {
+    "unit_tests": "PASS 137/137",
+    "production_baseline": "PASS 86/86",
+    "hardware_launch_argument_expansion": "PASS",
+    "full_sil": {
+      "result": "PASS",
+      "run": "final-sil-20260812-r10",
+      "transition_count": 23,
+      "violations": []
+    }
+  },
+  "verified_fail_closed_defaults": {
+    "uav_velocity_commands_enabled": false,
+    "uav_lifecycle_commands_enabled": false,
+    "ugv_control_mux_enabled": false,
+    "ugv_chassis_adapter_enabled": false,
+    "ugv_hardware_gateway_enabled": false,
+    "docking_hardware_commands_enabled": false,
+    "browser_commands_enabled": false,
+    "external_estop_heartbeat_required": true,
+    "real_mission_plan_validated": false,
+    "real_mission_plan_id": "UNCOMMISSIONED"
+  },
+  "physical_hil_blockers": [
+    "Deploy and pin the software image on the target Jetson and repeat CPU/GPU/thermal/network endurance tests.",
+    "Attach Pixhawk/Cube over a stable by-id serial endpoint and verify parameter attestation, RC takeover, mode/LAND ACKs, telemetry loss and battery/EKF/geofence failsafes with propellers removed.",
+    "Install and pin hunter_base on Jetson, attach can0 to the Hunter controller, verify CAN bitrate, command sign, wheel odometry, steering limits, command timeout and physical E-stop with wheels lifted.",
+    "Connect the independent E-stop/PLC heartbeat and prove the 200 ms safety-chain deadline with instrumented fault injection.",
+    "Connect four independent docking contact/lock feedback channels and verify stale, disagreement, timeout and loss-of-contact behavior on a non-flight fixture.",
+    "Commission calibrated camera, 2D/3D LiDAR, stereo/depth, ultrasonic, IMU and localization drivers against the real topic/QoS/frame contracts.",
+    "Survey the site map, geofence, no-fly and height-limit zones; replace the deliberately UNCOMMISSIONED real mission profile and obtain review approval.",
+    "Run staged bench, tethered, closed-field, endurance and repeated-docking validation before any commercial release claim."
+  ],
+  "conclusion": "The repository and launch/configuration contracts are ready to enter bench HIL. Physical HIL, field safety validation and certification are not complete because the required target hardware is not connected to this host."
+}

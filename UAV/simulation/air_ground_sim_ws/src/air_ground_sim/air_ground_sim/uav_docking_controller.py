@@ -301,11 +301,10 @@ class UavDockingController(Node):
 
     def _healthy_deck_range(self):
         sensors = self.perception.get("sensors") or {}
-        down_sensor = sensors.get("ultrasonic_down") or {}
+        down_sensor = sensors.get("downward_tof") or {}
         if not bool(down_sensor.get("healthy", False)):
             return None
-        ranges = self.perception.get("ultrasonic_ranges_m") or {}
-        value = ranges.get("down")
+        value = self.perception.get("downward_range_m")
         try:
             measured = float(value)
         except (TypeError, ValueError):

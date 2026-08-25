@@ -22,7 +22,6 @@ import {
   Send,
   Settings2,
   ShieldAlert,
-  SlidersHorizontal,
   UnlockKeyhole,
   Wifi,
   WifiOff,
@@ -52,8 +51,7 @@ type Snapshot = {
   ugv_control_mux?: JsonRecord;
   chassis_adapter?: JsonRecord;
   ugv_gateway?: JsonRecord;
-  gimbal?: JsonRecord;
-  ultrasonic?: JsonRecord;
+  optical_flow?: JsonRecord;
   ugv?: { pose?: number[] | null; speed_mps?: number; minimum_scan_m?: number | null };
   paths?: { ugv_global?: number[][] };
   cameras?: Record<string, { ready?: boolean; age_s?: number }>;
@@ -89,7 +87,7 @@ const EMPTY_SNAPSHOT: Snapshot = {
   docking: { state: "disabled", capture_ready: false, tag_visible: false },
   navigation: { active: false, reason: "waiting", position: [0, 0, 0], goal: null },
   command_mux: { mode: "stopped" },
-  gimbal: { mode: "forward", command_rad: [0, 0] },
+  optical_flow: { healthy: false, reason: "waiting" },
   ugv: { pose: [-9, -6, 0], speed_mps: 0, minimum_scan_m: null },
   paths: { ugv_global: [] },
   cameras: {},
@@ -118,18 +116,13 @@ const MISSION_PHASES = [
 ];
 
 const SENSOR_LABELS: Array<[string, string]> = [
-  ["lidar2d", "2D LiDAR"],
+  ["lidar3d_scan", "3D LiDAR扫描"],
   ["lidar3d", "3D LiDAR"],
   ["stereo_depth", "双目深度"],
-  ["stereo_left", "左目"],
-  ["stereo_right", "右目"],
-  ["gimbal_camera", "云台视觉"],
-  ["ultrasonic_front", "超声·前"],
-  ["ultrasonic_rear", "超声·后"],
-  ["ultrasonic_left", "超声·左"],
-  ["ultrasonic_right", "超声·右"],
-  ["ultrasonic_up", "超声·上"],
-  ["ultrasonic_down", "超声·下"],
+  ["stereo_left", "OV9281左目"],
+  ["stereo_right", "OV9281右目"],
+  ["downward_camera", "OV9281下视"],
+  ["downward_tof", "下视ToF"],
 ];
 
 function record(value: unknown): JsonRecord {
@@ -452,8 +445,6 @@ function App() {
   } = useGateway();
   const [cameraTick, setCameraTick] = useState(0);
   const [notice, setNotice] = useState<{ text: string; error?: boolean } | null>(null);
-  const [gimbalYaw, setGimbalYaw] = useState(0);
-  const [gimbalPitch, setGimbalPitch] = useState(0);
   const [uavGoal, setUavGoal] = useState({ x: 0, y: 0, z: 3 });
   const [ugvGoal, setUgvGoal] = useState({ x: 4.8, y: 5.2, yaw: 0 });
   const [confirmAction, setConfirmAction] = useState<null | "abort" | "reset">(null);
@@ -489,9 +480,9 @@ function App() {
   const system = record(snapshot.system);
   const ugvControlMux = record(snapshot.ugv_control_mux);
   const chassisAdapter = record(snapshot.chassis_adapter);
-  const gimbal = record(snapshot.gimbal);
+  const opticalFlow = record(snapshot.optical_flow);
   const sensors = record(perception.sensors);
-  const ranges = record(perception.ultrasonic_ranges_m);
+  const ranges = record(perception.sectors_m);
   const missionState = textValue(mission.state, "IDLE");
   const missionActive = boolValue(mission.active);
   const missionPaused = boolValue(mission.paused);
@@ -676,9 +667,9 @@ function App() {
         <section className="camera-section panel">
           <header className="panel-heading"><div><Camera size={16} /><span>视觉与对接</span></div><span className="subtle">JPEG 低延迟预览</span></header>
           <div className="camera-grid">
-            <CameraTile apiBase={apiBase} name="gimbal" label="云台相机" ready={cameraReady("gimbal")} tick={cameraTick} className="camera-main" />
+            <CameraTile apiBase={apiBase} name="stereo_left" label="前视OV9281左目" ready={cameraReady("stereo_left")} tick={cameraTick} className="camera-main" />
             <CameraTile apiBase={apiBase} name="landing" label="下视 / AprilTag" ready={cameraReady("landing")} tick={cameraTick} />
-            <CameraTile apiBase={apiBase} name="stereo_left" label="双目左" ready={cameraReady("stereo_left")} tick={cameraTick} />
+            <CameraTile apiBase={apiBase} name="stereo_right" label="前视OV9281右目" ready={cameraReady("stereo_right")} tick={cameraTick} />
             <CameraTile apiBase={apiBase} name="ugv" label="车载前视" ready={cameraReady("ugv")} tick={cameraTick} />
           </div>
         </section>
@@ -712,7 +703,7 @@ function App() {
             <div><span>局部避障</span><strong>{textValue(navigationState.reason, "standby")}</strong></div>
             <div><span>视觉标签</span><strong className={boolValue(docking.tag_visible) ? "good-text" : "muted-text"}>{boolValue(docking.tag_visible) ? "LOCK" : "SEARCH"}</strong></div>
             <div><span>捕获窗口</span><strong className={boolValue(docking.capture_ready) ? "good-text" : "muted-text"}>{boolValue(docking.capture_ready) ? "READY" : "OUTSIDE"}</strong></div>
-            <div><span>云台模式</span><strong>{textValue(gimbal.mode, "forward")}</strong></div>
+            <div><span>光流状态</span><strong className={boolValue(opticalFlow.healthy) ? "good-text" : "muted-text"}>{textValue(opticalFlow.reason, "waiting")}</strong></div>
             <div><span>感知硬停止</span><strong className={boolValue(perception.hard_stop) ? "bad-text" : "good-text"}>{boolValue(perception.hard_stop) ? "ACTIVE" : "CLEAR"}</strong></div>
           </div>
           <div className="safety-actions">
@@ -743,12 +734,6 @@ function App() {
               <label>Yaw<input type="number" step="0.1" value={ugvGoal.yaw} onChange={(event) => setUgvGoal({ ...ugvGoal, yaw: Number(event.target.value) })} /></label>
               <button type="submit"><Send size={14} />发送</button>
             </form>
-            <div className="gimbal-form">
-              <header><SlidersHorizontal size={15} />云台角度</header>
-              <label>Yaw <span>{gimbalYaw.toFixed(2)} rad</span><input type="range" min="-2.967" max="2.967" step="0.02" value={gimbalYaw} onChange={(event) => setGimbalYaw(Number(event.target.value))} /></label>
-              <label>Pitch <span>{gimbalPitch.toFixed(2)} rad</span><input type="range" min="-0.436" max="1.5708" step="0.02" value={gimbalPitch} onChange={(event) => setGimbalPitch(Number(event.target.value))} /></label>
-              <button onClick={() => run("/api/gimbal", { yaw: gimbalYaw, pitch: gimbalPitch }, "云台设定已发送")}><Send size={14} />应用</button>
-            </div>
             <div className="teleop-form">
               <header><Car size={15} />UGV 按住式点动</header>
               <p>{missionActive && !missionPaused ? "请先暂停协同任务" : "按住移动，松手立即发送零速"}</p>

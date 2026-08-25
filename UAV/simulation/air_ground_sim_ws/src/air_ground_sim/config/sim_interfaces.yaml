@@ -24,7 +24,7 @@ uav_mavlink_bridge:
     telemetry_stream_max_attempts: 3
     # Read back the safety-critical FCU parameters before declaring flight
     # readiness. Parameter drift blocks arming; the companion never writes it.
-    required_parameters_json: '{"ARMING_SKIPCHK": 0.0, "DISARM_DELAY": 5.0}'
+    required_parameters_json: '{"ARMING_CHECK": 1.0, "DISARM_DELAY": 5.0}'
     required_parameter_tolerance: 0.001
     parameter_attestation_retry_s: 1.0
     parameter_attestation_period_s: 10.0
@@ -157,7 +157,7 @@ ugv_chassis_adapter:
 uav_navigation:
   ros__parameters:
     odom_topic: /uav/odom
-    scan_topic: /uav/scan
+    scan_topic: /uav/lidar3d/scan
     goal_topic: /uav/nav/goal
     command_topic: /uav/nav/cmd_vel
     telemetry_topic: /uav/mavlink/status
@@ -183,25 +183,12 @@ uav_navigation:
     no_fly_zones_json: "[]"
     height_limit_zones_json: "[]"
 
-uav_ultrasonic_adapter:
-  ros__parameters:
-    pointcloud_topic: /uav/lidar3d/points
-    output_prefix: /uav/range
-    minimum_range_m: 0.20
-    maximum_range_m: 6.0
-    field_of_view_rad: 0.40
-    noise_stddev_m: 0.015
-    latency_ms: 18.0
-    dropout_probability: 0.01
-    random_seed: 41
-    status_stale_after_s: 0.8
-
 uav_perception:
   ros__parameters:
-    scan_topic: /uav/scan
+    scan_topic: /uav/lidar3d/scan
     pointcloud_topic: /uav/lidar3d/points
     depth_topic: /uav/stereo/depth/depth_image
-    range_prefix: /uav/range
+    tof_topic: /uav/downward_tof/scan
     influence_distance_m: 3.0
     hard_stop_distance_m: 0.85
     sensor_stale_after_s: 1.2
@@ -215,16 +202,19 @@ uav_perception:
     # drivers apply the equivalent body mask using the calibrated CAD envelope.
     self_filter_radius_m: 0.36
 
-uav_gimbal_controller:
+uav_optical_flow:
   ros__parameters:
-    setpoint_topic: /uav/gimbal/setpoint
-    yaw_command_topic: /uav/gimbal/cmd_yaw
-    pitch_command_topic: /uav/gimbal/cmd_pitch
-    yaw_min_rad: -2.967
-    yaw_max_rad: 2.967
-    pitch_min_rad: -0.436
-    pitch_max_rad: 1.5708
-    rate_limit_rad_s: 1.4
+    image_topic: /vision/image_raw
+    camera_info_topic: /vision/camera_info
+    tof_topic: /uav/downward_tof/scan
+    velocity_topic: /uav/optical_flow/velocity
+    minimum_features: 24
+    maximum_features: 180
+    quality_level: 0.015
+    minimum_feature_distance_px: 8.0
+    tof_timeout_s: 0.50
+    forward_sign: -1.0
+    left_sign: -1.0
 
 uav_docking_controller:
   ros__parameters:
@@ -276,6 +266,11 @@ web_gateway:
     # unattended SIL; UAV streams may remain active for perception health.
     camera_stream_idle_timeout_s: 5.0
     camera_stale_after_s: 12.0
+    camera_encoder_threads: 2
+    executor_threads: 4
+    # ros_gz_bridge publishes these simulated image topics reliably. Depth one
+    # prevents a high-rate stream from building a stale frame backlog.
+    camera_qos_reliability: reliable
     jpeg_quality: 72
     production_mode: false
     auth_token_env: AIR_GROUND_CONTROL_TOKEN

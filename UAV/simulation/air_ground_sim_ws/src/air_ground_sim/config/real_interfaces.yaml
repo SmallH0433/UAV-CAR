@@ -251,6 +251,11 @@ web_gateway:
     simulation_control_enabled: false
     simulation_world: ""
     camera_max_rate_hz: 4.0
+    camera_encoder_threads: 2
+    executor_threads: 4
+    # Most V4L2/GStreamer ROS camera drivers use sensor-data best effort.
+    # Commissioned drivers may override this only after endpoint QoS audit.
+    camera_qos_reliability: best_effort
     jpeg_quality: 70
     production_mode: true
     auth_token_env: AIR_GROUND_CONTROL_TOKEN

@@ -10,5 +10,5 @@ INS_USE3 0
 # must remain strictly above it or auto-disarm can win the race before the
 # motor interlock opens. This is not an in-flight force-disarm bypass. The
 # moving-platform hard deadline remains independently enforced by ROS.
-ARMING_SKIPCHK 0
+ARMING_CHECK 1
 DISARM_DELAY 5

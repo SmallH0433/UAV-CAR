@@ -1,0 +1,16 @@
+{
+  "description": "QAV280 migration stage 1: enable dynamic parameter groups and match the old Pixhawk serial roles.",
+  "parameters": {
+    "FRAME_CLASS": 1,
+    "FRAME_TYPE": 1,
+    "PLND_ENABLED": 1,
+    "FLOW_TYPE": 5,
+    "RNGFND1_TYPE": 10,
+    "SERIAL1_PROTOCOL": 2,
+    "SERIAL1_BAUD": 57,
+    "SERIAL1_OPTIONS": 0,
+    "SERIAL2_PROTOCOL": 1,
+    "SERIAL2_BAUD": 115,
+    "SERIAL2_OPTIONS": 0
+  }
+}

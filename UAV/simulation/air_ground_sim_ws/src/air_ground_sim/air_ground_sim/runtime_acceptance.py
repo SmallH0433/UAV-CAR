@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import json
 import math
@@ -11,6 +12,7 @@ from pathlib import Path
 import time
 from typing import Any, Iterable, Mapping
 from urllib.error import URLError
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import urlopen
 
 from .mission_logic import MissionState, mission_state_allows_ugv_motion
@@ -37,23 +39,18 @@ REQUIRED_OBSERVED_SEQUENCE = tuple(
 
 REQUIRED_UAV_SENSORS = frozenset(
     {
-        "gimbal_camera",
+        "downward_camera",
+        "downward_tof",
         "stereo_left",
         "stereo_right",
         "stereo_depth",
-        "lidar2d",
+        "lidar3d_scan",
         "lidar3d",
-        "ultrasonic_front",
-        "ultrasonic_rear",
-        "ultrasonic_left",
-        "ultrasonic_right",
-        "ultrasonic_up",
-        "ultrasonic_down",
     }
 )
 
 REQUIRED_CAMERA_STREAMS = frozenset(
-    {"gimbal", "stereo_left", "stereo_right", "landing", "downward", "ugv"}
+    {"stereo_left", "stereo_right", "landing", "downward", "ugv"}
 )
 
 
@@ -79,6 +76,97 @@ def planar_path_length(points: Any) -> float | None:
     except (IndexError, TypeError, ValueError):
         return None
     return total
+
+
+def camera_stream_urls(status_url: str) -> dict[str, str]:
+    """Build camera URLs on the same gateway as the status endpoint."""
+
+    parsed = urlsplit(status_url)
+    return {
+        name: urlunsplit(
+            (parsed.scheme, parsed.netloc, f"/api/camera/{name}.jpg", "", "")
+        )
+        for name in sorted(REQUIRED_CAMERA_STREAMS)
+    }
+
+
+def probe_camera_streams(
+    urls: Mapping[str, str], timeout_s: float
+) -> dict[str, Mapping[str, Any]]:
+    """Keep lazy streams active and prove every JPEG endpoint concurrently."""
+
+    def probe(name: str, url: str) -> tuple[str, Mapping[str, Any]]:
+        try:
+            with urlopen(url, timeout=timeout_s) as response:  # nosec B310: operator URL
+                payload = response.read()
+                result: Mapping[str, Any] = {
+                    "ok": 200 <= int(response.status) < 300 and bool(payload),
+                    "status": int(response.status),
+                    "bytes": len(payload),
+                }
+        except (OSError, URLError, ValueError) as error:
+            result = {"ok": False, "error": str(error)}
+        return name, result
+
+    if not urls:
+        return {}
+    results: dict[str, Mapping[str, Any]] = {}
+    with ThreadPoolExecutor(
+        max_workers=min(len(urls), 8), thread_name_prefix="camera-probe"
+    ) as executor:
+        futures = [executor.submit(probe, name, url) for name, url in urls.items()]
+        for future in as_completed(futures):
+            name, result = future.result()
+            results[name] = result
+    return {name: results[name] for name in urls}
+
+
+def ride_path_is_current(
+    mission: Mapping[str, Any], paths: Mapping[str, Any]
+) -> bool:
+    """Return whether the displayed Nav2 plan belongs to the active ride goal."""
+
+    try:
+        path_transition = int(paths.get("ugv_global_for_transition"))
+        mission_transition = int(mission.get("transitions"))
+    except (TypeError, ValueError):
+        return False
+    return (
+        str(paths.get("ugv_global_for_state", ""))
+        == MissionState.RIDE_AND_DECELERATE.value
+        and path_transition == mission_transition
+    )
+
+
+def violation_diagnostics(
+    snapshot: Mapping[str, Any], code: str
+) -> Mapping[str, Any]:
+    """Return compact evidence that identifies the source of a violation."""
+
+    mission = _mapping(snapshot.get("mission"))
+    if code == "OPERATIONS_CAMERA_STREAM_INCOMPLETE":
+        return {
+            "mission_state": mission.get("state"),
+            "cameras": _mapping(snapshot.get("cameras")),
+        }
+    if code in {
+        "RIDE_PATH_UNAVAILABLE",
+        "RIDE_PATH_STALE",
+        "RIDE_PATH_NONHOLONOMIC_DETOUR",
+    }:
+        paths = _mapping(snapshot.get("paths"))
+        return {
+            "mission_state": mission.get("state"),
+            "mission_transition": mission.get("transitions"),
+            "ugv_goal_status": mission.get("ugv_goal_status"),
+            "ride_remaining_distance_m": mission.get("ride_remaining_distance_m"),
+            "path_length_m": planar_path_length(paths.get("ugv_global")),
+            "path_age_s": paths.get("ugv_global_age_s"),
+            "path_state": paths.get("ugv_global_for_state"),
+            "path_transition": paths.get("ugv_global_for_transition"),
+            "path_goal_status": paths.get("ugv_global_for_goal_status"),
+        }
+    return {"mission_state": mission.get("state")}
 
 
 def snapshot_violations(snapshot: Mapping[str, Any]) -> list[str]:
@@ -160,12 +248,16 @@ def snapshot_violations(snapshot: Mapping[str, Any]) -> list[str]:
             ):
                 violations.append("UGV_GATE_OPEN_IN_NON_DRIVING_STATE")
             if state == MissionState.RIDE_AND_DECELERATE:
-                path_length = planar_path_length(paths.get("ugv_global"))
-                remaining = float(mission.get("ride_remaining_distance_m") or 0.0)
-                if path_length is None:
-                    violations.append("RIDE_PATH_UNAVAILABLE")
-                elif path_length > max(remaining + 1.0, remaining * 1.5):
-                    violations.append("RIDE_PATH_NONHOLONOMIC_DETOUR")
+                goal_status = str(mission.get("ugv_goal_status", ""))
+                if goal_status in ("executing", "succeeded"):
+                    path_length = planar_path_length(paths.get("ugv_global"))
+                    remaining = float(mission.get("ride_remaining_distance_m") or 0.0)
+                    if not ride_path_is_current(mission, paths):
+                        violations.append("RIDE_PATH_STALE")
+                    elif path_length is None:
+                        violations.append("RIDE_PATH_UNAVAILABLE")
+                    elif path_length > max(remaining + 1.0, remaining * 1.5):
+                        violations.append("RIDE_PATH_NONHOLONOMIC_DETOUR")
 
     if state_name == MissionState.COMPLETE.value:
         if bool(mavlink.get("armed", True)):
@@ -215,6 +307,8 @@ def _summary_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     system = _mapping(snapshot.get("system"))
     perception = _mapping(snapshot.get("perception"))
     ugv = _mapping(snapshot.get("ugv"))
+    cameras = _mapping(snapshot.get("cameras"))
+    paths = _mapping(snapshot.get("paths"))
     return {
         "state": mission.get("state"),
         "transitions": mission.get("transitions"),
@@ -236,6 +330,23 @@ def _summary_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
         "ugv_speed_mps": ugv.get("speed_mps"),
         "ugv_gate_open": mission.get("ugv_safety_gate_open"),
         "dock_detached": mission.get("dock_detached"),
+        "camera_streams": {
+            name: {
+                "active": _mapping(value).get("active"),
+                "ready": _mapping(value).get("ready"),
+                "age_s": _mapping(value).get("age_s"),
+                "source_age_s": _mapping(value).get("source_age_s"),
+            }
+            for name, value in cameras.items()
+        },
+        "ride_path": {
+            "current": ride_path_is_current(mission, paths),
+            "length_m": planar_path_length(paths.get("ugv_global")),
+            "age_s": paths.get("ugv_global_age_s"),
+            "state": paths.get("ugv_global_for_state"),
+            "transition": paths.get("ugv_global_for_transition"),
+            "goal_status": paths.get("ugv_global_for_goal_status"),
+        },
     }
 
 
@@ -248,6 +359,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--startup-grace-s", type=float, default=180.0)
     parser.add_argument("--transient-grace-s", type=float, default=1.5)
     parser.add_argument("--sample-every-s", type=float, default=15.0)
+    parser.add_argument("--camera-probe-every-s", type=float, default=2.0)
+    parser.add_argument("--camera-probe-timeout-s", type=float, default=1.0)
     parser.add_argument("--evidence", required=True)
     parser.add_argument("--summary", required=True)
     args = parser.parse_args(argv)
@@ -256,6 +369,9 @@ def main(argv: list[str] | None = None) -> int:
     started = time.monotonic()
     deadline = started + max(1.0, args.timeout_s)
     next_sample = 0.0
+    next_camera_probe = 0.0
+    camera_urls = camera_stream_urls(args.url)
+    last_camera_probe: Mapping[str, Any] = {}
     observed: list[str] = []
     last_state = ""
     violation_since: dict[str, float] = {}
@@ -264,7 +380,14 @@ def main(argv: list[str] | None = None) -> int:
     final_snapshot: Mapping[str, Any] = {}
     terminal_reason = "timeout"
 
-    writer.append({"event": "acceptance_started", "url": args.url})
+    writer.append(
+        {
+            "event": "acceptance_started",
+            "url": args.url,
+            "camera_probe_every_s": max(0.0, args.camera_probe_every_s),
+            "required_camera_streams": sorted(REQUIRED_CAMERA_STREAMS),
+        }
+    )
     while time.monotonic() < deadline:
         now = time.monotonic()
         try:
@@ -281,6 +404,11 @@ def main(argv: list[str] | None = None) -> int:
 
         mission = _mapping(snapshot.get("mission"))
         state = str(mission.get("state", ""))
+        if args.camera_probe_every_s > 0.0 and now >= next_camera_probe:
+            last_camera_probe = probe_camera_streams(
+                camera_urls, max(0.1, args.camera_probe_timeout_s)
+            )
+            next_camera_probe = now + max(0.5, args.camera_probe_every_s)
         if state and state != last_state:
             observed.append(state)
             writer.append(
@@ -297,7 +425,13 @@ def main(argv: list[str] | None = None) -> int:
             violation_since.setdefault(code, now)
             if now - violation_since[code] >= args.transient_grace_s:
                 if code not in confirmed_violations:
-                    writer.append({"event": "violation", "code": code})
+                    writer.append(
+                        {
+                            "event": "violation",
+                            "code": code,
+                            "diagnostics": violation_diagnostics(snapshot, code),
+                        }
+                    )
                 confirmed_violations.add(code)
         for code in set(violation_since).difference(current):
             violation_since.pop(code, None)
@@ -307,6 +441,7 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "event": "periodic_sample",
                     "snapshot": _summary_snapshot(snapshot),
+                    "camera_probe": last_camera_probe,
                     "violations": sorted(current),
                 }
             )

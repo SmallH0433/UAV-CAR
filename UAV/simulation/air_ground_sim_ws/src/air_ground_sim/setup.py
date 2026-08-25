@@ -74,6 +74,7 @@ setup(
             "ugv_chassis_adapter = air_ground_sim.ugv_chassis_adapter:main",
             "uav_navigation = air_ground_sim.uav_navigation:main",
             "uav_command_mux = air_ground_sim.uav_command_mux:main",
+            "uav_optical_flow = air_ground_sim.uav_optical_flow:main",
             "uav_ultrasonic_adapter = air_ground_sim.uav_ultrasonic_adapter:main",
             "uav_perception = air_ground_sim.uav_perception:main",
             "uav_gimbal_controller = air_ground_sim.uav_gimbal_controller:main",

@@ -1,0 +1,407 @@
+{
+  "port": "COM8",
+  "baud": 115200,
+  "target_system": 1,
+  "target_component": 1,
+  "armed": false,
+  "mode": "STABILIZE",
+  "heartbeat": {
+    "type": 2,
+    "autopilot": 3,
+    "base_mode": 81,
+    "custom_mode": 0,
+    "system_status": 3,
+    "mavlink_version": 3
+  },
+  "parameter_progress": {
+    "received": 892,
+    "expected": 1013
+  },
+  "important_parameters": {
+    "FRAME_CLASS": 1.0,
+    "FRAME_TYPE": 1.0,
+    "AHRS_ORIENTATION": 0.0,
+    "ARMING_CHECK": null,
+    "BRD_SAFETYENABLE": null,
+    "BATT_MONITOR": 0.0,
+    "BATT_CAPACITY": null,
+    "BATT_LOW_VOLT": null,
+    "BATT_CRT_VOLT": null,
+    "FS_THR_ENABLE": 1.0,
+    "FS_GCS_ENABLE": 0.0,
+    "GPS1_TYPE": 1.0,
+    "GPS_TYPE": null,
+    "COMPASS_USE": 1.0,
+    "COMPASS_USE2": 1.0,
+    "COMPASS_USE3": 1.0,
+    "FLOW_TYPE": 5.0,
+    "RNGFND1_TYPE": 10.0,
+    "RNGFND1_ORIENT": 25.0,
+    "EK3_SRC1_POSXY": 3.0,
+    "EK3_SRC1_VELXY": 3.0,
+    "EK3_SRC1_POSZ": 1.0,
+    "EK3_SRC1_VELZ": 3.0,
+    "EK3_SRC1_YAW": 1.0,
+    "SERIAL1_PROTOCOL": null,
+    "SERIAL1_BAUD": null,
+    "SERIAL2_PROTOCOL": null,
+    "SERIAL2_BAUD": null,
+    "SERIAL2_OPTIONS": null,
+    "MOT_PWM_TYPE": 0.0,
+    "MOT_SPIN_ARM": 0.10000000149011612,
+    "MOT_SPIN_MIN": 0.15000000596046448,
+    "RCMAP_ROLL": 1.0,
+    "RCMAP_PITCH": 2.0,
+    "RCMAP_THROTTLE": 3.0,
+    "RCMAP_YAW": 4.0,
+    "FLTMODE_CH": 5.0,
+    "FLTMODE1": 0.0,
+    "FLTMODE2": 0.0,
+    "FLTMODE3": 0.0,
+    "FLTMODE4": 2.0,
+    "FLTMODE5": 0.0,
+    "FLTMODE6": 5.0
+  },
+  "sensor_bits": {
+    "present": [
+      "3D_GYRO",
+      "3D_ACCEL",
+      "3D_MAG",
+      "ABS_PRESSURE",
+      "GPS",
+      "OPTICAL_FLOW",
+      "LASER_POSITION",
+      "ANGULAR_RATE_CONTROL",
+      "ATTITUDE_STABILIZATION",
+      "YAW_POSITION",
+      "Z_ALTITUDE_CONTROL",
+      "XY_POSITION_CONTROL",
+      "MOTOR_OUTPUTS",
+      "GEOFENCE",
+      "AHRS",
+      "TERRAIN",
+      "LOGGING",
+      "BATTERY",
+      "PREARM_CHECK",
+      "PROPULSION"
+    ],
+    "enabled": [
+      "3D_GYRO",
+      "3D_ACCEL",
+      "3D_MAG",
+      "ABS_PRESSURE",
+      "GPS",
+      "OPTICAL_FLOW",
+      "LASER_POSITION",
+      "ANGULAR_RATE_CONTROL",
+      "ATTITUDE_STABILIZATION",
+      "YAW_POSITION",
+      "AHRS",
+      "TERRAIN",
+      "PREARM_CHECK",
+      "PROPULSION"
+    ],
+    "healthy": [
+      "3D_GYRO",
+      "3D_ACCEL",
+      "3D_MAG",
+      "ABS_PRESSURE",
+      "GPS",
+      "OPTICAL_FLOW",
+      "LASER_POSITION",
+      "ANGULAR_RATE_CONTROL",
+      "ATTITUDE_STABILIZATION",
+      "YAW_POSITION",
+      "MOTOR_OUTPUTS",
+      "GEOFENCE",
+      "AHRS",
+      "TERRAIN",
+      "LOGGING",
+      "BATTERY",
+      "PROXIMITY",
+      "PROPULSION"
+    ],
+    "enabled_but_unhealthy": [
+      "PREARM_CHECK"
+    ]
+  },
+  "status_text": [
+    {
+      "severity": 6,
+      "text": "ArduCopter V4.7.0 (1511f271)"
+    },
+    {
+      "severity": 6,
+      "text": "ChibiOS: 4f34e217"
+    },
+    {
+      "severity": 6,
+      "text": "fmuv3 002E0033 32385117 30393832"
+    },
+    {
+      "severity": 6,
+      "text": "IOMCU: 420 1001 411FC231"
+    },
+    {
+      "severity": 6,
+      "text": "RCOut: PWM:1-14"
+    },
+    {
+      "severity": 6,
+      "text": "IMU0: fast sampling enabled 8.0kHz/1.0kHz"
+    },
+    {
+      "severity": 6,
+      "text": "Frame: QUAD/X"
+    },
+    {
+      "severity": 2,
+      "text": "PreArm: RC not found"
+    },
+    {
+      "severity": 2,
+      "text": "PreArm: Hardware safety switch"
+    },
+    {
+      "severity": 2,
+      "text": "PreArm: Board (4.2v) out of range 4.3-5.8v"
+    }
+  ],
+  "command_acks": [
+    {
+      "command": 512,
+      "result": 0,
+      "progress": 0,
+      "result_param2": 0,
+      "target_system": 250,
+      "target_component": 190
+    },
+    {
+      "command": 401,
+      "result": 0,
+      "progress": 0,
+      "result_param2": 0,
+      "target_system": 250,
+      "target_component": 190
+    }
+  ],
+  "latest_messages": {
+    "AUTOPILOT_VERSION": {
+      "capabilities": 64495,
+      "flight_sw_version": 67567871,
+      "middleware_sw_version": 0,
+      "os_sw_version": 0,
+      "board_version": 589824,
+      "flight_custom_version": [
+        49,
+        53,
+        49,
+        49,
+        102,
+        50,
+        55,
+        49
+      ],
+      "middleware_custom_version": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "os_custom_version": [
+        52,
+        102,
+        51,
+        52,
+        101,
+        50,
+        49,
+        55
+      ],
+      "vendor_id": 4617,
+      "product_id": 22337,
+      "uid": 0,
+      "uid2": [
+        51,
+        0,
+        46,
+        0,
+        23,
+        81,
+        56,
+        50,
+        50,
+        56,
+        57,
+        48,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "HEARTBEAT": {
+      "type": 2,
+      "autopilot": 3,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "system_status": 3,
+      "mavlink_version": 3
+    },
+    "ATTITUDE": {
+      "time_boot_ms": 279778,
+      "roll": 0.009915458038449287,
+      "pitch": -0.017518825829029083,
+      "yaw": -2.0589356422424316,
+      "rollspeed": 0.0006497416761703789,
+      "pitchspeed": 0.00032380816992372274,
+      "yawspeed": 0.00022381165763363242
+    },
+    "VFR_HUD": {
+      "airspeed": 0.0,
+      "groundspeed": 0.003451617667451501,
+      "heading": 242,
+      "throttle": 0,
+      "alt": 0.25999999046325684,
+      "climb": -0.0014743003994226456
+    },
+    "SYS_STATUS": {
+      "onboard_control_sensors_present": 1399913839,
+      "onboard_control_sensors_enabled": 1348476271,
+      "onboard_control_sensors_health": 1198562671,
+      "load": 593,
+      "voltage_battery": 0,
+      "current_battery": -1,
+      "battery_remaining": -1,
+      "drop_rate_comm": 0,
+      "errors_comm": 0,
+      "errors_count1": 0,
+      "errors_count2": 0,
+      "errors_count3": 0,
+      "errors_count4": 0
+    },
+    "POWER_STATUS": {
+      "Vcc": 4249,
+      "Vservo": 4332,
+      "flags": 0
+    },
+    "RC_CHANNELS": {
+      "time_boot_ms": 279783,
+      "chancount": 0,
+      "chan1_raw": 0,
+      "chan2_raw": 0,
+      "chan3_raw": 0,
+      "chan4_raw": 0,
+      "chan5_raw": 0,
+      "chan6_raw": 0,
+      "chan7_raw": 0,
+      "chan8_raw": 0,
+      "chan9_raw": 0,
+      "chan10_raw": 0,
+      "chan11_raw": 0,
+      "chan12_raw": 0,
+      "chan13_raw": 0,
+      "chan14_raw": 0,
+      "chan15_raw": 0,
+      "chan16_raw": 0,
+      "chan17_raw": 0,
+      "chan18_raw": 0,
+      "rssi": 255
+    },
+    "SCALED_IMU2": {
+      "time_boot_ms": 279783,
+      "xacc": -19,
+      "yacc": -26,
+      "zacc": -999,
+      "xgyro": 3,
+      "ygyro": -5,
+      "zgyro": -1,
+      "xmag": -175,
+      "ymag": 205,
+      "zmag": 127,
+      "temperature": 4316
+    },
+    "GPS_RAW_INT": {
+      "time_usec": 0,
+      "fix_type": 1,
+      "lat": 0,
+      "lon": 0,
+      "alt": -17000,
+      "eph": 9999,
+      "epv": 9999,
+      "vel": 0,
+      "cog": 0,
+      "satellites_visible": 0,
+      "alt_ellipsoid": 0,
+      "h_acc": 4294967295,
+      "v_acc": 4294967295,
+      "vel_acc": 999000,
+      "hdg_acc": 0,
+      "yaw": 0
+    },
+    "DISTANCE_SENSOR": {
+      "time_boot_ms": 279785,
+      "min_distance": 2,
+      "max_distance": 800,
+      "current_distance": 14,
+      "type": 0,
+      "id": 0,
+      "orientation": 25,
+      "covariance": 0,
+      "horizontal_fov": 0.0,
+      "vertical_fov": 0.0,
+      "quaternion": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "signal_quality": 0
+    },
+    "EKF_STATUS_REPORT": {
+      "flags": 231,
+      "velocity_variance": 0.0,
+      "pos_horiz_variance": 0.000612644711509347,
+      "pos_vert_variance": 0.01651587150990963,
+      "compass_variance": 0.006095055490732193,
+      "terrain_alt_variance": 0.0,
+      "airspeed_variance": 0.0
+    }
+  },
+  "message_counts": {
+    "STATUSTEXT": 13,
+    "COMMAND_ACK": 2,
+    "AUTOPILOT_VERSION": 1,
+    "PARAM_VALUE": 892,
+    "HEARTBEAT": 15,
+    "RAW_IMU": 14,
+    "AHRS": 13,
+    "AHRS2": 13,
+    "ATTITUDE": 13,
+    "GLOBAL_POSITION_INT": 13,
+    "VFR_HUD": 13,
+    "SYS_STATUS": 13,
+    "POWER_STATUS": 13,
+    "MEMINFO": 13,
+    "NAV_CONTROLLER_OUTPUT": 13,
+    "MISSION_CURRENT": 13,
+    "SERVO_OUTPUT_RAW": 13,
+    "RC_CHANNELS": 13,
+    "SCALED_IMU2": 13,
+    "SCALED_PRESSURE": 13,
+    "GPS_RAW_INT": 13,
+    "SYSTEM_TIME": 13,
+    "DISTANCE_SENSOR": 13,
+    "TERRAIN_REPORT": 13,
+    "OPTICAL_FLOW": 13,
+    "EKF_STATUS_REPORT": 13,
+    "VIBRATION": 13,
+    "TIMESYNC": 2
+  }
+}

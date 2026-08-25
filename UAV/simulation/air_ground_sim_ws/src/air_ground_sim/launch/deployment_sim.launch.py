@@ -333,17 +333,14 @@ def generate_launch_description():
         _static_transform("base_link", "laser_frame", "0.30", "0", "0.18"),
         _static_transform("base_link", "imu_link", "0", "0", "0.04"),
         _static_transform("base_link", "ugv_camera_link", "0.39", "0", "0.08"),
-        _static_transform("uav_base_link", "uav_lidar_frame", "0.10", "0", "0.03"),
+        _static_transform("uav_base_link", "uav_gnss_link", "0", "0", "0.11"),
+        _static_transform("uav_base_link", "uav_magnetometer_link", "0", "0", "0.11"),
+        _static_transform("uav_base_link", "uav_barometer_link", "0", "0", "0.11"),
+        _static_transform("uav_base_link", "uav_downward_tof_frame", "-0.04", "0", "-0.112"),
         _static_transform("uav_base_link", "uav_lidar_3d_frame", "0", "0", "0.10"),
-        _static_transform("uav_base_link", "uav_stereo_left_optical_frame", "0.16", "0.05", "0.02"),
-        _static_transform("uav_base_link", "uav_stereo_right_optical_frame", "0.16", "-0.05", "0.02"),
+        _static_transform("uav_base_link", "uav_stereo_left_optical_frame", "0.16", "0.06", "0.02"),
+        _static_transform("uav_base_link", "uav_stereo_right_optical_frame", "0.16", "-0.06", "0.02"),
         _static_transform("uav_base_link", "uav_stereo_depth_optical_frame", "0.16", "0", "0.02"),
-        _static_transform("uav_base_link", "uav_ultrasonic_front_frame", "0.19", "0", "-0.01"),
-        _static_transform("uav_base_link", "uav_ultrasonic_rear_frame", "-0.19", "0", "-0.01"),
-        _static_transform("uav_base_link", "uav_ultrasonic_left_frame", "0", "0.19", "-0.01"),
-        _static_transform("uav_base_link", "uav_ultrasonic_right_frame", "0", "-0.19", "-0.01"),
-        _static_transform("uav_base_link", "uav_ultrasonic_up_frame", "0", "0", "0.11"),
-        _static_transform("uav_base_link", "uav_ultrasonic_down_frame", "0", "0", "-0.11"),
     ]
 
     return LaunchDescription(

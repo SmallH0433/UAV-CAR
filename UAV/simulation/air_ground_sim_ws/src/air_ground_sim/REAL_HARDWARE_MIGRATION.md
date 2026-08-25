@@ -48,9 +48,10 @@ AT9S Pro / 独立急停                     人工最高优先级与最终撤权
 | Hunter | 官方/兼容 ROS 2 驱动、隔离 CAN 适配器 | 确认车型、CAN 比特率、正方向、转角/速度范围、物理急停 |
 | 云台相机 | 带时间戳 RGB 流与 CAN/PWM/串口角度控制 | 测云台零位、轴方向、角限位和实际反馈，不只使用命令估计 |
 | 双目相机 | 同步左右目、内参/畸变、深度或视差 | 刚性基线、硬同步优先；重新标定并测试弱纹理/逆光 |
-| 2D LiDAR | `LaserScan` 与可靠时间戳 | 安装面应水平；注意桨叶/机架自反射遮罩 |
+| GNSS + HMC5883 | `NavSatFix` + `MagneticField` | GNSS 天线净空、罗盘远离电源线并完成硬铁/软铁标定 |
+| 下视 OV9281 + ToF | `Image` + `LaserScan`/`Range` | 硬件触发、曝光、镜头标定和离地量程必须实测 |
+| 双 OV9281 | 同步左右目与标定参数 | 需要共享触发、稳定基线、时间同步和温漂标定 |
 | 3D LiDAR | `PointCloud2` 与每帧/每点时间 | 振动隔离、运动畸变补偿、网络带宽和 EMI |
-| 超声波 | 六向 `Range` 或 MCU 聚合消息 | 交替触发防串扰；软物体、斜面和温度测试；只作近场冗余 |
 | 降落板 | 大尺寸 AprilTag、漫反射表面、机械导向/缓冲 | 标签尺寸必须实测；避开反光、阴影与旋翼下洗 |
 | 锁止机构 | 闭锁/释放命令、双路状态、机械应急释放 | “看到标签”不等于“已锁止”；必须有独立接触证据 |
 
@@ -63,14 +64,17 @@ AT9S Pro / 独立急停                     人工最高优先级与最终撤权
 | 话题 | 类型 | 说明 |
 |---|---|---|
 | `/uav/odom` | `nav_msgs/Odometry` | ArduPilot/VIO 融合后的 ENU 本地位置 |
-| `/uav/scan` | `sensor_msgs/LaserScan` | 水平 2D 扫描 |
+| `/uav/gnss/fix` | `sensor_msgs/NavSatFix` | 独立 GNSS 接收机输出 |
+| `/uav/magnetometer` | `sensor_msgs/MagneticField` | HMC5883 类三轴磁场输出 |
+| `/uav/barometer` | `sensor_msgs/FluidPressure` | 气压计输出 |
+| `/uav/lidar3d/scan` | `sensor_msgs/LaserScan` | 3D LiDAR扫描兼容接口 |
 | `/uav/lidar3d/points` | `sensor_msgs/PointCloud2` | 机体系三维点云 |
 | `/uav/stereo/left/image_raw` | `sensor_msgs/Image` | 同步左目 |
 | `/uav/stereo/right/image_raw` | `sensor_msgs/Image` | 同步右目 |
 | `/uav/stereo/depth/depth_image` | `sensor_msgs/Image` | `32FC1` 米或 `16UC1` 毫米深度 |
 | `/vision/image_raw` | `sensor_msgs/Image` | 下视精准降落图像 |
-| `/uav/gimbal/image_raw` | `sensor_msgs/Image` | 云台主画面 |
-| `/uav/range/<direction>` | `sensor_msgs/Range` | 六向超声波，方向名与仿真一致 |
+| `/uav/downward_tof/scan` | `sensor_msgs/LaserScan` | 下视 ToF 扇形距离 |
+| `/uav/optical_flow/velocity` | `geometry_msgs/TwistStamped` | OV9281 光流经 ToF 尺度化后的机体系速度 |
 | `/uav/cmd_vel` | `geometry_msgs/Twist` | 仲裁后的 FLU 速度，交给 MAVLink bridge |
 
 ### 无人车

@@ -1,0 +1,79 @@
+{
+  "created_utc": "2026-08-18T05:48:54Z",
+  "vehicle": "real Pixhawk system 1 component 1",
+  "armed": false,
+  "parameters": {
+    "RC7_OPTION": {
+      "value": 0.0,
+      "type": 4
+    },
+    "RC8_OPTION": {
+      "value": 0.0,
+      "type": 4
+    },
+    "PLND_ENABLED": {
+      "value": 0.0,
+      "type": 2
+    },
+    "PLND_TYPE": {
+      "value": 0.0,
+      "type": 2
+    },
+    "PLND_EST_TYPE": {
+      "value": 1.0,
+      "type": 2
+    },
+    "PLND_OPTIONS": {
+      "value": 0.0,
+      "type": 4
+    },
+    "PLND_ORIENT": {
+      "value": 25.0,
+      "type": 2
+    },
+    "PLND_LAG": {
+      "value": 0.019999999552965164,
+      "type": 9
+    },
+    "PLND_YAW_ALIGN": {
+      "value": 0.0,
+      "type": 9
+    },
+    "PLND_CAM_POS_X": {
+      "value": 0.0,
+      "type": 9
+    },
+    "PLND_CAM_POS_Y": {
+      "value": 0.0,
+      "type": 9
+    },
+    "PLND_CAM_POS_Z": {
+      "value": 0.0,
+      "type": 9
+    },
+    "PLND_LAND_OFS_X": {
+      "value": 0.0,
+      "type": 9
+    },
+    "PLND_LAND_OFS_Y": {
+      "value": 0.0,
+      "type": 9
+    },
+    "PLND_STRICT": {
+      "value": 1.0,
+      "type": 2
+    },
+    "PLND_ALT_MIN": {
+      "value": 0.75,
+      "type": 9
+    },
+    "PLND_ALT_MAX": {
+      "value": 8.0,
+      "type": 9
+    },
+    "PLND_XY_DIST_MAX": {
+      "value": 2.5,
+      "type": 9
+    }
+  }
+}

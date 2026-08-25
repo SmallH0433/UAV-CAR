@@ -1,0 +1,158 @@
+{
+  "duration_s": 957.644,
+  "evidence_path": "/mnt/d/Codex/UAV/simulation/air_ground_sim_ws/src/air_ground_sim/validation/evidence/final-sil-20260812-r7.jsonl",
+  "expected_sequence": [
+    "RELEASE_REMOTE_DOCK",
+    "WAIT_AUTOPILOT",
+    "ARM_INITIAL",
+    "TAKEOFF_INITIAL",
+    "NAVIGATE_TO_START_DOCK",
+    "DOCK_AT_START",
+    "LATCH_AT_START",
+    "DWELL_AT_START",
+    "RELEASE_FOR_TRANSIT",
+    "ARM_FOR_TRANSIT",
+    "TAKEOFF_FOR_TRANSIT",
+    "PARALLEL_TRANSIT",
+    "DOCK_STOPPED",
+    "LATCH_STOPPED",
+    "DWELL_STOPPED",
+    "RELEASE_FOR_FOLLOW",
+    "ARM_FOR_FOLLOW",
+    "TAKEOFF_FOR_FOLLOW",
+    "FOLLOW_MOVING_UGV",
+    "DOCK_MOVING",
+    "LATCH_MOVING",
+    "RIDE_AND_DECELERATE",
+    "COMPLETE"
+  ],
+  "final_snapshot": {
+    "armed": false,
+    "camera_streams": {
+      "downward": {
+        "active": true,
+        "age_s": 4.2,
+        "ready": true
+      },
+      "gimbal": {
+        "active": true,
+        "age_s": 0.1,
+        "ready": true
+      },
+      "landing": {
+        "active": true,
+        "age_s": 1.56,
+        "ready": true
+      },
+      "stereo_left": {
+        "active": true,
+        "age_s": 0.52,
+        "ready": true
+      },
+      "stereo_right": {
+        "active": true,
+        "age_s": 0.48,
+        "ready": true
+      },
+      "ugv": {
+        "active": true,
+        "age_s": 0.42,
+        "ready": true
+      }
+    },
+    "dock_detached": false,
+    "faults": [],
+    "landed": true,
+    "mode": "LAND",
+    "parameter_attestation": true,
+    "reason": "guard_satisfied",
+    "ride_path": {
+      "age_s": 3.54,
+      "current": false,
+      "goal_status": "executing",
+      "length_m": 0.8047104449235754,
+      "state": "RIDE_AND_DECELERATE",
+      "transition": 22
+    },
+    "sensor_health": {
+      "gimbal_camera": true,
+      "lidar2d": true,
+      "lidar3d": true,
+      "stereo_depth": true,
+      "stereo_left": true,
+      "stereo_right": true,
+      "ultrasonic_down": true,
+      "ultrasonic_front": true,
+      "ultrasonic_left": true,
+      "ultrasonic_rear": true,
+      "ultrasonic_right": true,
+      "ultrasonic_up": true
+    },
+    "state": "COMPLETE",
+    "system_state": "READY",
+    "telemetry_streams": [
+      7,
+      7
+    ],
+    "transitions": 23,
+    "ugv_gate_open": false,
+    "ugv_speed_mps": 0.004
+  },
+  "finished_at": "2026-08-12T06:43:46.815+00:00",
+  "full_sequence": true,
+  "observed_sequence": [
+    "IDLE",
+    "RELEASE_REMOTE_DOCK",
+    "ARM_INITIAL",
+    "TAKEOFF_INITIAL",
+    "NAVIGATE_TO_START_DOCK",
+    "DOCK_AT_START",
+    "LATCH_AT_START",
+    "DWELL_AT_START",
+    "RELEASE_FOR_TRANSIT",
+    "ARM_FOR_TRANSIT",
+    "TAKEOFF_FOR_TRANSIT",
+    "PARALLEL_TRANSIT",
+    "DOCK_STOPPED",
+    "LATCH_STOPPED",
+    "DWELL_STOPPED",
+    "RELEASE_FOR_FOLLOW",
+    "ARM_FOR_FOLLOW",
+    "TAKEOFF_FOR_FOLLOW",
+    "FOLLOW_MOVING_UGV",
+    "DOCK_MOVING",
+    "LATCH_MOVING",
+    "RIDE_AND_DECELERATE",
+    "COMPLETE"
+  ],
+  "passed": false,
+  "required_observed_sequence": [
+    "ARM_INITIAL",
+    "TAKEOFF_INITIAL",
+    "NAVIGATE_TO_START_DOCK",
+    "DOCK_AT_START",
+    "LATCH_AT_START",
+    "DWELL_AT_START",
+    "RELEASE_FOR_TRANSIT",
+    "ARM_FOR_TRANSIT",
+    "TAKEOFF_FOR_TRANSIT",
+    "PARALLEL_TRANSIT",
+    "DOCK_STOPPED",
+    "LATCH_STOPPED",
+    "DWELL_STOPPED",
+    "RELEASE_FOR_FOLLOW",
+    "ARM_FOR_FOLLOW",
+    "TAKEOFF_FOR_FOLLOW",
+    "FOLLOW_MOVING_UGV",
+    "DOCK_MOVING",
+    "LATCH_MOVING",
+    "RIDE_AND_DECELERATE",
+    "COMPLETE"
+  ],
+  "schema_version": "1.0",
+  "terminal_reason": "complete",
+  "transition_count": 23,
+  "violations": [
+    "OPERATIONS_CAMERA_STREAM_INCOMPLETE"
+  ]
+}

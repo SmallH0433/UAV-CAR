@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "recorded_at": "2026-08-12T16:10:00+08:00",
+  "result": "PASS",
+  "scope": "Complete Gazebo/SITL/Nav2 architecture with the dashboard SSE connection and all six JPEG camera endpoints actively pulled",
+  "host": {
+    "cpu": "Intel Core i7-11700, 8 cores / 16 threads",
+    "wsl_distribution": "Ubuntu-22.04",
+    "wsl_vcpu": 8,
+    "wsl_memory_gib": 8
+  },
+  "load": {
+    "camera_streams": [
+      "gimbal",
+      "downward",
+      "landing",
+      "ugv",
+      "stereo_left",
+      "stereo_right"
+    ],
+    "jpeg_pull_period_s": 0.4,
+    "frames_per_camera": 38,
+    "camera_errors": 0,
+    "gazebo_stats_samples": 100
+  },
+  "real_time_factor": {
+    "median": 0.305,
+    "mean": 0.4055,
+    "p10": 0.0042,
+    "maximum": 1.2236,
+    "acceptance_threshold_median": 0.15
+  },
+  "comparison": {
+    "previous_wsl_vcpu": 4,
+    "previous_median_approx": 0.13,
+    "median_improvement_ratio_approx": 2.35
+  },
+  "notes": [
+    "The low p10 records bursty software-rendering stalls; the median is the release metric for this workstation profile.",
+    "Camera freshness is independently acceptance-tested by the full r10 SIL run and is not inferred from RTF alone."
+  ]
+}

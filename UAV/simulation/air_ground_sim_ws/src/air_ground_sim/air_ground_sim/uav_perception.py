@@ -1,4 +1,4 @@
-"""Fuse 2D/3D lidar, stereo depth and ultrasonic returns for UAV avoidance."""
+"""Fuse 3D lidar, OV9281 stereo depth and downward ToF for UAV avoidance."""
 
 import json
 import math
@@ -10,7 +10,7 @@ from geometry_msgs.msg import Vector3Stamped
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import Image, LaserScan, PointCloud2, Range
+from sensor_msgs.msg import Image, LaserScan, PointCloud2
 from std_msgs.msg import String
 
 from .perception_math import (
@@ -19,7 +19,6 @@ from .perception_math import (
     combine_summaries,
     scan_to_points,
     summarize_points,
-    ultrasonic_points,
 )
 from .runtime_timing import create_steady_timer
 
@@ -78,10 +77,10 @@ class UavPerception(Node):
 
     def __init__(self) -> None:
         super().__init__("uav_perception")
-        self.declare_parameter("scan_topic", "/uav/scan")
+        self.declare_parameter("scan_topic", "/uav/lidar3d/scan")
         self.declare_parameter("pointcloud_topic", "/uav/lidar3d/points")
         self.declare_parameter("depth_topic", "/uav/stereo/depth/depth_image")
-        self.declare_parameter("range_prefix", "/uav/range")
+        self.declare_parameter("tof_topic", "/uav/downward_tof/scan")
         self.declare_parameter("influence_distance_m", 3.0)
         self.declare_parameter("hard_stop_distance_m", 0.85)
         self.declare_parameter("sensor_stale_after_s", 0.7)
@@ -109,19 +108,20 @@ class UavPerception(Node):
         )
 
         names = [
-            "lidar2d",
+            "lidar3d_scan",
             "lidar3d",
             "stereo_depth",
             "stereo_left",
             "stereo_right",
-            "gimbal_camera",
-            *[f"ultrasonic_{name}" for name in DIRECTIONS],
+            "downward_camera",
+            "downward_tof",
         ]
         self.rates = {name: RateTracker() for name in names}
         self.lidar2d_summary = self._empty_summary()
         self.lidar3d_summary = self._empty_summary()
         self.depth_summary = self._empty_summary()
-        self.ultrasonic_ranges = {name: math.inf for name in DIRECTIONS}
+        self.downward_range = math.inf
+        self.tof_summary = self._empty_summary()
         self.last_summary = self._empty_summary()
 
         self.vector_publisher = self.create_publisher(
@@ -148,18 +148,16 @@ class UavPerception(Node):
             self.on_depth,
             qos_profile_sensor_data,
         )
-        range_prefix = str(self.get_parameter("range_prefix").value).rstrip("/")
-        for name in DIRECTIONS:
-            self.create_subscription(
-                Range,
-                f"{range_prefix}/{name}",
-                lambda message, direction=name: self.on_range(direction, message),
-                qos_profile_sensor_data,
-            )
+        self.create_subscription(
+            LaserScan,
+            str(self.get_parameter("tof_topic").value),
+            self.on_tof,
+            qos_profile_sensor_data,
+        )
         for topic, key in (
             ("/uav/stereo/left/image_raw", "stereo_left"),
             ("/uav/stereo/right/image_raw", "stereo_right"),
-            ("/uav/gimbal/image_raw", "gimbal_camera"),
+            ("/vision/image_raw", "downward_camera"),
         ):
             self.create_subscription(
                 Image,
@@ -187,7 +185,7 @@ class UavPerception(Node):
         self.rates[sensor].mark(self._freshness_now())
 
     def on_scan(self, message: LaserScan) -> None:
-        self._mark_sensor("lidar2d")
+        self._mark_sensor("lidar3d_scan")
         self.lidar2d_summary = summarize_points(
             scan_to_points(message.ranges, message.angle_min, message.angle_increment),
             self.influence,
@@ -263,9 +261,21 @@ class UavPerception(Node):
             points.append((x, y, z))
         self.depth_summary = summarize_points(points, self.influence, 0.65)
 
-    def on_range(self, direction: str, message: Range) -> None:
-        self._mark_sensor(f"ultrasonic_{direction}")
-        self.ultrasonic_ranges[direction] = float(message.range)
+    def on_tof(self, message: LaserScan) -> None:
+        valid = [
+            float(value)
+            for value in message.ranges
+            if math.isfinite(value)
+            and float(message.range_min) <= float(value) <= float(message.range_max)
+        ]
+        if not valid:
+            return
+        valid.sort()
+        self.downward_range = valid[len(valid) // 2]
+        self.tof_summary = summarize_points(
+            ((0.0, 0.0, -self.downward_range),), self.influence, 0.9
+        )
+        self._mark_sensor("downward_tof")
 
     def _sensor_report(self, sensor: str, now_s: float) -> dict:
         return self.rates[sensor].report(
@@ -283,20 +293,12 @@ class UavPerception(Node):
 
     def publish_fusion(self) -> None:
         freshness_now = self._freshness_now()
-        ultrasonic_fresh = {
-            name: self.ultrasonic_ranges[name]
-            for name in DIRECTIONS
-            if self._sensor_report(f"ultrasonic_{name}", freshness_now)["healthy"]
-        }
-        ultrasonic_summary = summarize_points(
-            ultrasonic_points(ultrasonic_fresh), self.influence, 0.8
-        )
         summary = combine_summaries(
             (
-                self._fresh_summary("lidar2d", self.lidar2d_summary, freshness_now),
+                self._fresh_summary("lidar3d_scan", self.lidar2d_summary, freshness_now),
                 self._fresh_summary("lidar3d", self.lidar3d_summary, freshness_now),
                 self._fresh_summary("stereo_depth", self.depth_summary, freshness_now),
-                ultrasonic_summary,
+                self._fresh_summary("downward_tof", self.tof_summary, freshness_now),
             ),
             1.0,
         )
@@ -311,9 +313,9 @@ class UavPerception(Node):
         sensors = {
             name: self._sensor_report(name, freshness_now) for name in self.rates
         }
-        primary_healthy = sensors["lidar2d"]["healthy"] and (
+        primary_healthy = sensors["lidar3d_scan"]["healthy"] and (
             sensors["lidar3d"]["healthy"] or sensors["stereo_depth"]["healthy"]
-        )
+        ) and sensors["downward_camera"]["healthy"] and sensors["downward_tof"]["healthy"]
         degraded = [name for name, state in sensors.items() if not state["healthy"]]
         message = String()
         message.data = json.dumps(
@@ -340,7 +342,7 @@ class UavPerception(Node):
                 },
                 "point_count": summary.point_count,
                 "source_minimums_m": {
-                    "lidar2d": None
+                    "lidar3d_scan": None
                     if not math.isfinite(self.lidar2d_summary.minimum_m)
                     else round(self.lidar2d_summary.minimum_m, 3),
                     "lidar3d": None
@@ -349,16 +351,13 @@ class UavPerception(Node):
                     "stereo_depth": None
                     if not math.isfinite(self.depth_summary.minimum_m)
                     else round(self.depth_summary.minimum_m, 3),
-                    "ultrasonic": None
-                    if not math.isfinite(ultrasonic_summary.minimum_m)
-                    else round(ultrasonic_summary.minimum_m, 3),
+                    "downward_tof": None
+                    if not math.isfinite(self.downward_range)
+                    else round(self.downward_range, 3),
                 },
-                "ultrasonic_ranges_m": {
-                    name: None
-                    if not math.isfinite(value)
-                    else round(float(value), 3)
-                    for name, value in self.ultrasonic_ranges.items()
-                },
+                "downward_range_m": None
+                if not math.isfinite(self.downward_range)
+                else round(self.downward_range, 3),
                 "sensors": sensors,
             },
             ensure_ascii=False,

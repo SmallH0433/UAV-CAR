@@ -44,9 +44,28 @@ class ReadinessTests(unittest.TestCase):
 
     def test_stabilize_is_not_an_approved_entry_mode(self):
         result = evaluate_readiness(self.healthy(mode="STABILIZE"))
-        self.assertIn("ENTRY_MODE_NOT_LOITER", result.blockers)
+        self.assertIn("ENTRY_MODE_NOT_APPROVED", result.blockers)
+
+    def test_props_off_entry_modes_can_be_explicitly_approved(self):
+        result = evaluate_readiness(
+            self.healthy(mode="ALT_HOLD"),
+            allowed_modes=("ALT_HOLD", "LOITER", "POSHOLD", "GUIDED"),
+        )
+        self.assertTrue(result.ready_for_follow_request)
+
+    def test_battery_gate_can_be_disabled_for_props_off_test(self):
+        result = evaluate_readiness(
+            self.healthy(
+                battery_voltage_v=None,
+                battery_remaining_pct=0,
+                battery_age_s=None,
+            ),
+            battery_telemetry_required=False,
+        )
+        self.assertTrue(result.ready_for_follow_request)
+        self.assertFalse(any(item.startswith("BATTERY_") for item in result.blockers))
+        self.assertIn("BATTERY_CHECK_DISABLED", result.warnings)
 
 
 if __name__ == "__main__":
     unittest.main()
-

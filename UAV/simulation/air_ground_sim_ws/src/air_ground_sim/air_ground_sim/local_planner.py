@@ -20,6 +20,38 @@ def _clearance_for_heading(x: float, y: float, sectors: Mapping[str, float]) -> 
     return min(values) if values else math.inf
 
 
+def limit_vertical_velocity(
+    desired_z: float,
+    sectors: Mapping[str, float],
+    hard_stop_distance_m: float,
+    influence_distance_m: float,
+) -> float:
+    """Slow motion toward a vertical obstacle without reversing the command.
+
+    A broad ground or ceiling return is expected during takeoff and landing.
+    Treating that surface as a signed potential-field force creates a local
+    minimum where the vehicle can hover indefinitely.  Directional clearance
+    instead preserves the requested climb/descent sign, scales it to zero over
+    the configured soft envelope, and retains the hard-stop boundary.
+    """
+
+    velocity = float(desired_z)
+    if abs(velocity) <= 1.0e-9:
+        return 0.0
+    direction = "up" if velocity > 0.0 else "down"
+    clearance = float(sectors.get(direction, math.inf))
+    if not math.isfinite(clearance):
+        return velocity
+    hard_stop = max(float(hard_stop_distance_m), 0.0)
+    influence = max(float(influence_distance_m), hard_stop)
+    if clearance <= hard_stop:
+        return 0.0
+    if clearance >= influence or influence <= hard_stop + 1.0e-9:
+        return velocity
+    scale = (clearance - hard_stop) / (influence - hard_stop)
+    return velocity * min(max(scale, 0.0), 1.0)
+
+
 def select_body_velocity(
     desired: Sequence[float],
     repulsion: Sequence[float],
@@ -37,7 +69,9 @@ def select_body_velocity(
     can reject candidates through ``safety_check``.
     """
     desired_x, desired_y, desired_z = (float(value) for value in desired[:3])
-    repulsion_x, repulsion_y, repulsion_z = (float(value) for value in repulsion[:3])
+    repulsion_x, repulsion_y, _repulsion_z = (
+        float(value) for value in repulsion[:3]
+    )
     preferred_x = desired_x + float(repulsion_gain) * repulsion_x
     preferred_y = desired_y + float(repulsion_gain) * repulsion_y
     preferred_speed = math.hypot(preferred_x, preferred_y)
@@ -64,7 +98,12 @@ def select_body_velocity(
         clearance = _clearance_for_heading(candidate_x, candidate_y, sectors)
         if math.isfinite(clearance) and clearance <= float(hard_stop_distance_m):
             continue
-        vertical = desired_z + float(repulsion_gain) * repulsion_z
+        vertical = limit_vertical_velocity(
+            desired_z,
+            sectors,
+            hard_stop_distance_m,
+            influence_distance_m,
+        )
         candidate = (candidate_x, candidate_y, vertical)
         if safety_check is not None and not safety_check(candidate):
             continue
@@ -84,4 +123,3 @@ def select_body_velocity(
             return hover
         return hover
     return best
-

@@ -63,6 +63,18 @@ class ControllerTests(unittest.TestCase):
         )
         self.assertAlmostEqual(command.velocity_ned_mps[0], 0.02, places=6)
 
+    def test_one_mps_candidate_limit(self):
+        controller = HorizontalFollowController(
+            kp_xy=1.0, max_speed_mps=1.0, max_accel_mps2=5.0
+        )
+        command = controller.update(
+            timestamp_s=0.0,
+            vehicle_position_ned_m=(0.0, 0.0),
+            target_position_ned_m=(10.0, 10.0),
+        )
+        speed = (command.velocity_ned_mps[0] ** 2 + command.velocity_ned_mps[1] ** 2) ** 0.5
+        self.assertAlmostEqual(speed, 1.0, places=9)
+
 
 class StateMachineTests(unittest.TestCase):
     def base_inputs(self, **changes):
@@ -116,6 +128,17 @@ class MavlinkEncodingTests(unittest.TestCase):
     def test_rejects_overspeed(self):
         with self.assertRaises(ValueError):
             make_message(GuidedVelocitySetpoint(1000, 0.3, 0.0), max_speed_mps=0.2)
+
+    def test_one_mps_candidate_encoder_boundary(self):
+        accepted = make_message(
+            GuidedVelocitySetpoint(1000, 0.8, 0.6), max_speed_mps=1.0
+        )
+        self.assertAlmostEqual(accepted.vx, 0.8)
+        self.assertAlmostEqual(accepted.vy, 0.6)
+        with self.assertRaises(ValueError):
+            make_message(
+                GuidedVelocitySetpoint(1000, 1.001, 0.0), max_speed_mps=1.0
+            )
 
 
 class ReplayTests(unittest.TestCase):

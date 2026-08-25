@@ -89,6 +89,9 @@ def verify(root: Path) -> list[dict]:
     )
     source_dir = root / "air_ground_sim"
     ros_compat_source = (source_dir / "ros_compat.py").read_text(encoding="utf-8")
+    local_planner_source = (source_dir / "local_planner.py").read_text(
+        encoding="utf-8"
+    )
     checks = []
 
     def check(identifier: str, condition: bool, detail: str) -> None:
@@ -174,6 +177,19 @@ def verify(root: Path) -> list[dict]:
         and "update_camera_subscriptions" in gateway_source
         and "get_subscription_count() > 0" in tracker_source,
         "Unattended SIL avoids UGV camera rendering and dashboard-only JPEG/debug-image work",
+    )
+    check(
+        "DASHBOARD-CAMERA-CALLBACK-ISOLATION",
+        "ReentrantCallbackGroup" in gateway_source
+        and "MultiThreadedExecutor" in gateway_source
+        and "camera_encode_worker" in gateway_source
+        and "camera_frame_is_fresh" in gateway_source
+        and "camera_qos_profile" in gateway_source
+        and nested(sim, "web_gateway", "camera_qos_reliability")
+        == "reliable"
+        and nested(real, "web_gateway", "camera_qos_reliability")
+        == "best_effort",
+        "Camera reception, bounded JPEG encoding and stale-frame serving are isolated",
     )
     runtime_timing = (source_dir / "runtime_timing.py").read_text(encoding="utf-8")
     raw_timer_sources = [
@@ -326,7 +342,8 @@ def verify(root: Path) -> list[dict]:
         and "SYSTEM_CRITICAL_FAULT_PRESENT" in acceptance_source
         and "MISSION_PLAN_IDENTITY_INVALID" in acceptance_source
         and "OPERATIONS_CAMERA_STREAM_INCOMPLETE" in acceptance_source
-        and "air_ground_runtime_acceptance" in setup_source,
+        and "air_ground_runtime_acceptance" in setup_source
+        and "ThreadPoolExecutor" in acceptance_source,
         "Complete SIL acceptance is machine-checked and written to durable evidence",
     )
     lock_root = console_lock.get("packages", {}).get("", {})
@@ -600,6 +617,12 @@ def verify(root: Path) -> list[dict]:
         and nested(real_mission, "uav_navigation", "height_limit_zones_json")
         == nested(real_mission, "web_gateway", "height_limit_zones_json"),
         "Planner and operator console use the same commissioned airspace metadata",
+    )
+    check(
+        "UAV-DIRECTIONAL-VERTICAL-CLEARANCE",
+        "limit_vertical_velocity" in local_planner_source
+        and "desired_z +" not in local_planner_source,
+        "Vertical obstacle clearance slows toward surfaces without reversing climb or descent",
     )
     check(
         "HARDWARE-MISSION-OVERRIDE",

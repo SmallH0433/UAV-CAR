@@ -13,6 +13,11 @@ UAV/simulation/air_ground_sim_ws/log/
 UAV/air_ground_open_source/01_flight_stack/ardupilot/
 UAV/air_ground_open_source/06_simulation/ardupilot_gazebo/
 
+# 第三方开源参考集合整体仅本地保留（约 2GB：SITL_Models/nav2/ardupilot 等），
+# 仓库只跟踪其中精选的 src/（vendored ros_gz）
+UAV/air_ground_open_source/*
+!UAV/air_ground_open_source/src/
+
 # ============================================
 # 3. 忽略临时文件和日志
 # ============================================

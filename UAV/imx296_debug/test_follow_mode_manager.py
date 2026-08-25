@@ -94,6 +94,13 @@ class FollowModeManagerTests(unittest.TestCase):
         self.assertEqual(decision.state, ModeManagerState.FAULT_LOCKOUT)
         self.assertIsNone(decision.request_mode)
 
+    def test_props_off_manager_rejects_preexisting_unowned_guided(self):
+        manager = FollowModeManager(allow_preexisting_guided=False)
+        decision = manager.update(self.inputs(0.0, current_mode="GUIDED"))
+        self.assertEqual(decision.state, ModeManagerState.FAULT_LOCKOUT)
+        self.assertEqual(decision.reason, "PREEXISTING_GUIDED_NOT_OWNED")
+        self.assertFalse(decision.allow_follow_velocity)
+
 
 class PilotStickOverrideDetectorTests(unittest.TestCase):
     def test_requires_sustained_deflection(self):
