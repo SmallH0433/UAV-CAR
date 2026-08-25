@@ -18,6 +18,8 @@
   <exec_depend>ros_gz_bridge</exec_depend>
   <exec_depend>car_description</exec_depend>
   <exec_depend>car_nodes</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>python3-pytest</test_depend>

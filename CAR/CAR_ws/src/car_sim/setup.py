@@ -10,11 +10,15 @@ setup(
         ('share/ament_index/resource_index/packages',
          ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/config', ['config/gz_bridge.yaml']),
+        ('share/' + package_name + '/config', [
+            'config/gz_bridge.yaml',
+            'config/nav2_params.yaml',
+        ]),
         ('share/' + package_name + '/launch', [
             'launch/car_sim.launch.py',
             'launch/teleop_test.launch.py',
             'launch/real_bringup.launch.py',
+            'launch/nav2_stack.launch.py',
         ]),
         ('share/' + package_name + '/worlds', ['worlds/r680_test_field.sdf']),
         ('share/' + package_name + '/web', ['car_sim/web/index.html']),

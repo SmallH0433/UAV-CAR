@@ -9,9 +9,9 @@
 ## 包结构
 
 - `car_interfaces` — 自定义 msg/srv（AckermannCommand / MotorFeedback / Obstacle(Array) / UavCommand / UavStatus / SetGoal）
-- `car_nodes` — 7 个功能节点 + `sim_motor_bridge`（仿真电机桥）
+- `car_nodes` — 8 个功能节点（含 `ultrasonic_driver` 车尾 HC-SR04 超声波，实机脱困倒车盲区急停）+ `sim_motor_bridge`（仿真电机桥）
 - `car_description` — R680 URDF + Gazebo 模型 `models/r680_4wd`
-- `car_sim` — gz 世界、ros_gz_bridge 配置、控制权 mux、指令网关、网页遥控、实机 bringup launch（`real_bringup.launch.py`）
+- `car_sim` — gz 世界、ros_gz_bridge 配置、控制权 mux、指令网关、网页遥控、实机 bringup launch（`real_bringup.launch.py`）、Nav2 备用栈（`config/nav2_params.yaml` + `launch/nav2_stack.launch.py`，见下文「Nav2 自主导航（已屏蔽）」）
 - `vendor/lslidar_ros2` — 镭神 N10P 雷达厂商 ROS2 SDK（lslidar_driver + lslidar_msgs，实机用）
 - `vendor/wheeltec_gps` — WHEELTEC G60 GPS 厂商 ROS2 SDK（nmea_msgs + nmea_navsat_driver
   + wheeltec_gps_path + wheeltec_udev.sh，实机用；wheeltec 修改版，支持 $GN/$GL talker）
@@ -86,7 +86,23 @@ ros2 launch car_sim teleop_test.launch.py
 网页控制台为卡片式网格布局（遥控/状态/相机/雷达/GPS 地图/建图六卡片），另有雷达扫描图
 （`/api/scan.json`）、GPS 面板 + 高德瓦片地图定位（WGS-84→GCJ-02
 纠偏）、激光建图面板与一键建图按钮（slam_toolbox，实机用，详见 `real_bringup.launch.py` 链路）、
-已保存建图结果预览（`/api/maps` 列表 + pgm→png）。
+已保存建图结果预览（`/api/maps` 列表 + pgm→png）、固定地图自动巡航（地图上点选
+初始点/目标点）、雷达图脱困路径显示。「拍照」按钮直接把当前帧下载到浏览器本地
+（`/api/photo/download`）。
+
+## Nav2 自主导航（已屏蔽）
+
+Nav2 地图自主导航（AMCL 定位 + NavFn 规划 + RPP 跟踪 + costmap 实时避障）
+**因实机性能不足已屏蔽**：Pi 4B 同时运行 GNOME 桌面/远程桌面/VS Code 时，
+雷达 460800 波特串口大量丢包（/scan 掉到 3Hz），AMCL 无法收敛，导航不可用。
+`real_bringup.launch.py` 已移除 `nav_mode` 参数，不再启动 Nav2 栈。
+
+相关实现保留备用：`car_sim/config/nav2_params.yaml`、
+`car_sim/launch/nav2_stack.launch.py`、web_gateway 的 `nav_backend` 后端。
+如需恢复：关掉 Pi 的桌面环境（纯 SSH 运行）释放算力后，在 real_bringup
+重新 include nav2_stack.launch.py 并恢复 nav_mode/map 参数即可（改动见
+git 历史或该 launch 文件头部注释）。自主巡航/避障不受影响，仍由
+avoidance_node 承担。
 
 ### 一键启停脚本
 

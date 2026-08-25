@@ -32,6 +32,7 @@ setup(
             'motor_driver_node = car_nodes.motor_driver:main',
             'k210_camera_driver_node = car_nodes.k210_camera_driver:main',
             'sim_motor_bridge_node = car_nodes.sim_motor_bridge:main',
+            'ultrasonic_driver_node = car_nodes.ultrasonic_driver:main',
             'uav_bridge_node = car_nodes.uav_bridge:main',
         ],
     },

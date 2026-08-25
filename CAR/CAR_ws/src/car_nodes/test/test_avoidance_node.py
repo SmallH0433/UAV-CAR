@@ -296,6 +296,8 @@ def _reset_escape_state(node):
     node.recovering = False
     node.escaping = False
     node.operator_active = False
+    node.detour_side = 0
+    node.escape_retrying = False
 
 
 def test_repeated_identical_scan_triggers_escape_path(node):
@@ -317,9 +319,10 @@ def test_repeated_identical_scan_triggers_escape_path(node):
     cmd = _run(node, obs)
     assert node.escape_pathing
     assert cmd.linear.x == 0.0 and cmd.angular.z == 0.0  # 停止一切动作
-    # 路径点数按当前雷达范围收缩：最远障碍 1.2m / 步长 0.4m = 3 点
-    expected = max(2, min(node.escape_path_points,
-                          int(1.2 / node.escape_path_step)))
+    # 路径点数按 escape_path_length（默认 1.5m）与当前雷达范围取小后
+    # 除以步长向上取整
+    expected = max(2, int(math.ceil(min(node.escape_path_length, 1.2) /
+                                    node.escape_path_step)))
     assert len(node.escape_path) == expected
     _reset_escape_state(node)
 
@@ -381,19 +384,20 @@ def test_escape_path_early_exit_when_clear(node):
 
 
 def test_escape_path_limited_to_lidar_range(node):
-    # 脱困路线不得超过当前雷达范围：最远障碍 1.0m 时路径只有 2 个点
+    # 脱困路线不得超过当前雷达范围：最远障碍 1.0m 时路径点数按
+    # ceil(1.0 / step) 折算
     _reset_escape_state(node)
     node.pose = (0.0, 0.0, 0.0)
     node.obstacles = [FakeObstacle(0.0, 1.0, 0.15)]
     assert node._enter_escape_path_mode()
     assert len(node.escape_path) == max(
-        2, int(1.0 / node.escape_path_step))
-    # 无障碍时按硬封顶 escape_path_max_range 折算
+        2, int(math.ceil(min(node.escape_path_length, 1.0) /
+                         node.escape_path_step)))
+    # 无障碍时按 escape_path_length 折算
     node.obstacles = []
     assert node._enter_escape_path_mode()
-    expected = max(2, min(node.escape_path_points,
-                          int(node.escape_path_max_range /
-                              node.escape_path_step)))
+    expected = max(2, int(math.ceil(node.escape_path_length /
+                                    node.escape_path_step)))
     assert len(node.escape_path) == expected
     _reset_escape_state(node)
 
@@ -466,3 +470,301 @@ def test_sector_lock_released_when_side_blocked(node):
     ]
     assert node._select_sector(0.0) is None
     node.detour_side = 0
+
+
+# ---------- 脱困路径延长与重试测试 ----------
+
+def test_plan_escape_path_reaches_target_length(node):
+    # 无障碍环境：路径累计长度应接近 escape_path_length（默认 1.5m）
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    node.obstacles = []
+    node.escape_path_length = 1.5
+    node.escape_path_step = 0.4
+    points = max(2, int(math.ceil(node.escape_path_length /
+                                  node.escape_path_step)))
+    path = node._plan_escape_path(points)
+    assert path is not None
+    total = 0.0
+    px, py = 0.0, 0.0
+    for x, y in path:
+        total += math.hypot(x - px, y - py)
+        px, py = x, y
+    assert total >= 1.3  # 至少接近 1.5m
+
+
+def test_plan_escape_path_returns_none_when_blocked(node):
+    # 正前方被大障碍完全封堵：第一步就无法规划，应返回 None
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    # 正前方 0.3m 处放一个半径 0.5m 的大障碍，覆盖整个前方
+    node.obstacles = [FakeObstacle(0.0, 0.3, 0.5)]
+    assert node._plan_escape_path(5) is None
+    node.obstacles = []
+
+
+def test_escape_retrying_backs_up_and_retries(node):
+    # 无法规划时进入后退重试状态：按算出的目标距离直线后退，
+    # 里程计位移未到位前持续后退
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    node.obstacles = [FakeObstacle(0.0, 0.3, 0.5)]
+    now = node.get_clock().now().nanoseconds * 1e-9
+    node.escape_retry_target_dist = 0.5
+    node.escape_retry_start_pose = (0.0, 0.0, 0.0)
+    node.escape_retry_until = now + 30.0
+    node.escape_retrying = True
+    cmd = _run(node, node.obstacles)
+    assert cmd is not None
+    assert cmd.linear.x < 0.0   # 后退
+    node.escape_retrying = False
+    node.obstacles = []
+
+
+def test_escape_active_disables_cruise(node):
+    # 脱困状态激活时，即使 enable_cruise=True 也不应巡航
+    _reset_escape_state(node)
+    node.escape_pathing = True
+    node.escape_path = [(0.4, 0.0)]
+    node.escape_stop_until = node.get_clock().now().nanoseconds * 1e-9 + 1.0
+    node.enable_cruise = True
+    cmd = _run(node, [])
+    assert cmd.linear.x == 0.0
+    assert cmd.angular.z == 0.0
+    node.escape_pathing = False
+    node.enable_cruise = False
+
+
+# ---------- 脱困路径扇区锁定测试 ----------
+
+def test_escape_pathing_locks_sector_left(node):
+    # 脱困路径向左：detour_side 应设为 1，只评估左侧扇区
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    node.escape_path = [(0.4, 0.3)]  # 向左前方
+    node.escape_pathing = True
+    node.escape_stop_until = 0.0  # 停车阶段已结束
+    node.obstacles = [FakeObstacle(0.0, 0.5, 0.15)]  # 正前障碍，防止提前退出
+    cmd = _run(node, node.obstacles)
+    assert node.detour_side == 1
+    node.detour_side = 0
+
+
+def test_escape_pathing_locks_sector_right(node):
+    # 脱困路径向右：detour_side 应设为 -1，只评估右侧扇区
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    node.escape_path = [(0.4, -0.3)]  # 向右前方
+    node.escape_pathing = True
+    node.escape_stop_until = 0.0  # 停车阶段已结束
+    node.obstacles = [FakeObstacle(0.0, 0.5, 0.15)]  # 正前障碍，防止提前退出
+    cmd = _run(node, node.obstacles)
+    assert node.detour_side == -1
+    node.detour_side = 0
+
+
+def test_escape_pathing_unlocks_on_exit(node):
+    # 脱困路径走完或提前退出时，escape_pathing 应退出，detour_side 由后续
+    # 常规避障逻辑重新决定
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    node.escape_path = [(0.4, 0.3)]
+    node.escape_pathing = True
+    node.escape_stop_until = 0.0
+    node.escape_idx = 1  # 已走完
+    node.obstacles = [FakeObstacle(0.0, 0.5, 0.15)]  # 正前障碍，防止提前退出
+    cmd = _run(node, node.obstacles)
+    assert node.escape_pathing is False
+    assert node.escape_path == []
+
+
+# ---------- 脱困三原则：允许失败 / 不碰撞 / 算距离后退 ----------
+
+def test_escape_planning_allowed_to_fail(node):
+    # 原则1+2：正前方贴脸墙（0.25m，半径 0.3m，膨胀后 0.5m）封死所有
+    # 前向扇区时，规划必须失败返回 None，绝不输出可能碰撞的路径
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    node.obstacles = [FakeObstacle(0.0, 0.25, 0.3)]
+    assert node._plan_escape_path(3) is None
+
+
+def test_escape_reverse_distance_computed_with_overrun(node):
+    # 原则3：规划失败时模拟后退试规划，首个能规划出完整路径的后退距离
+    # ×overrun（1.1）作为目标后退距离；后方空旷时不应被安全上限截断
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    node.obstacles = [FakeObstacle(0.0, 0.25, 0.3)]
+    dist = node._compute_escape_reverse_distance(3)
+    assert dist is not None
+    # 侧向绕开只需后退约 0.3m（×1.1 ≈ 0.33），给宽松区间防脆弱断言
+    assert 0.1 < dist <= 0.7
+    # 未被后方安全上限截断（后方无障碍，上限为 +inf）
+    assert dist <= node.escape_reverse_max_dist * node.escape_reverse_overrun
+
+
+def test_escape_reverse_distance_none_when_rear_blocked(node):
+    # 原则2 优先于原则3：后方也贴障时没有安全后退空间，返回 None
+    # （调用方停车等待接管，绝不盲目倒车）
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    node.obstacles = [
+        FakeObstacle(0.0, 0.25, 0.3),    # 前方贴脸墙
+        FakeObstacle(180.0, 0.2, 0.2),   # 后方贴障：接触距离 0.2-0.4 < 0
+    ]
+    assert node._compute_escape_reverse_distance(3) is None
+
+
+def test_escape_reverse_distance_capped_by_rear_obstacle(node):
+    # 原则2 约束原则3：算出的后退距离（含冗余）不得超过后方走廊的
+    # 安全接触距离（后方 0.6m 障碍 → 安全上限 0.6-0.3=0.3m）
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    node.obstacles = [
+        FakeObstacle(0.0, 0.25, 0.3),
+        FakeObstacle(180.0, 0.6, 0.1),
+    ]
+    dist = node._compute_escape_reverse_distance(3)
+    assert dist is not None
+    assert dist <= 0.3 + 1e-9
+
+
+def test_escape_retry_reverses_until_target_distance(node):
+    # 后退重试按距离（而非固定时长）执行：里程计位移到位后退出并重规划
+    _reset_escape_state(node)
+    node.escape_retrying = True
+    node.escape_retry_target_dist = 0.5
+    node.escape_retry_start_pose = (0.0, 0.0, 0.0)
+    node.escape_retry_until = node.get_clock().now().nanoseconds * 1e-9 + 30.0
+    node.pose = (0.0, 0.0, 0.0)  # 尚未移动
+    node.obstacles = [FakeObstacle(0.0, 0.25, 0.3)]  # 前方墙，后方空
+    cmd = _run(node, node.obstacles)
+    assert node.escape_retrying  # 距离未到，继续后退
+    assert cmd.linear.x < 0.0 and cmd.angular.z == 0.0
+    # 模拟后退到位（odom 后移 0.5m，障碍在世界系不动 → 体坐标距离
+    # 从 0.25m 变为 0.75m）→ 应退出重试并成功重新规划。
+    # 注意：_run 辅助函数会把 pose 重置为原点，这里手动驱动 control_loop
+    node.pose = (-0.5, 0.0, 0.0)
+    node.obstacles = [FakeObstacle(0.0, 0.75, 0.3)]
+    recorder = CmdRecorder()
+    real_pub = node.pub_cmd
+    node.pub_cmd = recorder
+    try:
+        node.control_loop()
+    finally:
+        node.pub_cmd = real_pub
+    assert node.escape_retrying is False
+    _reset_escape_state(node)
+
+
+def test_escape_retry_stops_when_rear_blocked(node):
+    # 后退过程中后方突然贴障：立即停止后退（不碰撞优先于脱困）
+    _reset_escape_state(node)
+    node.escape_retrying = True
+    node.escape_retry_target_dist = 0.5
+    node.escape_retry_start_pose = (0.0, 0.0, 0.0)
+    node.escape_retry_until = node.get_clock().now().nanoseconds * 1e-9 + 30.0
+    node.pose = (-0.1, 0.0, 0.0)  # 后退途中
+    node.obstacles = [
+        FakeObstacle(0.0, 0.25, 0.3),
+        FakeObstacle(180.0, 0.2, 0.1),  # 后方 0.2m < hard_stop 0.3
+    ]
+    cmd = _run(node, node.obstacles)
+    assert node.escape_retrying is False
+    assert cmd.linear.x == 0.0 and cmd.angular.z == 0.0  # 立即停车
+    _reset_escape_state(node)
+
+
+# ---------- 车尾超声波：脱困倒车急停 ----------
+
+def test_recovering_stops_on_ultrasonic_rear_block(node):
+    # 倒车脱困中超声波 <25cm：立即停止倒车并进入脱困路径规划
+    _reset_escape_state(node)
+    now = node.get_clock().now().nanoseconds * 1e-9
+    node.recovering = True
+    node.recover_start = now
+    node.detour_side = 1
+    node.ultrasonic_range = 0.08
+    node.ultrasonic_time = now
+    cmd = _run(node, [FakeObstacle(0.0, 0.25, 0.15)])
+    assert node.recovering is False
+    assert cmd.linear.x == 0.0 and cmd.angular.z == 0.0  # 立即停车
+    # 已尝试规划脱困路径（成功→escape_pathing；失败→后退重试）
+    assert node.escape_pathing or node.escape_retrying
+    _reset_escape_state(node)
+
+
+def test_recovering_ignores_stale_ultrasonic(node):
+    # 超声波数据过期（>0.5s，传感器离线）时不启用急停，按原逻辑倒车
+    _reset_escape_state(node)
+    now = node.get_clock().now().nanoseconds * 1e-9
+    node.recovering = True
+    node.recover_start = now
+    node.detour_side = 1
+    node.ultrasonic_range = 0.05
+    node.ultrasonic_time = now - 2.0  # 过期数据
+    cmd = _run(node, [FakeObstacle(0.0, 0.25, 0.15)])
+    assert node.recovering is True
+    assert cmd.linear.x < 0.0  # 继续倒车脱困
+    node.recovering = False
+    _reset_escape_state(node)
+
+
+def test_escape_retry_stops_on_ultrasonic(node):
+    # 后退重试中超声波 <25cm：立即停止；几乎没退动 → 停车等待（防循环）
+    _reset_escape_state(node)
+    now = node.get_clock().now().nanoseconds * 1e-9
+    node.escape_retrying = True
+    node.escape_retry_target_dist = 0.5
+    node.escape_retry_start_pose = (0.0, 0.0, 0.0)  # _run 重置 pose 到原点
+    node.escape_retry_until = now + 30.0
+    node.ultrasonic_range = 0.07
+    node.ultrasonic_time = now
+    cmd = _run(node, [FakeObstacle(0.0, 0.25, 0.3)])
+    assert node.escape_retrying is False
+    assert cmd.linear.x == 0.0 and cmd.angular.z == 0.0
+    _reset_escape_state(node)
+
+
+def test_ultrasonic_safe_distance_does_not_block(node):
+    # 超声波距离 ≥25cm 时不触发急停，倒车正常进行
+    _reset_escape_state(node)
+    now = node.get_clock().now().nanoseconds * 1e-9
+    node.recovering = True
+    node.recover_start = now
+    node.detour_side = 1
+    node.ultrasonic_range = 0.35
+    node.ultrasonic_time = now
+    cmd = _run(node, [FakeObstacle(0.0, 0.25, 0.15)])
+    assert node.recovering is True
+    assert cmd.linear.x < 0.0
+    node.recovering = False
+    _reset_escape_state(node)
+
+
+def test_escape_path_published_in_body_frame(node):
+    # 脱困路径发布时从 odom 系转到车体系（x 前 y 左）
+    _reset_escape_state(node)
+    node.pose = (1.0, 0.0, math.pi / 2.0)  # 车在 (1,0)，朝 +y
+    node.escape_pathing = True
+    node.escape_path = [(1.0, 1.0)]
+    node.escape_idx = 0
+    received = []
+
+    class _Rec:
+        def publish(self, m):
+            received.append(m)
+
+    real_pub = node.pub_escape_path
+    node.pub_escape_path = _Rec()
+    try:
+        node._publish_escape_path()
+    finally:
+        node.pub_escape_path = real_pub
+    assert len(received) == 1
+    assert received[0].header.frame_id == 'base_footprint'
+    pt = received[0].poses[0].pose.position
+    # 目标在 odom (1,1)，车朝 +y：体坐标应为正前方 1m（x=1, y=0）
+    assert pt.x == pytest.approx(1.0, abs=1e-6)
+    assert pt.y == pytest.approx(0.0, abs=1e-6)
+    _reset_escape_state(node)
