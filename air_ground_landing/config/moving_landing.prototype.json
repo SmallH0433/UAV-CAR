@@ -1,0 +1,247 @@
+{
+  "version": 3,
+  "scope": "offline_sitl_and_disarmed_bench",
+  "vision": {
+    "sensor": "ov9281",
+    "status_url": "http://127.0.0.1:8765/api/status",
+    "poll_hz": 10.0,
+    "timeout_s": 1.0,
+    "analysis_size": [1280, 800],
+    "pixel_source": "Y_MONO",
+    "camera_owner": "ov9281-vision.service"
+  },
+  "landing_target_bridge": {
+    "tag_family": "tag36h11",
+    "targets": [
+      {
+        "id": 0,
+        "size_m": 0.1,
+        "role": "approach",
+        "enabled": true,
+        "quality_gate": {
+          "minimum_decision_margin": 50.0,
+          "maximum_hamming": 2,
+          "maximum_reprojection_error_px": 1.0
+        }
+      },
+      {
+        "id": 1,
+        "size_m": 0.02,
+        "role": "close_range_nested",
+        "enabled": true,
+        "quality_gate": {
+          "minimum_decision_margin": 35.0,
+          "maximum_hamming": 2,
+          "maximum_reprojection_error_px": 1.5
+        }
+      }
+    ],
+    "output_rate_hz": 20.0,
+    "quality_gate": {
+      "max_message_age_ms": 150.0,
+      "loss_timeout_ms": 500.0,
+      "minimum_decision_margin": 30.0,
+      "maximum_hamming": 0,
+      "maximum_reprojection_error_px": 2.0,
+      "minimum_distance_m": 0.03,
+      "maximum_distance_m": 8.0,
+      "distance_consistency_m": 0.05
+    },
+    "camera_to_body": {
+      "frame": "CAMERA_OPTICAL_TO_BODY_FRD",
+      "rotation_camera_optical_to_body_frd": [
+        [-1.0, 0.0, 0.0],
+        [0.0, -1.0, 0.0],
+        [0.0, 0.0, 1.0]
+      ],
+      "translation_m": [0.0, 0.0, 0.0],
+      "status": "orientation_measured_xy_translation_assumed_centered",
+      "flight_use_approved": false
+    }
+  },
+  "moving_pad_estimator": {
+    "frame": "LOCAL_NED",
+    "vision_position_gain": 0.65,
+    "vision_velocity_gain": 0.1,
+    "ugv_position_gain": 0.45,
+    "ugv_velocity_gain": 0.8,
+    "maximum_vision_residual_m": 0.75,
+    "maximum_ugv_residual_m": 1.5,
+    "minimum_vision_quality": 0.35,
+    "maximum_uav_state_age_s": 0.2,
+    "maximum_source_age_s": 0.6,
+    "maximum_prediction_horizon_s": 0.5,
+    "process_noise_m2_per_s": 0.02,
+    "ugv_common_origin_status": "not_calibrated"
+  },
+  "moving_landing_supervisor": {
+    "minimum_pad_quality": 0.45,
+    "maximum_state_age_s": 0.5,
+    "landing_target_timeout_s": 0.35,
+    "landing_target_abort_s": 0.7,
+    "rendezvous_xy_m": 1.0,
+    "tracking_xy_m": 0.5,
+    "velocity_match_xy_m": 0.25,
+    "velocity_match_error_mps": 0.15,
+    "velocity_match_hold_s": 0.6,
+    "descent_xy_m": 0.18,
+    "descent_relative_speed_mps": 0.12,
+    "final_approach_height_m": 0.25,
+    "final_xy_m": 0.08,
+    "final_relative_speed_mps": 0.06,
+    "allow_moving_touchdown": false,
+    "maximum_moving_touchdown_speed_mps": 0.15,
+    "maximum_touchdown_yaw_rate_rps": 0.1,
+    "stopped_speed_mps": 0.03,
+    "require_independent_uav_velocity_for_moving": true,
+    "require_close_range_tag_for_moving": true,
+    "allow_range_only_final_when_stopped": true,
+    "range_only_max_height_m": 0.16,
+    "minimum_rangefinder_m": 0.02,
+    "maximum_rangefinder_m": 8.0
+  },
+  "hybrid_guidance": {
+    "scope": "offline_contract_before_ros_or_mavlink_adapters",
+    "camera": {
+      "image_width": 1280,
+      "image_height": 800,
+      "fx_px": 797.7670963230249,
+      "fy_px": 805.5898276011428,
+      "cx_px": 649.741100705223,
+      "cy_px": 430.2853449683943,
+      "rotation_camera_optical_to_body_frd": [
+        [-1.0, 0.0, 0.0],
+        [0.0, -1.0, 0.0],
+        [0.0, 0.0, 1.0]
+      ]
+    },
+    "elastic_tracker": {
+      "role": "rendezvous_and_visibility_constrained_tracking_only",
+      "source_stack": "ROS2_MultiDOFJointTrajectory_adapter",
+      "maximum_status_age_s": 0.25,
+      "require_visibility_corridor": true,
+      "direct_position_command_output": false
+    },
+    "ibvs": {
+      "role": "guided_alignment_then_final_feature_guard",
+      "outer_tag_id": 0,
+      "inner_tag_id": 1,
+      "minimum_quality": 0.45,
+      "maximum_feature_age_s": 0.15,
+      "enter_4dof_error_px": 80.0,
+      "exit_4dof_error_px": 120.0,
+      "alignment_error_px": 35.0,
+      "final_alignment_error_px": 18.0,
+      "maximum_edge_asymmetry_ratio": 0.35,
+      "horizontal_gain_per_s": 0.7,
+      "maximum_horizontal_correction_mps": 0.10,
+      "require_inner_tag_for_final": true,
+      "vertical_or_yaw_command_output": false
+    },
+    "arbitration": {
+      "single_writer_required": true,
+      "ibvs_alignment_hold_s": 0.4,
+      "require_ibvs_for_precland_handover": true,
+      "maximum_target_feedforward_mps": 0.4,
+      "maximum_total_horizontal_speed_mps": 0.10,
+      "maximum_total_horizontal_acceleration_mps2": 0.15,
+      "phase_owners": {
+        "RENDEZVOUS": "ELASTIC_GUIDED",
+        "TRACK_PAD": "ELASTIC_GUIDED",
+        "MATCH_VELOCITY": "IBVS_GUIDED",
+        "DESCEND": "AC_PRECLAND_LAND",
+        "FINAL_APPROACH": "AC_PRECLAND_LAND"
+      }
+    }
+  },
+  "ros2_adapters": {
+    "distribution": "humble",
+    "elastic": {
+      "input_topic": "/elastic_tracker/trajectory",
+      "input_type": "trajectory_msgs/msg/MultiDOFJointTrajectory",
+      "candidate_topic": "/landing/elastic/candidate",
+      "candidate_frame_contract": "ROS_ENU_values_MAVROS_converts_to_LOCAL_NED",
+      "output_rate_hz": 20.0
+    },
+    "ibvs": {
+      "vision_status_url": "http://127.0.0.1:8765/api/status",
+      "candidate_topic": "/landing/ibvs/candidate",
+      "candidate_frame_contract": "ROS_FLU_values_MAVROS_converts_to_BODY_FRD",
+      "output_rate_hz": 10.0,
+      "vertical_and_yaw_output": false
+    },
+    "guided_executor": {
+      "control_owner_topic": "/landing/control_owner",
+      "landing_request_topic": "/landing/descent_request",
+      "preview_topic": "/landing/guided_executor/preview",
+      "mavros_output_topic": "/mavros/setpoint_raw/local",
+      "mavros_state_topic": "/mavros/state",
+      "mavros_rc_topic": "/mavros/rc/in",
+      "mavros_set_mode_service": "/mavros/set_mode",
+      "candidate_timeout_s": 0.4,
+      "owner_timeout_s": 0.5
+    }
+  },
+  "guided_execution": {
+    "target_mode": "GUIDED",
+    "fallback_mode": "LOITER",
+    "previous_mode_allowlist": ["LOITER", "BRAKE", "POSHOLD", "ALT_HOLD"],
+    "mavros_service_ack_timeout_s": 1.0,
+    "vehicle_heartbeat_ack_timeout_s": 2.0,
+    "rollback_heartbeat_ack_timeout_s": 2.0,
+    "rc_authorization": {
+      "role": "follow_enable",
+      "operator_control": "Radio6",
+      "required_on_hardware": true,
+      "candidate_channel": 6,
+      "abort_below_pwm": 1300,
+      "standby_band_pwm": [1301, 1799],
+      "authorize_above_pwm": 1800,
+      "maximum_age_s": 0.5,
+      "ardupilot_rc_option": "NONE_companion_reads_raw_channel"
+    },
+    "landing_request": {
+      "role": "descent_toggle_during_confirmed_follow",
+      "operator_control": "SwD",
+      "candidate_channel": 8,
+      "off_below_pwm": 1200,
+      "on_above_pwm": 1800,
+      "maximum_age_s": 0.5,
+      "require_confirmed_guided_follow": true,
+      "require_off_to_on_edge_after_follow": true,
+      "on_action": "request_ac_precland_land_while_following",
+      "off_action": "cancel_descent_and_resume_guided_height_follow",
+      "ardupilot_rc_option": "NONE_companion_reads_raw_channel",
+      "mapping_status": "candidate_pending_transmitter_mapping_and_props_off_bench_validation"
+    }
+  },
+  "touchdown_geometry": {
+    "camera_optical_center_to_tag_plane_m": 0.0425,
+    "mtf01p_window_to_tag_plane_m": 0.065,
+    "last_operator_reported_rangefinder1_m": 0.11,
+    "rangefinder_touchdown_status": "pending_repeated_validation",
+    "rangefinder_alone_confirms_touchdown": false
+  },
+  "mavlink": {
+    "endpoint": "udpout:127.0.0.1:14550",
+    "baud": 115200,
+    "source_system": 191,
+    "source_component": 191
+  },
+  "safety": {
+    "mavlink_transmit": false,
+    "flight_use_approved": false,
+    "parameter_write": false,
+    "mode_change": false,
+    "arm_command": false,
+    "motor_command": false,
+    "moving_target_final_descent_approved": false,
+    "elastic_guided_output": false,
+    "ibvs_guided_output": false,
+    "hybrid_mode_change_output": false,
+    "ros2_guided_setpoint_output": false,
+    "ros2_mode_service_output": false,
+    "hardware_rc_gate_verified": false,
+    "hardware_swd_mapping_verified": false
+  }
+}

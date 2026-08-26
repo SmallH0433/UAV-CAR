@@ -1,0 +1,5 @@
+# Raspberry Pi OS Bookworm 64-bit: OV9281 + Pixhawk UART
+camera_auto_detect=0
+enable_uart=1
+dtoverlay=disable-bt
+dtoverlay=ov9281,arducam

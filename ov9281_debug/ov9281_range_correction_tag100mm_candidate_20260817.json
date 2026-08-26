@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "camera": "OV9281",
+  "calibration": "ov9281_calibration_fisheye_run2_flat_17mm.yaml",
+  "tag_family": "tag36h11",
+  "tag_id": 0,
+  "tag_black_edge_m": 0.1,
+  "model": "single_point_scale_only_candidate",
+  "scale": 0.9828702952907808,
+  "offset_m": 0,
+  "status": "candidate_pending_multi_point_validation",
+  "reference": {
+    "measured_distance_m": 0.655,
+    "raw_distance_mean_m": 0.6664155007413457,
+    "raw_distance_std_m": 0.0002272793243753129,
+    "valid_samples": 40,
+    "decision_margin_mean": 58.21602649688721,
+    "reprojection_error_mean_px": 0.5657879879818,
+    "hamming": 0
+  },
+  "same_position_validation": {
+    "valid_samples": 40,
+    "raw_distance_mean_m": 0.6659499202132596,
+    "corrected_distance_mean_m": 0.6545423947288784,
+    "corrected_distance_std_m": 0.0001975070340190779,
+    "error_m": -0.0004576052711215972,
+    "decision_margin_mean": 60.874553775787355,
+    "reprojection_error_mean_px": 0.5007658224710136,
+    "hamming": 0
+  },
+  "limitations": "One-point scale-only fit. Validate at additional near and far measured distances before deployment or flight use."
+}
