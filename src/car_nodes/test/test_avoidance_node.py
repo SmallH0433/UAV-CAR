@@ -1,8 +1,8 @@
-"""avoidance_node 扇区避障的车体宽度膨胀测试。
+"""avoidance_node 扇区避障的车体与停机坪组合外廓膨胀测试。
 
 根因场景：前侧方障碍（如 -25°/0.7m 的小障碍）角宽度按障碍半径算盖不住
 正前方 0° 方向，中心线判"可通行"，但车身前角会撞上——车宽 0.32m，
-判定必须按 障碍半径 + 车体半宽(vehicle_half_width) 膨胀。
+判定必须按障碍半径与 465x400 mm 矩形足迹在候选方向上的投影膨胀。
 """
 
 import math
@@ -28,6 +28,9 @@ class FakeObstacle:
 def node():
     rclpy.init()
     node = AvoidanceNode()
+    node.vehicle_half_length = 0.2325
+    node.vehicle_half_width = 0.20
+    node.footprint_padding = 0.04
     node.safety_distance = 1.0      # 与 launch 实机调优值一致
     node.slow_down_distance = 1.8
     yield node
@@ -54,6 +57,15 @@ def test_front_side_obstacle_blocks_straight_and_detours_left(node):
     best = node._select_sector(0.0)
     assert best is not None
     assert best > math.radians(2.0)  # 障碍在右侧，应向左绕行
+
+
+def test_landing_pad_rectangle_expands_turning_corridor(node):
+    # 直行横向包络为停机坪半宽+余量 0.24m；候选方向转至 90° 时，
+    # 车长投影成为横向包络，因此必须使用 0.2325+0.04=0.2725m。
+    assert node._footprint_lateral_extent(0.0) == pytest.approx(0.24)
+    assert node._footprint_lateral_extent(math.pi / 2.0) == \
+        pytest.approx(0.2725)
+    assert node._footprint_radius() > 0.32
 
 
 def test_true_side_obstacle_stays_out_of_forward_cone(node):

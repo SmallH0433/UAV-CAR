@@ -25,9 +25,11 @@
   detour_timeout     (float, 3.0)  绕行方向承诺保持时间 s（防左右摆动）
   enable_cruise      (bool,  False) 无目标时是否巡航
   num_sectors        (int,   36)    前方 180° 划分的扇区数
-  vehicle_half_width (float, 0.20)  车体半宽 m（含余量）：障碍角宽度按
-      障碍半径 + 车体半宽膨胀——否则前侧方障碍的角宽度盖不住正前方 0° 方向，
-      中心线判定"可通行"，但车身前角会撞上（前侧方避障失效的根因）
+  vehicle_half_length(float, 0.2325) 组合外廓半长 m（R680 465 mm）
+  vehicle_half_width (float, 0.20)   组合外廓半宽 m（400 mm 停机坪）
+  footprint_padding  (float, 0.04)   矩形外廓额外安全余量 m。候选方向的
+      横向投影按 half_length*|sin(direction)| + half_width*|cos(direction)|
+      计算，避免转弯时仍只按底盘固定半宽判断而使停机坪边角碰撞。
   path_history_length (float, 5.0)  轨迹历史保留时长 s（用于死胡同记忆）
   blocked_direction_memory_s (float, 8.0)
       被阻方向记忆时长 s：触发脱困前 1s 的平均行进方向会被标记为"已碰壁"，
@@ -136,7 +138,10 @@ class AvoidanceNode(Node):
         self.declare_parameter('detour_timeout', 3.0)
         self.declare_parameter('enable_cruise', False)
         self.declare_parameter('num_sectors', 36)
-        self.declare_parameter('vehicle_half_width', 0.20)  # 车宽0.32/2=0.16+余量
+        # R680 底盘 465x385 mm 与 400x400 mm 停机坪的并集外廓。
+        self.declare_parameter('vehicle_half_length', 0.2325)
+        self.declare_parameter('vehicle_half_width', 0.20)
+        self.declare_parameter('footprint_padding', 0.04)
         self.declare_parameter('path_history_length', 5.0)
         self.declare_parameter('blocked_direction_memory_s', 8.0)
         self.declare_parameter('blocked_direction_penalty', 1.0)
@@ -176,8 +181,12 @@ class AvoidanceNode(Node):
         self.detour_timeout = self.get_parameter('detour_timeout').value
         self.enable_cruise = self.get_parameter('enable_cruise').value
         self.num_sectors = self.get_parameter('num_sectors').value
+        self.vehicle_half_length = \
+            self.get_parameter('vehicle_half_length').value
         self.vehicle_half_width = \
             self.get_parameter('vehicle_half_width').value
+        self.footprint_padding = \
+            self.get_parameter('footprint_padding').value
         self.path_history_length = \
             self.get_parameter('path_history_length').value
         self.blocked_direction_memory_s = \
@@ -828,7 +837,7 @@ class AvoidanceNode(Node):
             a = self._normalize_angle(o.angle)
             discs.append((x + o.distance * math.cos(yaw + a),
                           y + o.distance * math.sin(yaw + a),
-                          o.radius + self.vehicle_half_width))
+                          o.radius + self._footprint_radius()))
         margin = 0.05
         if start_pose is None:
             vx, vy, heading = x, y, yaw
@@ -909,7 +918,7 @@ class AvoidanceNode(Node):
             if bx >= 0.0:
                 continue  # 只关心后方
             by = o.distance * math.sin(a)
-            r = o.radius + self.vehicle_half_width
+            r = o.radius + self._footprint_lateral_extent(0.0)
             if abs(by) >= r:
                 continue  # 不在正后方走廊内
             contact = -bx - math.sqrt(r * r - by * by)
@@ -1008,14 +1017,27 @@ class AvoidanceNode(Node):
                         math.cos(abs(a))
         return cost
 
-    def _inflated_half_width(self, o):
-        """障碍角半宽（rad）：障碍半径 + 车体半宽 膨胀后的角宽度。
+    def _footprint_lateral_extent(self, direction):
+        """矩形足迹在候选行驶方向法线上的半投影宽度（含安全余量）。"""
+        return self.vehicle_half_length * abs(math.sin(direction)) + \
+            self.vehicle_half_width * abs(math.cos(direction)) + \
+            self.footprint_padding
+
+    def _footprint_radius(self):
+        """矩形足迹的保守外接圆半径，用于任意转角的局部路径规划。"""
+        return math.hypot(self.vehicle_half_length, self.vehicle_half_width) + \
+            self.footprint_padding
+
+    def _inflated_half_width(self, o, direction=0.0):
+        """障碍角半宽（rad）：障碍半径 + 矩形足迹横向投影。
 
         把车当质点会导致前侧方障碍的角宽度盖不住 0° 方向而被判"可通行"，
-        但车身前角实际会撞上；膨胀后中心线判定即代表整车走廊。
+        但车身或停机坪边角实际会撞上；方向相关膨胀后，中心线判定即代表
+        组合外廓在该候选方向上的整车走廊。
         """
         return math.atan2(
-            o.radius + self.vehicle_half_width, max(o.distance, 0.05))
+            o.radius + self._footprint_lateral_extent(direction),
+            max(o.distance, 0.05))
 
     def _forward_obstacle_distance(self, fov=math.pi / 3.0):
         """前向锥（±fov）内最近障碍距离；膨胀后伸进正前走廊的侧方障碍也算"""
@@ -1030,7 +1052,7 @@ class AvoidanceNode(Node):
         """某方向上被障碍角宽度（含车体膨胀）覆盖的最近距离"""
         nearest = float('inf')
         for o in self.obstacles:
-            half_width = self._inflated_half_width(o)
+            half_width = self._inflated_half_width(o, direction)
             if abs(self._normalize_angle(o.angle - direction)) <= half_width:
                 nearest = min(nearest, o.distance)
         return nearest
@@ -1065,7 +1087,7 @@ class AvoidanceNode(Node):
                 (k + 0.5) * math.pi / self.num_sectors
             nearest = float('inf')
             for o in self.obstacles:
-                half_width = self._inflated_half_width(o)
+                half_width = self._inflated_half_width(o, sector_angle)
                 if abs(self._normalize_angle(o.angle - sector_angle)) <= half_width:
                     nearest = min(nearest, o.distance)
             score = nearest - self._blocked_direction_cost(sector_angle)
@@ -1082,7 +1104,7 @@ class AvoidanceNode(Node):
         # （角宽度均按 障碍半径+车体半宽 膨胀，见 _inflated_half_width）
         nearest_desired = float('inf')
         for o in self.obstacles:
-            half_width = self._inflated_half_width(o)
+            half_width = self._inflated_half_width(o, desired_angle)
             if abs(self._normalize_angle(o.angle - desired_angle)) <= half_width:
                 nearest_desired = min(nearest_desired, o.distance)
         if nearest_desired >= self.safety_distance:
@@ -1114,7 +1136,7 @@ class AvoidanceNode(Node):
             # 扇区内最近障碍（考虑障碍角宽度）
             nearest = float('inf')
             for o in self.obstacles:
-                half_width = self._inflated_half_width(o)
+                half_width = self._inflated_half_width(o, sector_angle)
                 if abs(self._normalize_angle(o.angle - sector_angle)) <= half_width:
                     nearest = min(nearest, o.distance)
             if nearest < self.safety_distance:
