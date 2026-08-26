@@ -28,7 +28,16 @@
 - `docking_design/`：空地协同与对接结构设计资料。
 - `evidence_summary/`：精选测试摘要，不包含大型原始日志。
 - `printables/`：200 mm AprilTag打印文件。
+- `tools/`：飞行日志复盘、标定和部署辅助工具。
 - 根目录脚本：Pixhawk、Pi、SITL和MAVLink调试工具。
+
+## 实机部署分支
+
+- `uav-rpi-deploy` / `uav-rpi-7.6`：无人机机载 Raspberry Pi 4B 的最小部署包。
+- `uav-pixhawk-deploy` / `uav-pixhawk-7.6`：QAV280 Pixhawk1 的固件和参数恢复包。
+
+`main` 保存完整的无人机工程源码、配置与分析工具；部署分支只保留对应设备运行或恢复所需的内容。
+无人车工程独立保存在 `CAR/`，不属于上述两个无人机部署包。
 
 ## 关联项目
 

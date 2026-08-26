@@ -1,0 +1,86 @@
+elastic_trajectory_adapter:
+  ros__parameters:
+    input_topic: /elastic_tracker/trajectory
+    candidate_topic: /landing/elastic/candidate
+    status_topic: /landing/elastic/status
+    output_rate_hz: 20.0
+    maximum_trajectory_age_s: 0.5
+
+ibvs_adapter:
+  ros__parameters:
+    status_url: http://127.0.0.1:8765/api/status
+    candidate_topic: /landing/ibvs/candidate
+    status_topic: /landing/ibvs/status
+    poll_rate_hz: 10.0
+    http_timeout_s: 0.15
+
+landing_target_adapter:
+  ros__parameters:
+    status_url: http://127.0.0.1:8765/api/status
+    http_timeout_s: 0.15
+    poll_rate_hz: 10.0
+    environment: offline
+    flight_use_approved: false
+    allow_landing_target_output: false
+    preview_topic: /landing/landing_target/preview
+    status_topic: /landing/landing_target/status
+    mavros_output_topic: /mavros/landing_target/raw
+
+simple_landing_coordinator:
+  ros__parameters:
+    ibvs_candidate_topic: /landing/ibvs/candidate
+    landing_request_topic: /landing/descent_request
+    landing_target_status_topic: /landing/landing_target/status
+    mavros_state_topic: /mavros/state
+    control_owner_topic: /landing/control_owner
+    status_topic: /landing/simple_coordinator/status
+    ibvs_timeout_s: 0.25
+    landing_target_timeout_s: 0.35
+    require_landing_target_output: false
+    output_rate_hz: 20.0
+
+guided_executor:
+  ros__parameters:
+    environment: offline
+    flight_use_approved: false
+    allow_mode_change: false
+    allow_setpoint_output: false
+    require_rc_authorization: true
+    rc_channel: 6
+    rc_abort_below_pwm: 1300
+    rc_authorize_above_pwm: 1800
+    rc_maximum_age_s: 0.5
+    landing_switch_channel: 8
+    landing_switch_off_below_pwm: 1200
+    landing_switch_on_above_pwm: 1800
+    landing_switch_maximum_age_s: 0.5
+    landing_request_topic: /landing/descent_request
+    candidate_timeout_s: 0.4
+    owner_timeout_s: 0.5
+    target_echo_timeout_s: 0.5
+    follow_active_tone_repeat_s: 3.0
+    landing_active_tone_repeat_s: 2.0
+    target_mode: GUIDED
+    land_mode: LAND
+    rollback_mode: LOITER
+    target_heartbeat_ack_timeout_s: 2.0
+    rollback_heartbeat_ack_timeout_s: 2.0
+    rollback_retry_interval_s: 1.0
+    rollback_orphaned_guided: true
+    orphaned_guided_grace_s: 1.0
+    maximum_horizontal_speed_mps: 0.10
+    maximum_horizontal_acceleration_mps2: 0.15
+    target_echo_message_id: 85
+    target_echo_interval_us: 200000.0
+    elastic_candidate_topic: /landing/elastic/candidate
+    ibvs_candidate_topic: /landing/ibvs/candidate
+    control_owner_topic: /landing/control_owner
+    preview_topic: /landing/guided_executor/preview
+    status_topic: /landing/guided_executor/status
+    tone_output_enabled: false
+    tone_topic: /mavros/play_tune
+    target_echo_topic: /mavros/setpoint_raw/target_local
+    mavros_output_topic: /mavros/setpoint_raw/local
+    mavros_state_topic: /mavros/state
+    mavros_rc_topic: /mavros/rc/in
+    mavros_set_mode_service: /mavros/set_mode

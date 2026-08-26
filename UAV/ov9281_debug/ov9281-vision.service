@@ -3,8 +3,8 @@ Description=OV9281 unified calibration and AprilTag vision console
 
 [Service]
 Type=simple
-WorkingDirectory=/home/PI/ov9281_debug
-ExecStart=/home/PI/venvs/landing/bin/python /home/PI/ov9281_debug/ov9281_unified_service.py --host 0.0.0.0 --port 8765 --mode apriltag --tag-specs 0:0.100:outer,1:0.020:inner --tag-quality-specs 0:50:2:1.0,1:35:2:1.5 --tag-selection-policy outer_first --switch-to-inner-below-m 0.35 --tag-switch-hysteresis-m 0.05 --calibration /home/PI/ov9281_debug/ov9281_calibration_fisheye_run2_flat_17mm.yaml --range-correction /home/PI/ov9281_debug/ov9281_range_correction_dual_tag_20260817.json --collect-output /home/PI/ov9281_calibration_run2_flat_17mm --target-count 20
+WorkingDirectory=/home/pi/ov9281_debug
+ExecStart=/home/pi/venvs/landing/bin/python /home/pi/ov9281_debug/ov9281_unified_service.py --host 0.0.0.0 --port 8765 --mode apriltag --tag-specs 0:0.100:outer,1:0.020:inner --tag-quality-specs 0:50:2:1.0,1:35:2:1.5 --tag-selection-policy outer_first --switch-to-inner-below-m 0.35 --tag-switch-hysteresis-m 0.05 --calibration /home/pi/ov9281_debug/ov9281_calibration_fisheye_run2_flat_17mm.yaml --range-correction /home/pi/ov9281_debug/ov9281_range_correction_dual_tag_20260817.json --collect-output /home/pi/ov9281_calibration_run2_flat_17mm --target-count 20
 Restart=on-failure
 RestartSec=3
 
