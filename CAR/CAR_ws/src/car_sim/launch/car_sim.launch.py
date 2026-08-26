@@ -89,6 +89,10 @@ def generate_launch_description():
             'safety_distance': 1.0,
             'slow_down_distance': 1.8,
             'creep_speed': 0.25,
+            # R680 465x385 mm + 400x400 mm 停机坪组合外廓。
+            'vehicle_half_length': 0.2325,
+            'vehicle_half_width': 0.20,
+            'footprint_padding': 0.04,
         }],
     )
     # teleop 优先：operator heartbeat 新鲜时 /ugv/teleop/cmd_vel 覆盖 /cmd_vel；

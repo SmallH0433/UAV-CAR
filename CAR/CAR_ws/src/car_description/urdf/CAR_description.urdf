@@ -44,6 +44,12 @@
   <material name="rear_camera_orange">
     <color rgba="0.60 0.18 0.05 1.0"/>
   </material>
+  <material name="landing_pad_black">
+    <color rgba="0.08 0.08 0.09 1.0"/>
+  </material>
+  <material name="landing_mark_white">
+    <color rgba="1.0 1.0 1.0 1.0"/>
+  </material>
 
   <!-- ======================== 地面投影坐标系 ======================== -->
   <link name="base_footprint"/>
@@ -142,6 +148,39 @@
       </geometry>
     </collision>
   </link>
+
+  <!-- ======================== 400x400 mm 无人机停机坪 ======================== -->
+  <!-- 平台底面高于激光雷达顶面，四角立柱固定在原上层安装板上。 -->
+  <link name="landing_pad_link">
+    <inertial>
+      <mass value="1.20"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.016014" ixy="0" ixz="0"
+               iyy="0.016014" iyz="0" izz="0.032000"/>
+    </inertial>
+    <visual>
+      <geometry><box size="0.400 0.400 0.012"/></geometry>
+      <material name="landing_pad_black"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.400 0.400 0.012"/></geometry>
+    </collision>
+    <!-- 白色 H 标识。 -->
+    <visual><origin xyz="0 0.065 0.0065"/><geometry><box size="0.180 0.030 0.001"/></geometry><material name="landing_mark_white"/></visual>
+    <visual><origin xyz="0 -0.065 0.0065"/><geometry><box size="0.180 0.030 0.001"/></geometry><material name="landing_mark_white"/></visual>
+    <visual><origin xyz="0 0 0.0065"/><geometry><box size="0.030 0.130 0.001"/></geometry><material name="landing_mark_white"/></visual>
+    <!-- 四根 82 mm 支撑柱仅作视觉建模，避免仿真激光产生本车回波。 -->
+    <visual><origin xyz="0.150 0.150 -0.047"/><geometry><cylinder radius="0.008" length="0.082"/></geometry><material name="aluminum"/></visual>
+    <visual><origin xyz="0.150 -0.150 -0.047"/><geometry><cylinder radius="0.008" length="0.082"/></geometry><material name="aluminum"/></visual>
+    <visual><origin xyz="-0.150 0.150 -0.047"/><geometry><cylinder radius="0.008" length="0.082"/></geometry><material name="aluminum"/></visual>
+    <visual><origin xyz="-0.150 -0.150 -0.047"/><geometry><cylinder radius="0.008" length="0.082"/></geometry><material name="aluminum"/></visual>
+  </link>
+
+  <joint name="landing_pad_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="landing_pad_link"/>
+    <origin xyz="0 0 0.230" rpy="0 0 0"/>
+  </joint>
 
   <!-- ======================== 前轮转向节（kingpin） ======================== -->
   <!-- 舵机驱动的转向节：垂直轴 revolute 关节，限位 ±0.5 rad（约 28.6°），

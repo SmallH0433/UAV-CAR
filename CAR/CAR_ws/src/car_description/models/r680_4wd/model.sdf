@@ -2,7 +2,8 @@
 <sdf version="1.9">
   <!-- R680 阿克曼转向小车（WHEELTEC 底盘：前轮舵机转向 + 后轮双电机驱动）
        几何/惯性按 car_description/urdf/CAR_description.urdf 换算：
-       整车 465x385x218 mm，轮半径 0.076 m，轮距 0.32 m，轴距 0.31 m，底盘 16 kg。
+       底盘 465x385x218 mm；顶部增加 400x400 mm 无人机停机坪。
+       轮半径 0.076 m，轮距 0.32 m，轴距 0.31 m，底盘 16 kg。
        世界文件中以 <name>ground_vehicle</name> 包含，故 gz topic 前缀为
        /model/ground_vehicle/... -->
   <model name="r680_4wd">
@@ -41,6 +42,50 @@
         </material>
       </visual>
     </link>
+
+    <!-- 无人机停机坪：400x400x12 mm。平台以四根立柱架高，底面相对
+         base_link 为 0.224 m，高于激光雷达顶面 42 mm，避免几何互穿。
+         停机坪为固定载荷，不改变底盘轴距、轮距、转向限位和驱动参数。 -->
+    <link name="landing_pad_link">
+      <pose relative_to="base_link">0 0 0.230 0 0 0</pose>
+      <inertial>
+        <mass>1.20</mass>
+        <inertia>
+          <ixx>0.016014</ixx><iyy>0.016014</iyy><izz>0.032000</izz>
+        </inertia>
+      </inertial>
+      <collision name="pad_collision">
+        <geometry><box><size>0.400 0.400 0.012</size></box></geometry>
+      </collision>
+      <visual name="pad_visual">
+        <geometry><box><size>0.400 0.400 0.012</size></box></geometry>
+        <material><ambient>0.08 0.08 0.09 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse></material>
+      </visual>
+      <!-- 白色 H 标识（仅视觉层，略高于平台表面防止闪烁）。 -->
+      <visual name="landing_h_left">
+        <pose>0 0.065 0.0065 0 0 0</pose>
+        <geometry><box><size>0.180 0.030 0.001</size></box></geometry>
+        <material><ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse></material>
+      </visual>
+      <visual name="landing_h_right">
+        <pose>0 -0.065 0.0065 0 0 0</pose>
+        <geometry><box><size>0.180 0.030 0.001</size></box></geometry>
+        <material><ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse></material>
+      </visual>
+      <visual name="landing_h_crossbar">
+        <pose>0 0 0.0065 0 0 0</pose>
+        <geometry><box><size>0.030 0.130 0.001</size></box></geometry>
+        <material><ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse></material>
+      </visual>
+      <!-- 支撑柱坐标相对停机坪中心：柱中心低于平台 47 mm。支柱只作
+           视觉建模，避免同车激光雷达把它们识别为 0.13~0.30 m 近障；
+           平台主体仍保留完整碰撞体，平面外廓由避障 footprint 覆盖。 -->
+      <visual name="front_left_support_visual"><pose>0.150 0.150 -0.047 0 0 0</pose><geometry><cylinder><radius>0.008</radius><length>0.082</length></cylinder></geometry><material><ambient>0.55 0.57 0.60 1</ambient><diffuse>0.72 0.75 0.78 1</diffuse></material><visibility_flags>2</visibility_flags></visual>
+      <visual name="front_right_support_visual"><pose>0.150 -0.150 -0.047 0 0 0</pose><geometry><cylinder><radius>0.008</radius><length>0.082</length></cylinder></geometry><material><ambient>0.55 0.57 0.60 1</ambient><diffuse>0.72 0.75 0.78 1</diffuse></material><visibility_flags>2</visibility_flags></visual>
+      <visual name="rear_left_support_visual"><pose>-0.150 0.150 -0.047 0 0 0</pose><geometry><cylinder><radius>0.008</radius><length>0.082</length></cylinder></geometry><material><ambient>0.55 0.57 0.60 1</ambient><diffuse>0.72 0.75 0.78 1</diffuse></material><visibility_flags>2</visibility_flags></visual>
+      <visual name="rear_right_support_visual"><pose>-0.150 -0.150 -0.047 0 0 0</pose><geometry><cylinder><radius>0.008</radius><length>0.082</length></cylinder></geometry><material><ambient>0.55 0.57 0.60 1</ambient><diffuse>0.72 0.75 0.78 1</diffuse></material><visibility_flags>2</visibility_flags></visual>
+    </link>
+    <joint name="landing_pad_joint" type="fixed"><parent>base_link</parent><child>landing_pad_link</child></joint>
 
     <!-- 前轮转向节（kingpin）：垂直轴 revolute 关节挂在 base_link 下，
          前轮滚转关节再挂到转向节下。转向角限位 ±0.5 rad（约 28.6°），
@@ -154,6 +199,8 @@
         <gz_frame_id>laser_frame</gz_frame_id>
         <always_on>true</always_on><update_rate>10</update_rate><visualize>false</visualize>
         <lidar>
+          <!-- 只扫描 visibility flag bit 0；支柱使用 bit 1，GUI/相机仍可见。 -->
+          <visibility_mask>1</visibility_mask>
           <scan><horizontal><samples>360</samples><resolution>1</resolution><min_angle>-3.14159265359</min_angle><max_angle>3.14159265359</max_angle></horizontal></scan>
           <range><min>0.12</min><max>25.0</max><resolution>0.01</resolution></range>
           <noise><type>gaussian</type><mean>0.0</mean><stddev>0.01</stddev></noise>
