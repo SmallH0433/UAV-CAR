@@ -8,7 +8,7 @@ Conflicts=ov9281-follow-props-off-manual.service ov9281-landing-ros2-preview.ser
 Type=simple
 Environment=PYTHONUNBUFFERED=1
 ExecStartPre=-/usr/bin/podman rm -f ov9281-landing-ros2
-ExecStart=/usr/bin/podman run --rm --name ov9281-landing-ros2 --network host --ipc=host -v /home/PI/air_ground_landing/config:/config:ro localhost/air-ground-landing-ros2:humble /bin/bash -lc 'source /opt/ros/humble/setup.bash && source /opt/air_ground_landing/ros2_ws/install/setup.bash && exec ros2 launch air_ground_landing_ros2 adapters.launch.py parameters_file:=/config/adapters.hardware.yaml landing_config_file:=/config/moving_landing.prototype.json'
+ExecStart=/usr/bin/podman run --rm --name ov9281-landing-ros2 --network host --ipc=host -v /home/pi/air_ground_landing/config:/config:ro localhost/air-ground-landing-ros2:humble /bin/bash -lc 'source /opt/ros/humble/setup.bash && source /opt/air_ground_landing/ros2_ws/install/setup.bash && exec ros2 launch air_ground_landing_ros2 adapters.launch.py parameters_file:=/config/adapters.hardware.yaml landing_config_file:=/config/moving_landing.prototype.json'
 ExecStop=/usr/bin/podman stop -t 8 ov9281-landing-ros2
 Restart=on-failure
 RestartSec=3

@@ -35,14 +35,35 @@ from air_ground_landing.simple_coordination import (
 WORKSPACE = Path(__file__).resolve().parents[3]
 OV9281_DIR = WORKSPACE / "ov9281_debug"
 sys.path.insert(0, str(OV9281_DIR))
-sys.path.insert(0, str(WORKSPACE / "tools"))
 
 from ov9281_dual_tag import (  # noqa: E402
     parse_tag_quality_specs,
     parse_tag_specs,
     select_primary_tag,
 )
-from generate_ov9281_nested_apriltag_pdf import INNER_ID1, OUTER_ID0  # noqa: E402
+
+# OpenCV DICT_APRILTAG_36h11 print matrices used by the deployed dual-tag setup.
+# Keep the test independent from the upper-computer PDF generator and reportlab.
+OUTER_ID0 = (
+    "11111111",
+    "11101111",
+    "11001011",
+    "11110101",
+    "11110011",
+    "10100011",
+    "10101001",
+    "11111111",
+)
+INNER_ID1 = (
+    "11111111",
+    "10110111",
+    "10100101",
+    "11110011",
+    "11100001",
+    "10001011",
+    "11001001",
+    "11111111",
+)
 
 
 class GuidedExecutionTests(unittest.TestCase):
