@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "release": "uav-pixhawk-7.6",
+  "scope": "uav_pixhawk_flight_controller_only",
+  "hardware": {
+    "board": "Pixhawk1",
+    "board_id": 9,
+    "mcu": "STM32F427xx",
+    "frame_class": 1,
+    "frame_type": 1,
+    "frame": "QUAD/X"
+  },
+  "firmware": {
+    "product": "ArduCopter",
+    "version": "4.7.0",
+    "version_type": "OFFICIAL",
+    "git_identity": "1511f271",
+    "file": "firmware/arducopter-pixhawk1-4.7.0-1511f271.apj",
+    "image_size": 1560116,
+    "file_size": 1413181,
+    "sha256": "f37b9044416252e5cff6d41c7f954669879d226abd98ac5fccd1e683a9088104"
+  },
+  "parameters": {
+    "current_snapshot": {
+      "file": "parameters/qav280-current-20260827.param",
+      "source": "DataFlash Log 59 PARM messages",
+      "captured_date": "2026-08-27",
+      "unique_parameters": 1015,
+      "sha256": "76ed4cc0f8e1d65264797c38af2a23ec23261b1a20487a745b78e44bbb2d9358"
+    },
+    "project_settings": {
+      "file": "parameters/qav280-project-settings.param",
+      "parameters": 108,
+      "hardware_specific_calibration_excluded": true,
+      "sha256": "7ee0d8fbe57310ab4cb3e0f8d0e3b446c02d36265d0cafcc33ab78f902c3ffac"
+    }
+  },
+  "excluded": [
+    "ground_vehicle",
+    "raspberry_pi_companion_computer",
+    "ground_station_tools",
+    "flight_logs",
+    "camera_and_vision_assets",
+    "test_and_migration_tools"
+  ]
+}

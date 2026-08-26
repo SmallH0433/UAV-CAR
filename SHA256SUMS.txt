@@ -1,0 +1,4 @@
+f37b9044416252e5cff6d41c7f954669879d226abd98ac5fccd1e683a9088104  firmware/arducopter-pixhawk1-4.7.0-1511f271.apj
+8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903  licenses/ARDUPILOT_GPL-3.0.txt
+76ed4cc0f8e1d65264797c38af2a23ec23261b1a20487a745b78e44bbb2d9358  parameters/qav280-current-20260827.param
+7ee0d8fbe57310ab4cb3e0f8d0e3b446c02d36265d0cafcc33ab78f902c3ffac  parameters/qav280-project-settings.param

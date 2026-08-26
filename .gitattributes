@@ -1,0 +1,9 @@
+* text=auto
+.gitattributes text eol=lf
+.gitignore text eol=lf
+*.apj binary
+*.json text eol=lf
+*.md text eol=lf
+*.param text eol=lf
+*.txt text eol=lf
+VERSION text eol=lf
