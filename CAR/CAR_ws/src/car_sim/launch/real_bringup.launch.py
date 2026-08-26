@@ -35,6 +35,11 @@ GPS（WHEELTEC G60）：默认随车启动（gps_port:=/dev/wheeltec_gps），
 （雷达 460800 波特串口丢包、AMCL 无法收敛）已屏蔽——launch 不再提供
 nav_mode 参数，相关文件（config/nav2_params.yaml、launch/nav2_stack.launch.py）
 保留备用。自主巡航/避障仍由 avoidance_node 承担（原有功能不受影响）。
+
+双向丝杆（ESP8266，对接锁定机构）：默认关闭，leadscrew_port:=/dev/ttyUSB1 启动；
+状态 `ros2 topic echo /leadscrew/status`，指令示例：
+  ros2 topic pub --once /leadscrew/cmd car_interfaces/msg/LeadscrewCommand \
+    "{group: 0, command: 1}"   # command: 0=STOP 1=IN 2=OUT 3=RELAX 4=LOCK
 """
 
 import os
@@ -65,6 +70,8 @@ def generate_launch_description():
     creep_speed = LaunchConfiguration('creep_speed')
     web_bind = LaunchConfiguration('web_bind')
     gps_port = LaunchConfiguration('gps_port')
+    leadscrew_port = LaunchConfiguration('leadscrew_port')
+    leadscrew_simulate = LaunchConfiguration('leadscrew_simulate')
     front_camera = LaunchConfiguration('front_camera')
     k210_port = LaunchConfiguration('k210_port')
     lidar_tf_x = LaunchConfiguration('lidar_tf_x')
@@ -80,6 +87,8 @@ def generate_launch_description():
     has_rear_camera = IfCondition(
         PythonExpression(["'", rear_camera_device, "' != ''"]))
     has_gps = IfCondition(PythonExpression(["'", gps_port, "' != ''"]))
+    has_leadscrew = IfCondition(
+        PythonExpression(["'", leadscrew_port, "' != ''"]))
     v4l2_front = IfCondition(
         PythonExpression(["'", front_camera, "' == 'v4l2'"]))
     k210_front = IfCondition(
@@ -167,9 +176,9 @@ def generate_launch_description():
             'safety_distance': safety_distance,
             'slow_down_distance': slow_down_distance,
             'creep_speed': creep_speed,
-            # R680 465x385 mm + 400x400 mm 停机坪组合外廓。
+            # R680 465x385 mm + 450x450 mm 停机坪组合外廓。
             'vehicle_half_length': 0.2325,
-            'vehicle_half_width': 0.20,
+            'vehicle_half_width': 0.225,
             'footprint_padding': 0.04,
         }],
     )
@@ -237,6 +246,19 @@ def generate_launch_description():
         parameters=[g60_params, {'port': gps_port}],
         condition=has_gps,
     )
+    # ESP8266 双向丝杆对接锁定机构（leadscrew_port 非空时启动；
+    # 指令 /leadscrew/cmd，状态 /leadscrew/status，见头部 docstring）
+    leadscrew = Node(
+        package='car_nodes',
+        executable='leadscrew_driver_node',
+        name='leadscrew_driver_node',
+        output='screen',
+        parameters=[{
+            'port': leadscrew_port,
+            'simulate': leadscrew_simulate,
+        }],
+        condition=has_leadscrew,
+    )
     # 常驻静态 TF base_footprint→laser_frame（雷达安装位置，建图依赖；
     # 数值需与 web_gateway 建图参数 mapping_lidar_x/y/z 一致）
     lidar_static_tf = Node(
@@ -303,6 +325,12 @@ def generate_launch_description():
             'gps_port', default_value='/dev/wheeltec_gps',
             description="WHEELTEC G60 GPS 串口（udev 规则名）；留空 ''=不启动 GPS"),
         DeclareLaunchArgument(
+            'leadscrew_port', default_value='',
+            description="ESP8266 双向丝杆串口（如 /dev/ttyUSB1）；留空 ''=不启动"),
+        DeclareLaunchArgument(
+            'leadscrew_simulate', default_value='true',
+            description='true=丝杆本地仿真（不开串口，模拟状态机）'),
+        DeclareLaunchArgument(
             'front_camera', default_value='v4l2',
             description="前摄类型：v4l2=camera_device 摄像头；k210=K210 串口推流摄像头；none=不启动前摄"),
         DeclareLaunchArgument(
@@ -331,5 +359,6 @@ def generate_launch_description():
         ultrasonic,
         web_gateway,
         gps,
+        leadscrew,
         lidar_static_tf,
     ])

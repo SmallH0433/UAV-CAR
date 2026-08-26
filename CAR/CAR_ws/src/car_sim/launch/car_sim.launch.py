@@ -89,9 +89,9 @@ def generate_launch_description():
             'safety_distance': 1.0,
             'slow_down_distance': 1.8,
             'creep_speed': 0.25,
-            # R680 465x385 mm + 400x400 mm 停机坪组合外廓。
+            # R680 465x385 mm + 450x450 mm 停机坪组合外廓。
             'vehicle_half_length': 0.2325,
-            'vehicle_half_width': 0.20,
+            'vehicle_half_width': 0.225,
             'footprint_padding': 0.04,
         }],
     )
@@ -133,6 +133,15 @@ def generate_launch_description():
         output='screen',
         parameters=[sim_time],
     )
+    # 停机坪居中机构（ESP8266 丝杆下位机的仿真状态机 + Gazebo 推杆关节驱动）：
+    # 对外话题契约 /leadscrew/cmd、/leadscrew/status 与真机完全一致
+    leadscrew_sim = Node(
+        package='car_nodes',
+        executable='leadscrew_driver_node',
+        name='leadscrew_driver_node',
+        output='screen',
+        parameters=[sim_time, {'simulate': True, 'publish_sim_joints': True}],
+    )
     web_gateway = Node(
         package='car_sim',
         executable='web_gateway',
@@ -161,5 +170,6 @@ def generate_launch_description():
         command_gateway,
         chassis_controller,
         sim_motor_bridge,
+        leadscrew_sim,
         web_gateway,
     ])

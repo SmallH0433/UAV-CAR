@@ -149,21 +149,23 @@
     </collision>
   </link>
 
-  <!-- ======================== 400x400 mm 无人机停机坪 ======================== -->
-  <!-- 平台底面高于激光雷达顶面，四角立柱固定在原上层安装板上。 -->
+  <!-- ======================== 450x450 mm 无人机停机坪 ======================== -->
+  <!-- 平台底面高于激光雷达顶面，四角立柱固定在原上层安装板上。
+       居中机构（2 电机 + 4 推杆）仅在 Gazebo 模型 model.sdf 中建模，
+       本 URDF 仅供 RViz 显示，推杆不参与 TF。 -->
   <link name="landing_pad_link">
     <inertial>
       <mass value="1.20"/>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <inertia ixx="0.016014" ixy="0" ixz="0"
-               iyy="0.016014" iyz="0" izz="0.032000"/>
+      <inertia ixx="0.020264" ixy="0" ixz="0"
+               iyy="0.020264" iyz="0" izz="0.040500"/>
     </inertial>
     <visual>
-      <geometry><box size="0.400 0.400 0.012"/></geometry>
+      <geometry><box size="0.450 0.450 0.012"/></geometry>
       <material name="landing_pad_black"/>
     </visual>
     <collision>
-      <geometry><box size="0.400 0.400 0.012"/></geometry>
+      <geometry><box size="0.450 0.450 0.012"/></geometry>
     </collision>
     <!-- 白色 H 标识。 -->
     <visual><origin xyz="0 0.065 0.0065"/><geometry><box size="0.180 0.030 0.001"/></geometry><material name="landing_mark_white"/></visual>

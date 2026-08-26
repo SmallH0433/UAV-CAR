@@ -68,6 +68,26 @@ Linux 上设备一般为 `/dev/ttyACM*`（节点默认 `/dev/ttyACM0`，参数 `
   同步发布 `/imu/data`（sensor_msgs/Imu，无姿态角，`orientation_covariance[0]=-1`）。
 - 实机联调前建议关闭电机使能开关（大车 SW1），通过 OLED 确认目标速度后再使能。
 
+### ESP8266 双向丝杆协议（已实现）
+
+对接锁定机构：双 42 步进（12V）+ T8 双向丝杆（双出轴电机在丝杆中点，
+左端正牙右端反牙，导程 2mm，单边行程 57mm = 28.5 圈 = 45600 步 @8 细分）。
+固件工程 `tools/leadscrew42`（本仓 `esp8266-deploy` 分支，PlatformIO +
+Arduino 框架，nodemcuv2）。
+
+- 接线：组1 STEP/DIR/EN=IO13/12/14，组2 STEP/DIR/EN=IO15/4/2（EN 低有效），
+  TXD/RXD 为命令串口，IO0 刻意不接（启动模式脚）
+- 通信：USB 串口 **115200 8N1**，文本行协议。下行命令 `IN[ 1|2]` /
+  `OUT[ 1|2]` / `STOP` / `RELAX[ 1|2]` / `LOCK[ 1|2]` / `SPEED <50..20000>` /
+  `POS`；上行 `OK/ERR` 应答、`DONE G1 IN pos=57.00mm` 到位上报、
+  POS 返回 `G1 state=AT_OUTER pos=0.00mm steps=0 en=0` 与 `SPEED ...` 行
+- 节点侧编解码：`car_nodes/esp_leadscrew_protocol.py`（纯 Python，可单测）
+- **注意**：打开串口瞬间 DTR/RTS 经自动下载电路触发 ESP 复位，
+  节点打开后须显式 `dtr=False; rts=False` 并丢弃上电 banner；
+  Windows 下强杀串口监视器会把板子按在复位里（所有 IO 量到 0V），
+  断电重启或释放 RTS 即可恢复
+- 上电默认螺母在外侧（pos=0）；无到位开关，长期建议加限位做归零
+
 ## 传感器接入点
 
 - `/scan`（sensor_msgs/LaserScan，frame_id `laser_frame`）：实机为**镭神 N10P 串口版**，

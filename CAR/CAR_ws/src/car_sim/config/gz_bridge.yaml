@@ -72,3 +72,53 @@
   direction: GZ_TO_ROS
   qos_profile: SENSOR_DATA
   lazy: true
+
+# 俯视相机（停机坪正上方）→ web_gateway /api/camera_top.jpg（仿真监控台 /sim 用）
+- ros_topic_name: /camera/top/image_raw
+  gz_topic_name: /model/ground_vehicle/top_camera/image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+  lazy: true
+
+- ros_topic_name: /camera/top/camera_info
+  gz_topic_name: /model/ground_vehicle/top_camera/camera_info
+  ros_type_name: sensor_msgs/msg/CameraInfo
+  gz_type_name: gz.msgs.CameraInfo
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA
+  lazy: true
+
+# 停机坪居中机构：4 个推杆棱柱关节位置指令（q=0 外侧 / -0.057 内侧）
+- ros_topic_name: /leadscrew/sim/pusher_a/cmd_pos
+  gz_topic_name: /model/ground_vehicle/pusher_a/cmd_pos
+  ros_type_name: std_msgs/msg/Float64
+  gz_type_name: gz.msgs.Double
+  direction: ROS_TO_GZ
+
+- ros_topic_name: /leadscrew/sim/pusher_b/cmd_pos
+  gz_topic_name: /model/ground_vehicle/pusher_b/cmd_pos
+  ros_type_name: std_msgs/msg/Float64
+  gz_type_name: gz.msgs.Double
+  direction: ROS_TO_GZ
+
+- ros_topic_name: /leadscrew/sim/pusher_c/cmd_pos
+  gz_topic_name: /model/ground_vehicle/pusher_c/cmd_pos
+  ros_type_name: std_msgs/msg/Float64
+  gz_type_name: gz.msgs.Double
+  direction: ROS_TO_GZ
+
+- ros_topic_name: /leadscrew/sim/pusher_d/cmd_pos
+  gz_topic_name: /model/ground_vehicle/pusher_d/cmd_pos
+  ros_type_name: std_msgs/msg/Float64
+  gz_type_name: gz.msgs.Double
+  direction: ROS_TO_GZ
+
+# 推杆关节状态回传（调试用：实际位置 vs 指令位置）
+- ros_topic_name: /leadscrew/sim/joint_states
+  gz_topic_name: /model/ground_vehicle/joint_states
+  ros_type_name: sensor_msgs/msg/JointState
+  gz_type_name: gz.msgs.Model
+  direction: GZ_TO_ROS
+  qos_profile: SENSOR_DATA

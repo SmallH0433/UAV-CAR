@@ -2,7 +2,8 @@
 <sdf version="1.9">
   <!-- R680 阿克曼转向小车（WHEELTEC 底盘：前轮舵机转向 + 后轮双电机驱动）
        几何/惯性按 car_description/urdf/CAR_description.urdf 换算：
-       底盘 465x385x218 mm；顶部增加 400x400 mm 无人机停机坪。
+       底盘 465x385x218 mm；顶部 450x450 mm 无人机停机坪 + 居中机构
+       （2 台双出轴 42 步进 + T8 双向丝杆，4 个 "[" 型推杆）。
        轮半径 0.076 m，轮距 0.32 m，轴距 0.31 m，底盘 16 kg。
        世界文件中以 <name>ground_vehicle</name> 包含，故 gz topic 前缀为
        /model/ground_vehicle/... -->
@@ -43,7 +44,7 @@
       </visual>
     </link>
 
-    <!-- 无人机停机坪：400x400x12 mm。平台以四根立柱架高，底面相对
+    <!-- 无人机停机坪：450x450x12 mm。平台以四根立柱架高，底面相对
          base_link 为 0.224 m，高于激光雷达顶面 42 mm，避免几何互穿。
          停机坪为固定载荷，不改变底盘轴距、轮距、转向限位和驱动参数。 -->
     <link name="landing_pad_link">
@@ -51,14 +52,14 @@
       <inertial>
         <mass>1.20</mass>
         <inertia>
-          <ixx>0.016014</ixx><iyy>0.016014</iyy><izz>0.032000</izz>
+          <ixx>0.020264</ixx><iyy>0.020264</iyy><izz>0.040500</izz>
         </inertia>
       </inertial>
       <collision name="pad_collision">
-        <geometry><box><size>0.400 0.400 0.012</size></box></geometry>
+        <geometry><box><size>0.450 0.450 0.012</size></box></geometry>
       </collision>
       <visual name="pad_visual">
-        <geometry><box><size>0.400 0.400 0.012</size></box></geometry>
+        <geometry><box><size>0.450 0.450 0.012</size></box></geometry>
         <material><ambient>0.08 0.08 0.09 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse></material>
       </visual>
       <!-- 白色 H 标识（仅视觉层，略高于平台表面防止闪烁）。 -->
@@ -86,6 +87,198 @@
       <visual name="rear_right_support_visual"><pose>-0.150 -0.150 -0.047 0 0 0</pose><geometry><cylinder><radius>0.008</radius><length>0.082</length></cylinder></geometry><material><ambient>0.55 0.57 0.60 1</ambient><diffuse>0.72 0.75 0.78 1</diffuse></material><visibility_flags>2</visibility_flags></visual>
     </link>
     <joint name="landing_pad_joint" type="fixed"><parent>base_link</parent><child>landing_pad_link</child></joint>
+
+    <!-- ========== 停机坪居中机构（固件见 tools/leadscrew42） ==========
+         布局（俯视，+X=车头=A 边，顺时针 B(-Y 右) C(-X 后) D(+Y 左)）：
+           电机A 挂在 A 边中点下方 (0.225, 0)，丝杆轴沿 Y；
+           电机B 挂在 B 边中点下方 (0, -0.225)，丝杆轴沿 X。
+         电机 42x42x40 mm；T8 丝杆 ⌀8，自电机两端面各伸出 150 mm
+         （丝杆全长 300 mm，含电机总长 340 mm，即末端距电机中心 170 mm；
+         螺距 2 导程 2，双向牙）。
+         螺母套 20(沿丝杆)x20x15 mm，丝杆穿过 20x15 面几何中心。
+         行程约束：螺母中心距电机中心 103 mm(内，距电机端面 83 mm)~
+         160 mm(外，螺母端面与丝杆末端齐平，不超出丝杆)，
+         单边行程 57 mm —— 与固件 TRAVEL_MM=57 一致。
+         4 个 "[" 型推杆（10x10 方杆）与各自螺母套刚性一体：
+           组1(电机A) pusher_a/pusher_c 横跨 A↔C，横臂距坪面 h1=30 mm；
+           组2(电机B) pusher_b/pusher_d 横跨 B↔D，横臂距坪面 h2=55 mm；
+           h1 != h2 保证十字交叉处不碰撞。垂腿落在坪边外侧 5 mm。
+         棱柱关节语义：q=0 螺母在外侧（对应固件 pos=0 / AT_OUTER），
+         q=-0.057 到内侧（pos=57 mm / AT_INNER）；ROS 侧换算见
+         car_nodes/leadscrew_driver.py 仿真模式。
+         控制：JointPositionController x4（topic pusher_{a,b,c,d}/cmd_pos，
+         Float64）+ JointStatePublisher（joint_states）。 -->
+    <link name="screw_motor_a_link">
+      <pose relative_to="landing_pad_link">0.225 0 -0.027 0 0 0</pose>
+      <inertial><mass>0.28</mass><inertia><ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz></inertia></inertial>
+      <collision name="motor_collision">
+        <geometry><box><size>0.042 0.040 0.042</size></box></geometry>
+      </collision>
+      <visual name="motor_visual">
+        <geometry><box><size>0.042 0.040 0.042</size></box></geometry>
+        <material><ambient>0.10 0.10 0.12 1</ambient><diffuse>0.20 0.20 0.25 1</diffuse></material>
+      </visual>
+      <!-- T8 丝杆（中段 40mm 藏于电机体内）：轴沿 Y -->
+      <visual name="screw_visual">
+        <pose>0 0 0 1.57079632679 0 0</pose>
+        <geometry><cylinder><radius>0.004</radius><length>0.340</length></cylinder></geometry>
+        <material><ambient>0.55 0.55 0.58 1</ambient><diffuse>0.70 0.70 0.73 1</diffuse></material>
+      </visual>
+    </link>
+    <joint name="screw_motor_a_joint" type="fixed"><parent>landing_pad_link</parent><child>screw_motor_a_link</child></joint>
+
+    <link name="screw_motor_b_link">
+      <pose relative_to="landing_pad_link">0 -0.225 -0.027 0 0 0</pose>
+      <inertial><mass>0.28</mass><inertia><ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz></inertia></inertial>
+      <collision name="motor_collision">
+        <geometry><box><size>0.040 0.042 0.042</size></box></geometry>
+      </collision>
+      <visual name="motor_visual">
+        <geometry><box><size>0.040 0.042 0.042</size></box></geometry>
+        <material><ambient>0.10 0.10 0.12 1</ambient><diffuse>0.20 0.20 0.25 1</diffuse></material>
+      </visual>
+      <!-- T8 丝杆：轴沿 X -->
+      <visual name="screw_visual">
+        <pose>0 0 0 0 1.57079632679 0</pose>
+        <geometry><cylinder><radius>0.004</radius><length>0.340</length></cylinder></geometry>
+        <material><ambient>0.55 0.55 0.58 1</ambient><diffuse>0.70 0.70 0.73 1</diffuse></material>
+      </visual>
+    </link>
+    <joint name="screw_motor_b_joint" type="fixed"><parent>landing_pad_link</parent><child>screw_motor_b_link</child></joint>
+
+    <!-- 俯视相机：停机坪正上方 650mm 垂直向下（仿真监控台 /sim 的
+         实时俯视图画面）。传感器 +Z（图像上方）朝车头，A 边在画面上方。 -->
+    <link name="top_camera_link">
+      <pose relative_to="landing_pad_link">0 0 0.650 0 1.57079632679 0</pose>
+      <gravity>false</gravity>
+      <inertial><mass>0.050</mass><inertia><ixx>0.00001</ixx><iyy>0.00001</iyy><izz>0.00001</izz></inertia></inertial>
+      <sensor name="top_camera" type="camera">
+        <topic>/model/ground_vehicle/top_camera/image</topic>
+        <gz_frame_id>top_camera_link</gz_frame_id>
+        <always_on>true</always_on><update_rate>10</update_rate><visualize>false</visualize>
+        <camera>
+          <horizontal_fov>0.9</horizontal_fov>
+          <image><width>480</width><height>480</height><format>R8G8B8</format></image>
+          <clip><near>0.1</near><far>10.0</far></clip>
+        </camera>
+      </sensor>
+    </link>
+    <joint name="top_camera_joint" type="fixed"><parent>landing_pad_link</parent><child>top_camera_link</child></joint>
+
+    <!-- 组1 推杆（横跨 A↔C，h1=30mm）：link 原点 = 螺母套中心（q=0 即外侧位） -->
+    <link name="pusher_a_link">
+      <pose relative_to="landing_pad_link">0.225 -0.160 -0.027 0 0 0</pose>
+      <inertial><mass>0.15</mass><inertia><ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz></inertia></inertial>
+      <collision name="nut_collision">
+        <geometry><box><size>0.020 0.020 0.015</size></box></geometry>
+      </collision>
+      <visual name="nut_visual">
+        <geometry><box><size>0.020 0.020 0.015</size></box></geometry>
+        <material><ambient>0.55 0.27 0.02 1</ambient><diffuse>0.70 0.35 0.05 1</diffuse></material>
+      </visual>
+      <!-- 近腿（A 边外侧 x=+0.230）/ 横臂（沿 X，高 h1）/ 远腿（C 边外侧 x=-0.230） -->
+      <visual name="leg_near"><pose>0.005 0 0.03525 0 0 0</pose><geometry><box><size>0.010 0.010 0.0555</size></box></geometry><material><ambient>0.05 0.25 0.45 1</ambient><diffuse>0.10 0.35 0.60 1</diffuse></material></visual>
+      <collision name="arm_collision"><pose>-0.225 0 0.063 0 0 0</pose><geometry><box><size>0.460 0.010 0.010</size></box></geometry></collision>
+      <visual name="arm"><pose>-0.225 0 0.063 0 0 0</pose><geometry><box><size>0.460 0.010 0.010</size></box></geometry><material><ambient>0.05 0.25 0.45 1</ambient><diffuse>0.10 0.35 0.60 1</diffuse></material></visual>
+      <visual name="leg_far"><pose>-0.455 0 0.03525 0 0 0</pose><geometry><box><size>0.010 0.010 0.0555</size></box></geometry><material><ambient>0.05 0.25 0.45 1</ambient><diffuse>0.10 0.35 0.60 1</diffuse></material></visual>
+    </link>
+    <joint name="pusher_a_joint" type="prismatic">
+      <parent>landing_pad_link</parent><child>pusher_a_link</child>
+      <axis><xyz>0 -1 0</xyz><limit><lower>-0.057</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
+    </joint>
+
+    <link name="pusher_c_link">
+      <pose relative_to="landing_pad_link">0.225 0.160 -0.027 0 0 0</pose>
+      <inertial><mass>0.15</mass><inertia><ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz></inertia></inertial>
+      <collision name="nut_collision">
+        <geometry><box><size>0.020 0.020 0.015</size></box></geometry>
+      </collision>
+      <visual name="nut_visual">
+        <geometry><box><size>0.020 0.020 0.015</size></box></geometry>
+        <material><ambient>0.55 0.27 0.02 1</ambient><diffuse>0.70 0.35 0.05 1</diffuse></material>
+      </visual>
+      <visual name="leg_near"><pose>0.005 0 0.03525 0 0 0</pose><geometry><box><size>0.010 0.010 0.0555</size></box></geometry><material><ambient>0.05 0.25 0.45 1</ambient><diffuse>0.10 0.35 0.60 1</diffuse></material></visual>
+      <collision name="arm_collision"><pose>-0.225 0 0.063 0 0 0</pose><geometry><box><size>0.460 0.010 0.010</size></box></geometry></collision>
+      <visual name="arm"><pose>-0.225 0 0.063 0 0 0</pose><geometry><box><size>0.460 0.010 0.010</size></box></geometry><material><ambient>0.05 0.25 0.45 1</ambient><diffuse>0.10 0.35 0.60 1</diffuse></material></visual>
+      <visual name="leg_far"><pose>-0.455 0 0.03525 0 0 0</pose><geometry><box><size>0.010 0.010 0.0555</size></box></geometry><material><ambient>0.05 0.25 0.45 1</ambient><diffuse>0.10 0.35 0.60 1</diffuse></material></visual>
+    </link>
+    <joint name="pusher_c_joint" type="prismatic">
+      <parent>landing_pad_link</parent><child>pusher_c_link</child>
+      <axis><xyz>0 1 0</xyz><limit><lower>-0.057</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
+    </joint>
+
+    <!-- 组2 推杆（横跨 B↔D，h2=55mm） -->
+    <link name="pusher_b_link">
+      <pose relative_to="landing_pad_link">0.160 -0.225 -0.027 0 0 0</pose>
+      <inertial><mass>0.15</mass><inertia><ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz></inertia></inertial>
+      <collision name="nut_collision">
+        <geometry><box><size>0.020 0.020 0.015</size></box></geometry>
+      </collision>
+      <visual name="nut_visual">
+        <geometry><box><size>0.020 0.020 0.015</size></box></geometry>
+        <material><ambient>0.55 0.27 0.02 1</ambient><diffuse>0.70 0.35 0.05 1</diffuse></material>
+      </visual>
+      <!-- 近腿（B 边外侧 y=-0.230）/ 横臂（沿 Y，高 h2）/ 远腿（D 边外侧 y=+0.230） -->
+      <visual name="leg_near"><pose>0 -0.005 0.04775 0 0 0</pose><geometry><box><size>0.010 0.010 0.0805</size></box></geometry><material><ambient>0.45 0.10 0.35 1</ambient><diffuse>0.60 0.15 0.50 1</diffuse></material></visual>
+      <collision name="arm_collision"><pose>0 0.225 0.088 0 0 0</pose><geometry><box><size>0.010 0.460 0.010</size></box></geometry></collision>
+      <visual name="arm"><pose>0 0.225 0.088 0 0 0</pose><geometry><box><size>0.010 0.460 0.010</size></box></geometry><material><ambient>0.45 0.10 0.35 1</ambient><diffuse>0.60 0.15 0.50 1</diffuse></material></visual>
+      <visual name="leg_far"><pose>0 0.455 0.04775 0 0 0</pose><geometry><box><size>0.010 0.010 0.0805</size></box></geometry><material><ambient>0.45 0.10 0.35 1</ambient><diffuse>0.60 0.15 0.50 1</diffuse></material></visual>
+    </link>
+    <joint name="pusher_b_joint" type="prismatic">
+      <parent>landing_pad_link</parent><child>pusher_b_link</child>
+      <axis><xyz>1 0 0</xyz><limit><lower>-0.057</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
+    </joint>
+
+    <link name="pusher_d_link">
+      <pose relative_to="landing_pad_link">-0.160 -0.225 -0.027 0 0 0</pose>
+      <inertial><mass>0.15</mass><inertia><ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz></inertia></inertial>
+      <collision name="nut_collision">
+        <geometry><box><size>0.020 0.020 0.015</size></box></geometry>
+      </collision>
+      <visual name="nut_visual">
+        <geometry><box><size>0.020 0.020 0.015</size></box></geometry>
+        <material><ambient>0.55 0.27 0.02 1</ambient><diffuse>0.70 0.35 0.05 1</diffuse></material>
+      </visual>
+      <visual name="leg_near"><pose>0 -0.005 0.04775 0 0 0</pose><geometry><box><size>0.010 0.010 0.0805</size></box></geometry><material><ambient>0.45 0.10 0.35 1</ambient><diffuse>0.60 0.15 0.50 1</diffuse></material></visual>
+      <collision name="arm_collision"><pose>0 0.225 0.088 0 0 0</pose><geometry><box><size>0.010 0.460 0.010</size></box></geometry></collision>
+      <visual name="arm"><pose>0 0.225 0.088 0 0 0</pose><geometry><box><size>0.010 0.460 0.010</size></box></geometry><material><ambient>0.45 0.10 0.35 1</ambient><diffuse>0.60 0.15 0.50 1</diffuse></material></visual>
+      <visual name="leg_far"><pose>0 0.455 0.04775 0 0 0</pose><geometry><box><size>0.010 0.010 0.0805</size></box></geometry><material><ambient>0.45 0.10 0.35 1</ambient><diffuse>0.60 0.15 0.50 1</diffuse></material></visual>
+    </link>
+    <joint name="pusher_d_joint" type="prismatic">
+      <parent>landing_pad_link</parent><child>pusher_d_link</child>
+      <axis><xyz>-1 0 0</xyz><limit><lower>-0.057</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
+    </joint>
+
+    <!-- 推杆关节位置控制（每关节一个实例；q=0 外侧，-0.057 内侧） -->
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>pusher_a_joint</joint_name>
+      <topic>/model/ground_vehicle/pusher_a/cmd_pos</topic>
+      <initial_position>0.0</initial_position>
+    </plugin>
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>pusher_c_joint</joint_name>
+      <topic>/model/ground_vehicle/pusher_c/cmd_pos</topic>
+      <initial_position>0.0</initial_position>
+    </plugin>
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>pusher_b_joint</joint_name>
+      <topic>/model/ground_vehicle/pusher_b/cmd_pos</topic>
+      <initial_position>0.0</initial_position>
+    </plugin>
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>pusher_d_joint</joint_name>
+      <topic>/model/ground_vehicle/pusher_d/cmd_pos</topic>
+      <initial_position>0.0</initial_position>
+    </plugin>
+    <plugin filename="gz-sim-joint-state-publisher-system" name="gz::sim::systems::JointStatePublisher">
+      <joint_name>pusher_a_joint</joint_name>
+      <joint_name>pusher_b_joint</joint_name>
+      <joint_name>pusher_c_joint</joint_name>
+      <joint_name>pusher_d_joint</joint_name>
+      <topic>/model/ground_vehicle/joint_states</topic>
+    </plugin>
+    <!-- 注：推杆实际位置核对用 SceneBroadcaster 的
+         /world/r680_test_field/dynamic_pose/info（joint_states 只含关节元数据） -->
 
     <!-- 前轮转向节（kingpin）：垂直轴 revolute 关节挂在 base_link 下，
          前轮滚转关节再挂到转向节下。转向角限位 ±0.5 rad（约 28.6°），

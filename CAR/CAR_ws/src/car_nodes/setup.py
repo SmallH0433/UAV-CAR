@@ -34,6 +34,7 @@ setup(
             'sim_motor_bridge_node = car_nodes.sim_motor_bridge:main',
             'ultrasonic_driver_node = car_nodes.ultrasonic_driver:main',
             'uav_bridge_node = car_nodes.uav_bridge:main',
+            'leadscrew_driver_node = car_nodes.leadscrew_driver:main',
         ],
     },
 )

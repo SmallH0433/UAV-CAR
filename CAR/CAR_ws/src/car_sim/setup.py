@@ -21,7 +21,7 @@ setup(
             'launch/nav2_stack.launch.py',
         ]),
         ('share/' + package_name + '/worlds', ['worlds/r680_test_field.sdf']),
-        ('share/' + package_name + '/web', ['car_sim/web/index.html']),
+        ('share/' + package_name + '/web', ['car_sim/web/index.html', 'car_sim/web/index_sim.html']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<title>R680 遥控台</title>
+<title>R680 仿真监控台（仅用于仿真）</title>
 <style>
   :root { color-scheme: dark; --accent: #4a7dd4; --card: #1b212b; --line: #2c3442; }
   * { box-sizing: border-box; }
@@ -79,12 +79,19 @@
   #cruiseBtn.on, #mappingBtn.on, #pusherBtn.on { background: #2e7d46; border-color: #3da35f; }
   #cruiseBtn.off, #mappingBtn.off, #pusherBtn.off { background: #273142; }
   #cruiseBtn.na, #pusherBtn.na { background: #3a3a32; color: #8a8a7a; cursor: not-allowed; }
+  .sim-badge {
+    display: inline-block; margin-left: 10px; padding: 2px 10px; font-size: 13px;
+    color: #ffd54f; border: 1px solid #ffd54f; border-radius: 6px; vertical-align: middle;
+  }
+  #topdown { width: 100%; aspect-ratio: 1; background: #0b0e12; border: 1px solid #232b38; border-radius: 8px; }
+  .td-legend { font-size: 12px; color: #7486a0; margin-top: 8px; line-height: 1.6; }
+  .td-legend b { color: #9fd3a8; font-family: Consolas, monospace; }
 </style>
 </head>
 <body>
   <header>
-    <h1>R680 <em>遥控台</em></h1>
-    <span class="sub">阿克曼小车 · 雷达 / GPS / 建图 / 画面</span>
+    <h1>R680 <em>仿真监控台</em><span class="sim-badge">⚠ 仅用于仿真（SIMULATION ONLY）</span></h1>
+    <span class="sub">阿克曼小车 · 雷达 / GPS / 建图 / 画面 · <b>推杆俯视图</b>（真机请用 <a href="/" style="color:#7aa2f7">遥控台</a>）</span>
   </header>
 
   <div id="grid">
@@ -119,6 +126,15 @@
         开启巡航后小车自主避障；巡航中按住 A/D 可保持巡航速度手动调整方向（W/S 直接接管速度），松手恢复自主避障。<br>
         键盘：WASD / 方向键，按住行驶，可组合（W+A 弧线转弯），松开或空格停车。
         阿克曼底盘不能原地自旋：单独按 A/D 只会原地预打方向，叠加 W/S 才会转弯。
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>停机坪俯视图（Gazebo 实时画面）</h2>
+      <img id="topView" class="media" alt="top camera" style="aspect-ratio:1; background:#0b0e12;">
+      <div class="td-legend">
+        停机坪正上方 650mm 俯视相机（A 边=车头，在画面上方）。推杆读数：
+        <span id="tdInfo">-</span>
       </div>
     </div>
 
@@ -239,6 +255,15 @@
     }).catch(function () { /* 状态轮询会纠正显示 */ });
   });
   renderPusher("");
+
+  // ---------- 停机坪俯视图：Gazebo 俯视相机实时画面（4Hz 刷新） ----------
+  var topView = document.getElementById("topView");
+  setInterval(function () { topView.src = "/api/camera_top.jpg?t=" + Date.now(); }, 250);
+  function updateTopdown(st) {
+    document.getElementById("tdInfo").textContent =
+      "组1=" + st.pos_mm[0].toFixed(1) + "mm 组2=" + st.pos_mm[1].toFixed(1) +
+      "mm（0=外侧 / 57=内侧）";
+  }
 
   // 组合按键状态：阿克曼转向需要 v 与 ω 同时下发（弧线行驶），
   // 因此 W/S 与 A/D 可叠加，而不是单指令互斥。
@@ -372,6 +397,7 @@
       pusherAvail = !!(lsSt && (ls.age_s === null || ls.age_s === undefined || ls.age_s <= 2.0));
       if (lsSt) {
         pusherClosed = !!ls.closed;
+        updateTopdown(lsSt);
         var posText = " " + lsSt.pos_mm.map(function (p) { return p.toFixed(0); }).join("/") + "mm";
         var st0 = PUSHER_STATE_NAMES[lsSt.state[0]] || "?";
         renderPusher(posText + "·" + st0);

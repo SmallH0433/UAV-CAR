@@ -134,6 +134,31 @@ ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
 （W/S 加速/刹车）则以遥控线速度为准。松手后恢复全自主避障。mux 状态中该模式
 authority 为 `operator_steering`。
 
+## 双向丝杆对接机构（ESP8266 下位机）
+
+双 42 步进 + T8 双向丝杆（电机在丝杆中点双出轴，左正牙右反牙，导程 2mm，
+单边行程 57mm），两个控制组。固件在 `tools/leadscrew42`（本仓
+`esp8266-deploy` 分支），文本行协议（115200 8N1）编解码在
+`car_nodes/esp_leadscrew_protocol.py`，节点 `leadscrew_driver_node`：
+
+- 订阅 `/leadscrew/cmd`（LeadscrewCommand：`group` 0=两组/1/2，
+  `command` 0=STOP 1=IN 2=OUT 3=RELAX 4=LOCK，`speed` steps/s 0=不变）
+- 发布 `/leadscrew/status`（LeadscrewStatus，2Hz：两组状态/位置/使能）
+- 状态机：`AT_OUTER →(IN) MOVING_IN → AT_INNER`，反向同理；运动中
+  `STOP` 进入 `HOLD_MID`（原地自锁，可继续 IN/OUT 走完剩余行程）
+- 启动：`ros2 launch car_sim real_bringup.launch.py leadscrew_port:=/dev/ttyUSB1`
+  （默认关闭；`leadscrew_simulate:=true` 为本地仿真，不开串口）
+- 仿真（Gazebo）：`car_sim.launch.py` 已挂载 `leadscrew_driver_node`
+  （simulate + publish_sim_joints），推杆模型在
+  `car_description/models/r680_4wd/model.sdf`（停机坪 450x450，电机挂 A/B 边
+  中点下方，4 个 "[" 型推杆棱柱关节，组1 跨 A↔C @h1=30mm、组2 跨 B↔D
+  @h2=55mm）。关节语义 q=0 外侧 / -0.057 内侧，与固件 pos 0~57mm 对应；
+  关节指令经 ros_gz_bridge（`/leadscrew/sim/pusher_{a,b,c,d}/cmd_pos`），
+  实际关节位置可 `ros2 topic echo /leadscrew/sim/joint_states` 查看。
+- 硬件注意：ESP8266 上电假定螺母在外侧（pos=0），实际不在时先手动归位；
+  打开串口瞬间 DTR/RTS 会触发 ESP 复位（节点内已显式释放）；
+  12V 电机配 24V 驱动供电时电流档按电机额定电流设。
+
 ## 实机待办
 
 - 实机一键全链路：`ros2 launch car_sim real_bringup.launch.py`（树莓派实测版，
