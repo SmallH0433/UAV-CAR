@@ -167,9 +167,9 @@ def generate_launch_description():
             'safety_distance': safety_distance,
             'slow_down_distance': slow_down_distance,
             'creep_speed': creep_speed,
-            # R680 465x385 mm + 400x400 mm 停机坪组合外廓。
+            # R680 465x385 mm + 450x450 mm 停机坪组合外廓。
             'vehicle_half_length': 0.2325,
-            'vehicle_half_width': 0.20,
+            'vehicle_half_width': 0.225,
             'footprint_padding': 0.04,
         }],
     )

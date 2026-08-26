@@ -26,7 +26,7 @@
   enable_cruise      (bool,  False) 无目标时是否巡航
   num_sectors        (int,   36)    前方 180° 划分的扇区数
   vehicle_half_length(float, 0.2325) 组合外廓半长 m（R680 465 mm）
-  vehicle_half_width (float, 0.20)   组合外廓半宽 m（400 mm 停机坪）
+  vehicle_half_width (float, 0.225)  组合外廓半宽 m（450 mm 停机坪）
   footprint_padding  (float, 0.04)   矩形外廓额外安全余量 m。候选方向的
       横向投影按 half_length*|sin(direction)| + half_width*|cos(direction)|
       计算，避免转弯时仍只按底盘固定半宽判断而使停机坪边角碰撞。
@@ -138,9 +138,9 @@ class AvoidanceNode(Node):
         self.declare_parameter('detour_timeout', 3.0)
         self.declare_parameter('enable_cruise', False)
         self.declare_parameter('num_sectors', 36)
-        # R680 底盘 465x385 mm 与 400x400 mm 停机坪的并集外廓。
+        # R680 底盘 465x385 mm 与 450x450 mm 停机坪的并集外廓。
         self.declare_parameter('vehicle_half_length', 0.2325)
-        self.declare_parameter('vehicle_half_width', 0.20)
+        self.declare_parameter('vehicle_half_width', 0.225)
         self.declare_parameter('footprint_padding', 0.04)
         self.declare_parameter('path_history_length', 5.0)
         self.declare_parameter('blocked_direction_memory_s', 8.0)
