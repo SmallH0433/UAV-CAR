@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "air-ground-landing"
+version = "0.3.0"
+description = "Fail-closed OV9281 moving-platform landing and hybrid guidance helpers"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+mavlink = ["pymavlink>=2.4.40"]
+
+[project.scripts]
+landing-target-bridge = "air_ground_landing.landing_target_bridge:main"
+moving-landing-replay = "air_ground_landing.stack_replay:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
