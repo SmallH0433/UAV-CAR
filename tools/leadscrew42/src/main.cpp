@@ -2,7 +2,7 @@
 // 双 T8 双向丝杆步进驱动 (ESP8266 下位机)
 //
 // 机械: 42步进电机双出轴位于丝杆中点, 左端正牙右端反牙,
-//       电机一转两侧螺母反向等速移动. 导程 2mm, 单边行程 86mm.
+//       电机一转两侧螺母反向等速移动. 导程 2mm, 单边行程 57mm.
 //
 // 接线 (每电机 STEP/DIR/EN/GND 四线):
 //   电机1: STEP=IO13 DIR=IO12 EN=IO14
@@ -18,14 +18,14 @@
 //   保持使能是为了消除齿隙游动; 发热敏感可用 RELAX 释放)
 //
 // 串口协议 (115200 8N1, 每行一条命令, 大小写不敏感):
-//   IN 1 | IN 2 | IN     组1/组2/两组同时 向内运动 86mm
-//   OUT 1| OUT 2| OUT    向外运动 86mm (回到外侧)
+//   IN 1 | IN 2 | IN     组1/组2/两组同时 向内运动 57mm
+//   OUT 1| OUT 2| OUT    向外运动 57mm (回到外侧)
 //   STOP               两组立即停止, 保持自锁
 //   RELAX [1|2]        释放使能(不再自锁, 省电降温)
 //   LOCK  [1|2]        恢复使能(自锁)
 //   SPEED <steps/s>    设置脉冲频率 (默认 1600)
 //   POS                查询状态与位置
-//   应答: OK ... / ERR ...; 运动到位主动上报: DONE G1 IN pos=86.00mm
+//   应答: OK ... / ERR ...; 运动到位主动上报: DONE G1 IN pos=57.00mm
 //
 // 注意: 上电默认假定螺母处于外侧(位置=0). 若不然请先手动归位再上电,
 //       或后续加装限位开关做归零.
@@ -44,7 +44,7 @@
 
 // ---------- 机械参数 ----------
 const float LEAD_MM      = 2.0f;               // T8 导程 2mm
-const float TRAVEL_MM    = 86.0f;              // 单边行程
+const float TRAVEL_MM    = 57.0f;              // 单边行程
 const int   MICROSTEPS   = 8;                  // 按驱动板拨码修改
 const long  STEPS_PER_REV = 200L * MICROSTEPS;
 const long  TRAVEL_STEPS  = (long)(TRAVEL_MM / LEAD_MM * STEPS_PER_REV + 0.5f);
