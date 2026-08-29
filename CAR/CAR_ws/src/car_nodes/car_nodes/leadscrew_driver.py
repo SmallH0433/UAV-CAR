@@ -7,7 +7,7 @@
   /leadscrew/sim/pusher_{a,b,c,d}/cmd_pos (std_msgs/Float64, 10Hz,
     仅 simulate=true 且 publish_sim_joints=true：驱动 Gazebo 模型
     r680_4wd 的 4 个推杆棱柱关节；组1→pusher_a/pusher_c，
-    组2→pusher_b/pusher_d。q=0 螺母在外侧(pos=0)，q=-0.057 到内侧
+    组2→pusher_b/pusher_d。q=0 螺母在外侧(pos=0)，q=-0.067 到内侧
     (pos=travel_mm)，与 model.sdf 关节限位一致)
 参数：
   port           (str,   '/dev/ttyUSB0') ESP8266 USB 串口
@@ -15,7 +15,7 @@
   simulate       (bool,  True)           True=本地模拟状态机（不开串口）
   publish_sim_joints (bool, True)        仿真时同步发布 Gazebo 推杆关节指令
   status_period  (float, 2.0)            实机模式 POS 轮询周期 s
-  travel_mm      (float, 57.0)           单边行程 mm（仿真用）
+  travel_mm      (float, 67.0)           单边行程 mm（仿真用）
   sim_speed_mm_s (float, 2.0)            仿真螺母移动速度 mm/s
 
 固件工程：tools/leadscrew42（仓库 esp8266-deploy 分支）。文本协议编解码
@@ -56,7 +56,7 @@ class LeadscrewDriverNode(Node):
         self.declare_parameter('simulate', True)
         self.declare_parameter('publish_sim_joints', True)
         self.declare_parameter('status_period', 2.0)
-        self.declare_parameter('travel_mm', 57.0)
+        self.declare_parameter('travel_mm', 67.0)
         self.declare_parameter('sim_speed_mm_s', 2.0)
 
         self.port = self.get_parameter('port').value
@@ -218,9 +218,9 @@ class LeadscrewDriverNode(Node):
             self._publish_status()
 
     def _publish_sim_joints(self):
-        """仿真位置 → Gazebo 推杆关节指令（q=0 外侧，-travel 内侧）。
+        """仿真位置 → Gazebo 推杆关节指令（q=0 外侧，-0.067 内侧）。
 
-        与 model.sdf 棱柱关节限位 [-0.057, 0] 对应；关节控制器跟踪
+        与 model.sdf 棱柱关节限位 [-0.067, 0] 对应；关节控制器跟踪
         连续更新的目标位置，推杆运动速度与 sim_speed_mm_s 一致。
         """
         for grp, pubs in self.sim_joint_pubs.items():

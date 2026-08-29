@@ -8,6 +8,6 @@ uint8 STATE_MOVING_OUT = 3
 uint8 STATE_HOLD_MID   = 4   # 中途停止，原地自锁
 
 uint8[2] state      # 见上方 STATE_* 常量
-float32[2] pos_mm   # 相对外侧位置 mm（0=外侧，57=内侧）
+float32[2] pos_mm   # 相对外侧位置 mm（0=外侧，67=内侧）
 bool[2] enabled     # EN 使能（自锁保持）
 uint32 speed        # 当前脉冲频率 steps/s

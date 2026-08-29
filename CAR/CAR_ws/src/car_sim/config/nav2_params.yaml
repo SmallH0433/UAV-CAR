@@ -183,8 +183,8 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      # R680 465x385 mm 与 450x450 mm 停机坪的组合矩形外廓。
-      footprint: "[[0.2325, 0.225], [0.2325, -0.225], [-0.2325, -0.225], [-0.2325, 0.225]]"
+      # R680 465x385 mm 与 470x470 mm 停机坪的组合矩形外廓。
+      footprint: "[[0.2325, 0.235], [0.2325, -0.235], [-0.2325, -0.235], [-0.2325, 0.235]]"
       footprint_padding: 0.04
       plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:

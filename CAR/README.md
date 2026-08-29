@@ -137,7 +137,7 @@ authority 为 `operator_steering`。
 ## 双向丝杆对接机构（ESP8266 下位机）
 
 双 42 步进 + T8 双向丝杆（电机在丝杆中点双出轴，左正牙右反牙，导程 2mm，
-单边行程 57mm），两个控制组。固件在 `tools/leadscrew42`（本仓
+单边行程 67mm），两个控制组。固件在 `tools/leadscrew42`（本仓
 `esp8266-deploy` 分支），文本行协议（115200 8N1）编解码在
 `car_nodes/esp_leadscrew_protocol.py`，节点 `leadscrew_driver_node`：
 
@@ -150,9 +150,9 @@ authority 为 `operator_steering`。
   （默认关闭；`leadscrew_simulate:=true` 为本地仿真，不开串口）
 - 仿真（Gazebo）：`car_sim.launch.py` 已挂载 `leadscrew_driver_node`
   （simulate + publish_sim_joints），推杆模型在
-  `car_description/models/r680_4wd/model.sdf`（停机坪 450x450，电机挂 A/B 边
+  `car_description/models/r680_4wd/model.sdf`（停机坪 470x470，电机挂 A/B 边
   中点下方，4 个 "[" 型推杆棱柱关节，组1 跨 A↔C @h1=30mm、组2 跨 B↔D
-  @h2=55mm）。关节语义 q=0 外侧 / -0.057 内侧，与固件 pos 0~57mm 对应；
+  @h2=55mm）。关节语义 q=0 外侧 / -0.067 内侧，与固件 pos 0~67mm 对应；
   关节指令经 ros_gz_bridge（`/leadscrew/sim/pusher_{a,b,c,d}/cmd_pos`），
   实际关节位置可 `ros2 topic echo /leadscrew/sim/joint_states` 查看。
 - 硬件注意：ESP8266 上电假定螺母在外侧（pos=0），实际不在时先手动归位；

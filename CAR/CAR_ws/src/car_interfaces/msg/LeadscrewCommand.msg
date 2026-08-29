@@ -9,4 +9,4 @@ uint8 CMD_LOCK  = 4   # 恢复使能（自锁）
 
 uint8 group      # 0=两组同时 1=组1 2=组2（CMD_STOP 忽略此字段）
 uint8 command    # 见上方 CMD_* 常量
-uint32 speed     # 脉冲频率 steps/s，0=不改变（1600 = 2mm/s，全程约 28.5s）
+uint32 speed     # 脉冲频率 steps/s，0=不改变（1600 = 2mm/s，全程约 33.5s）

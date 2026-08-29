@@ -52,14 +52,14 @@
       <inertial>
         <mass>1.20</mass>
         <inertia>
-          <ixx>0.020264</ixx><iyy>0.020264</iyy><izz>0.040500</izz>
+          <ixx>0.022090</ixx><iyy>0.022090</iyy><izz>0.044180</izz>
         </inertia>
       </inertial>
       <collision name="pad_collision">
-        <geometry><box><size>0.450 0.450 0.012</size></box></geometry>
+        <geometry><box><size>0.470 0.470 0.012</size></box></geometry>
       </collision>
       <visual name="pad_visual">
-        <geometry><box><size>0.450 0.450 0.012</size></box></geometry>
+        <geometry><box><size>0.470 0.470 0.012</size></box></geometry>
         <material><ambient>0.08 0.08 0.09 1</ambient><diffuse>0.16 0.16 0.18 1</diffuse></material>
       </visual>
       <!-- 白色 H 标识（仅视觉层，略高于平台表面防止闪烁）。 -->
@@ -90,57 +90,57 @@
 
     <!-- ========== 停机坪居中机构（固件见 tools/leadscrew42） ==========
          布局（俯视，+X=车头=A 边，顺时针 B(-Y 右) C(-X 后) D(+Y 左)）：
-           电机A 挂在 A 边中点下方 (0.225, 0)，丝杆轴沿 Y；
-           电机B 挂在 B 边中点下方 (0, -0.225)，丝杆轴沿 X。
-         电机 42x42x40 mm；T8 丝杆 ⌀8，自电机两端面各伸出 150 mm
-         （丝杆全长 300 mm，含电机总长 340 mm，即末端距电机中心 170 mm；
-         螺距 2 导程 2，双向牙）。
+           电机A 挂在 A 边中点下方 (0.235, 0)，丝杆轴沿 Y；
+           电机B 挂在 B 边中点下方 (0, -0.235)，丝杆轴沿 X。
+         电机 42x42x60 mm（加长机身）；T8 丝杆 ⌀8，自电机两端面各伸出
+         150 mm（丝杆全长 300 mm，含电机总长 360 mm，即末端距电机中心
+         180 mm；螺距 2 导程 2，双向牙）。
          螺母套 20(沿丝杆)x20x15 mm，丝杆穿过 20x15 面几何中心。
-         行程约束：螺母中心距电机中心 103 mm(内，距电机端面 83 mm)~
-         160 mm(外，螺母端面与丝杆末端齐平，不超出丝杆)，
-         单边行程 57 mm —— 与固件 TRAVEL_MM=57 一致。
+         行程约束：螺母中心距电机中心 113 mm(内，距电机端面 53 mm)~
+         180 mm(外，螺母端面与丝杆末端齐平，不超出丝杆)，
+         单边行程 67 mm —— 与固件 TRAVEL_MM=67 一致。
          4 个 "[" 型推杆（10x10 方杆）与各自螺母套刚性一体：
            组1(电机A) pusher_a/pusher_c 横跨 A↔C，横臂距坪面 h1=30 mm；
            组2(电机B) pusher_b/pusher_d 横跨 B↔D，横臂距坪面 h2=55 mm；
            h1 != h2 保证十字交叉处不碰撞。垂腿落在坪边外侧 5 mm。
          棱柱关节语义：q=0 螺母在外侧（对应固件 pos=0 / AT_OUTER），
-         q=-0.057 到内侧（pos=57 mm / AT_INNER）；ROS 侧换算见
+         q=-0.067 到内侧（pos=67 mm / AT_INNER）；ROS 侧换算见
          car_nodes/leadscrew_driver.py 仿真模式。
          控制：JointPositionController x4（topic pusher_{a,b,c,d}/cmd_pos，
          Float64）+ JointStatePublisher（joint_states）。 -->
     <link name="screw_motor_a_link">
-      <pose relative_to="landing_pad_link">0.225 0 -0.027 0 0 0</pose>
+      <pose relative_to="landing_pad_link">0.235 0 -0.027 0 0 0</pose>
       <inertial><mass>0.28</mass><inertia><ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz></inertia></inertial>
       <collision name="motor_collision">
-        <geometry><box><size>0.042 0.040 0.042</size></box></geometry>
+        <geometry><box><size>0.042 0.060 0.042</size></box></geometry>
       </collision>
       <visual name="motor_visual">
-        <geometry><box><size>0.042 0.040 0.042</size></box></geometry>
+        <geometry><box><size>0.042 0.060 0.042</size></box></geometry>
         <material><ambient>0.10 0.10 0.12 1</ambient><diffuse>0.20 0.20 0.25 1</diffuse></material>
       </visual>
       <!-- T8 丝杆（中段 40mm 藏于电机体内）：轴沿 Y -->
       <visual name="screw_visual">
         <pose>0 0 0 1.57079632679 0 0</pose>
-        <geometry><cylinder><radius>0.004</radius><length>0.340</length></cylinder></geometry>
+        <geometry><cylinder><radius>0.004</radius><length>0.360</length></cylinder></geometry>
         <material><ambient>0.55 0.55 0.58 1</ambient><diffuse>0.70 0.70 0.73 1</diffuse></material>
       </visual>
     </link>
     <joint name="screw_motor_a_joint" type="fixed"><parent>landing_pad_link</parent><child>screw_motor_a_link</child></joint>
 
     <link name="screw_motor_b_link">
-      <pose relative_to="landing_pad_link">0 -0.225 -0.027 0 0 0</pose>
+      <pose relative_to="landing_pad_link">0 -0.235 -0.027 0 0 0</pose>
       <inertial><mass>0.28</mass><inertia><ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz></inertia></inertial>
       <collision name="motor_collision">
-        <geometry><box><size>0.040 0.042 0.042</size></box></geometry>
+        <geometry><box><size>0.060 0.042 0.042</size></box></geometry>
       </collision>
       <visual name="motor_visual">
-        <geometry><box><size>0.040 0.042 0.042</size></box></geometry>
+        <geometry><box><size>0.060 0.042 0.042</size></box></geometry>
         <material><ambient>0.10 0.10 0.12 1</ambient><diffuse>0.20 0.20 0.25 1</diffuse></material>
       </visual>
       <!-- T8 丝杆：轴沿 X -->
       <visual name="screw_visual">
         <pose>0 0 0 0 1.57079632679 0</pose>
-        <geometry><cylinder><radius>0.004</radius><length>0.340</length></cylinder></geometry>
+        <geometry><cylinder><radius>0.004</radius><length>0.360</length></cylinder></geometry>
         <material><ambient>0.55 0.55 0.58 1</ambient><diffuse>0.70 0.70 0.73 1</diffuse></material>
       </visual>
     </link>
@@ -167,7 +167,7 @@
 
     <!-- 组1 推杆（横跨 A↔C，h1=30mm）：link 原点 = 螺母套中心（q=0 即外侧位） -->
     <link name="pusher_a_link">
-      <pose relative_to="landing_pad_link">0.225 -0.160 -0.027 0 0 0</pose>
+      <pose relative_to="landing_pad_link">0.235 -0.170 -0.027 0 0 0</pose>
       <inertial><mass>0.15</mass><inertia><ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz></inertia></inertial>
       <collision name="nut_collision">
         <geometry><box><size>0.020 0.020 0.015</size></box></geometry>
@@ -178,17 +178,17 @@
       </visual>
       <!-- 近腿（A 边外侧 x=+0.230）/ 横臂（沿 X，高 h1）/ 远腿（C 边外侧 x=-0.230） -->
       <visual name="leg_near"><pose>0.005 0 0.03525 0 0 0</pose><geometry><box><size>0.010 0.010 0.0555</size></box></geometry><material><ambient>0.05 0.25 0.45 1</ambient><diffuse>0.10 0.35 0.60 1</diffuse></material></visual>
-      <collision name="arm_collision"><pose>-0.225 0 0.063 0 0 0</pose><geometry><box><size>0.460 0.010 0.010</size></box></geometry></collision>
-      <visual name="arm"><pose>-0.225 0 0.063 0 0 0</pose><geometry><box><size>0.460 0.010 0.010</size></box></geometry><material><ambient>0.05 0.25 0.45 1</ambient><diffuse>0.10 0.35 0.60 1</diffuse></material></visual>
-      <visual name="leg_far"><pose>-0.455 0 0.03525 0 0 0</pose><geometry><box><size>0.010 0.010 0.0555</size></box></geometry><material><ambient>0.05 0.25 0.45 1</ambient><diffuse>0.10 0.35 0.60 1</diffuse></material></visual>
+      <collision name="arm_collision"><pose>-0.235 0 0.063 0 0 0</pose><geometry><box><size>0.480 0.010 0.010</size></box></geometry></collision>
+      <visual name="arm"><pose>-0.235 0 0.063 0 0 0</pose><geometry><box><size>0.480 0.010 0.010</size></box></geometry><material><ambient>0.05 0.25 0.45 1</ambient><diffuse>0.10 0.35 0.60 1</diffuse></material></visual>
+      <visual name="leg_far"><pose>-0.475 0 0.03525 0 0 0</pose><geometry><box><size>0.010 0.010 0.0555</size></box></geometry><material><ambient>0.05 0.25 0.45 1</ambient><diffuse>0.10 0.35 0.60 1</diffuse></material></visual>
     </link>
     <joint name="pusher_a_joint" type="prismatic">
       <parent>landing_pad_link</parent><child>pusher_a_link</child>
-      <axis><xyz>0 -1 0</xyz><limit><lower>-0.057</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
+      <axis><xyz>0 -1 0</xyz><limit><lower>-0.067</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
     </joint>
 
     <link name="pusher_c_link">
-      <pose relative_to="landing_pad_link">0.225 0.160 -0.027 0 0 0</pose>
+      <pose relative_to="landing_pad_link">0.235 0.170 -0.027 0 0 0</pose>
       <inertial><mass>0.15</mass><inertia><ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz></inertia></inertial>
       <collision name="nut_collision">
         <geometry><box><size>0.020 0.020 0.015</size></box></geometry>
@@ -198,18 +198,18 @@
         <material><ambient>0.55 0.27 0.02 1</ambient><diffuse>0.70 0.35 0.05 1</diffuse></material>
       </visual>
       <visual name="leg_near"><pose>0.005 0 0.03525 0 0 0</pose><geometry><box><size>0.010 0.010 0.0555</size></box></geometry><material><ambient>0.05 0.25 0.45 1</ambient><diffuse>0.10 0.35 0.60 1</diffuse></material></visual>
-      <collision name="arm_collision"><pose>-0.225 0 0.063 0 0 0</pose><geometry><box><size>0.460 0.010 0.010</size></box></geometry></collision>
-      <visual name="arm"><pose>-0.225 0 0.063 0 0 0</pose><geometry><box><size>0.460 0.010 0.010</size></box></geometry><material><ambient>0.05 0.25 0.45 1</ambient><diffuse>0.10 0.35 0.60 1</diffuse></material></visual>
-      <visual name="leg_far"><pose>-0.455 0 0.03525 0 0 0</pose><geometry><box><size>0.010 0.010 0.0555</size></box></geometry><material><ambient>0.05 0.25 0.45 1</ambient><diffuse>0.10 0.35 0.60 1</diffuse></material></visual>
+      <collision name="arm_collision"><pose>-0.235 0 0.063 0 0 0</pose><geometry><box><size>0.480 0.010 0.010</size></box></geometry></collision>
+      <visual name="arm"><pose>-0.235 0 0.063 0 0 0</pose><geometry><box><size>0.480 0.010 0.010</size></box></geometry><material><ambient>0.05 0.25 0.45 1</ambient><diffuse>0.10 0.35 0.60 1</diffuse></material></visual>
+      <visual name="leg_far"><pose>-0.475 0 0.03525 0 0 0</pose><geometry><box><size>0.010 0.010 0.0555</size></box></geometry><material><ambient>0.05 0.25 0.45 1</ambient><diffuse>0.10 0.35 0.60 1</diffuse></material></visual>
     </link>
     <joint name="pusher_c_joint" type="prismatic">
       <parent>landing_pad_link</parent><child>pusher_c_link</child>
-      <axis><xyz>0 1 0</xyz><limit><lower>-0.057</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
+      <axis><xyz>0 1 0</xyz><limit><lower>-0.067</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
     </joint>
 
     <!-- 组2 推杆（横跨 B↔D，h2=55mm） -->
     <link name="pusher_b_link">
-      <pose relative_to="landing_pad_link">0.160 -0.225 -0.027 0 0 0</pose>
+      <pose relative_to="landing_pad_link">0.160 -0.235 -0.027 0 0 0</pose>
       <inertial><mass>0.15</mass><inertia><ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz></inertia></inertial>
       <collision name="nut_collision">
         <geometry><box><size>0.020 0.020 0.015</size></box></geometry>
@@ -220,17 +220,17 @@
       </visual>
       <!-- 近腿（B 边外侧 y=-0.230）/ 横臂（沿 Y，高 h2）/ 远腿（D 边外侧 y=+0.230） -->
       <visual name="leg_near"><pose>0 -0.005 0.04775 0 0 0</pose><geometry><box><size>0.010 0.010 0.0805</size></box></geometry><material><ambient>0.45 0.10 0.35 1</ambient><diffuse>0.60 0.15 0.50 1</diffuse></material></visual>
-      <collision name="arm_collision"><pose>0 0.225 0.088 0 0 0</pose><geometry><box><size>0.010 0.460 0.010</size></box></geometry></collision>
-      <visual name="arm"><pose>0 0.225 0.088 0 0 0</pose><geometry><box><size>0.010 0.460 0.010</size></box></geometry><material><ambient>0.45 0.10 0.35 1</ambient><diffuse>0.60 0.15 0.50 1</diffuse></material></visual>
-      <visual name="leg_far"><pose>0 0.455 0.04775 0 0 0</pose><geometry><box><size>0.010 0.010 0.0805</size></box></geometry><material><ambient>0.45 0.10 0.35 1</ambient><diffuse>0.60 0.15 0.50 1</diffuse></material></visual>
+      <collision name="arm_collision"><pose>0 0.235 0.088 0 0 0</pose><geometry><box><size>0.010 0.480 0.010</size></box></geometry></collision>
+      <visual name="arm"><pose>0 0.235 0.088 0 0 0</pose><geometry><box><size>0.010 0.480 0.010</size></box></geometry><material><ambient>0.45 0.10 0.35 1</ambient><diffuse>0.60 0.15 0.50 1</diffuse></material></visual>
+      <visual name="leg_far"><pose>0 0.475 0.04775 0 0 0</pose><geometry><box><size>0.010 0.010 0.0805</size></box></geometry><material><ambient>0.45 0.10 0.35 1</ambient><diffuse>0.60 0.15 0.50 1</diffuse></material></visual>
     </link>
     <joint name="pusher_b_joint" type="prismatic">
       <parent>landing_pad_link</parent><child>pusher_b_link</child>
-      <axis><xyz>1 0 0</xyz><limit><lower>-0.057</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
+      <axis><xyz>1 0 0</xyz><limit><lower>-0.067</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
     </joint>
 
     <link name="pusher_d_link">
-      <pose relative_to="landing_pad_link">-0.160 -0.225 -0.027 0 0 0</pose>
+      <pose relative_to="landing_pad_link">-0.160 -0.235 -0.027 0 0 0</pose>
       <inertial><mass>0.15</mass><inertia><ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz></inertia></inertial>
       <collision name="nut_collision">
         <geometry><box><size>0.020 0.020 0.015</size></box></geometry>
@@ -240,13 +240,13 @@
         <material><ambient>0.55 0.27 0.02 1</ambient><diffuse>0.70 0.35 0.05 1</diffuse></material>
       </visual>
       <visual name="leg_near"><pose>0 -0.005 0.04775 0 0 0</pose><geometry><box><size>0.010 0.010 0.0805</size></box></geometry><material><ambient>0.45 0.10 0.35 1</ambient><diffuse>0.60 0.15 0.50 1</diffuse></material></visual>
-      <collision name="arm_collision"><pose>0 0.225 0.088 0 0 0</pose><geometry><box><size>0.010 0.460 0.010</size></box></geometry></collision>
-      <visual name="arm"><pose>0 0.225 0.088 0 0 0</pose><geometry><box><size>0.010 0.460 0.010</size></box></geometry><material><ambient>0.45 0.10 0.35 1</ambient><diffuse>0.60 0.15 0.50 1</diffuse></material></visual>
-      <visual name="leg_far"><pose>0 0.455 0.04775 0 0 0</pose><geometry><box><size>0.010 0.010 0.0805</size></box></geometry><material><ambient>0.45 0.10 0.35 1</ambient><diffuse>0.60 0.15 0.50 1</diffuse></material></visual>
+      <collision name="arm_collision"><pose>0 0.235 0.088 0 0 0</pose><geometry><box><size>0.010 0.480 0.010</size></box></geometry></collision>
+      <visual name="arm"><pose>0 0.235 0.088 0 0 0</pose><geometry><box><size>0.010 0.480 0.010</size></box></geometry><material><ambient>0.45 0.10 0.35 1</ambient><diffuse>0.60 0.15 0.50 1</diffuse></material></visual>
+      <visual name="leg_far"><pose>0 0.475 0.04775 0 0 0</pose><geometry><box><size>0.010 0.010 0.0805</size></box></geometry><material><ambient>0.45 0.10 0.35 1</ambient><diffuse>0.60 0.15 0.50 1</diffuse></material></visual>
     </link>
     <joint name="pusher_d_joint" type="prismatic">
       <parent>landing_pad_link</parent><child>pusher_d_link</child>
-      <axis><xyz>-1 0 0</xyz><limit><lower>-0.057</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
+      <axis><xyz>-1 0 0</xyz><limit><lower>-0.067</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
     </joint>
 
     <!-- 推杆关节位置控制（每关节一个实例；q=0 外侧，-0.057 内侧） -->
