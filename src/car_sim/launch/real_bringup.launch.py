@@ -36,7 +36,8 @@ GPS（WHEELTEC G60）：默认随车启动（gps_port:=/dev/wheeltec_gps），
 nav_mode 参数，相关文件（config/nav2_params.yaml、launch/nav2_stack.launch.py）
 保留备用。自主巡航/避障仍由 avoidance_node 承担（原有功能不受影响）。
 
-双向丝杆（ESP8266，对接锁定机构）：默认关闭，leadscrew_port:=/dev/ttyUSB1 启动；
+双向丝杆（树莓派 GPIO 直连双 42 电机，对接锁定机构）：默认关闭，
+enable_leadscrew:=true 启动；需要 ubuntu 用户在 gpio 组且已加载 GPIO udev 规则。
 状态 `ros2 topic echo /leadscrew/status`，指令示例：
   ros2 topic pub --once /leadscrew/cmd car_interfaces/msg/LeadscrewCommand \
     "{group: 0, command: 1}"   # command: 0=STOP 1=IN 2=OUT 3=RELAX 4=LOCK
@@ -70,7 +71,7 @@ def generate_launch_description():
     creep_speed = LaunchConfiguration('creep_speed')
     web_bind = LaunchConfiguration('web_bind')
     gps_port = LaunchConfiguration('gps_port')
-    leadscrew_port = LaunchConfiguration('leadscrew_port')
+    enable_leadscrew = LaunchConfiguration('enable_leadscrew')
     leadscrew_simulate = LaunchConfiguration('leadscrew_simulate')
     front_camera = LaunchConfiguration('front_camera')
     k210_port = LaunchConfiguration('k210_port')
@@ -88,7 +89,7 @@ def generate_launch_description():
         PythonExpression(["'", rear_camera_device, "' != ''"]))
     has_gps = IfCondition(PythonExpression(["'", gps_port, "' != ''"]))
     has_leadscrew = IfCondition(
-        PythonExpression(["'", leadscrew_port, "' != ''"]))
+        PythonExpression(["'", enable_leadscrew, "' == 'true'"]))
     v4l2_front = IfCondition(
         PythonExpression(["'", front_camera, "' == 'v4l2'"]))
     k210_front = IfCondition(
@@ -246,7 +247,7 @@ def generate_launch_description():
         parameters=[g60_params, {'port': gps_port}],
         condition=has_gps,
     )
-    # ESP8266 双向丝杆对接锁定机构（leadscrew_port 非空时启动；
+    # 树莓派 GPIO 直连双向丝杆锁定机构（enable_leadscrew:=true 时启动；
     # 指令 /leadscrew/cmd，状态 /leadscrew/status，见头部 docstring）
     leadscrew = Node(
         package='car_nodes',
@@ -254,8 +255,17 @@ def generate_launch_description():
         name='leadscrew_driver_node',
         output='screen',
         parameters=[{
-            'port': leadscrew_port,
             'simulate': leadscrew_simulate,
+            'step_pin_1': 17,
+            'dir_pin_1': 27,
+            'step_pin_2': 23,
+            'dir_pin_2': 24,
+            'enable_pin_1': 13,
+            'enable_pin_2': 5,
+            # 电机 2 与电机 1 镜像安装，张开/收拢方向需取反
+            'dir_invert_2': True,
+            'pulses_per_rev': 1600,
+            'leadscrew_pitch_mm': 2.0,
         }],
         condition=has_leadscrew,
     )
@@ -325,11 +335,11 @@ def generate_launch_description():
             'gps_port', default_value='/dev/wheeltec_gps',
             description="WHEELTEC G60 GPS 串口（udev 规则名）；留空 ''=不启动 GPS"),
         DeclareLaunchArgument(
-            'leadscrew_port', default_value='',
-            description="ESP8266 双向丝杆串口（如 /dev/ttyUSB1）；留空 ''=不启动"),
+            'enable_leadscrew', default_value='false',
+            description="true=启动树莓派 GPIO 直连双向丝杆节点；false=不启动"),
         DeclareLaunchArgument(
-            'leadscrew_simulate', default_value='true',
-            description='true=丝杆本地仿真（不开串口，模拟状态机）'),
+            'leadscrew_simulate', default_value='false',
+            description='true=丝杆本地仿真（不操作 GPIO，模拟状态机）'),
         DeclareLaunchArgument(
             'front_camera', default_value='v4l2',
             description="前摄类型：v4l2=camera_device 摄像头；k210=K210 串口推流摄像头；none=不启动前摄"),

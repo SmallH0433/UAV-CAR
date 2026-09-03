@@ -28,3 +28,16 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", ATTRS{seria
 
 # K210 前视摄像头（CanMV 板载 CH9102，1a86:55d4；本机实测序列号 558B018651）
 SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", ATTRS{serial}=="558B018651", SYMLINK+="wheeltec_k210", MODE="0660", GROUP="dialout"
+
+# ============================================================================
+# 树莓派 GPIO sysfs 访问权限（CL42 步进电机、超声波等直连 GPIO 节点使用）
+# 应用后请确认 ubuntu 用户已在 gpio 组：
+#   sudo usermod -aG gpio ubuntu
+# 安装/重载：
+#   sudo cp config/99-car-devices.rules /etc/udev/rules.d/ && \
+#     sudo udevadm control --reload && sudo udevadm trigger
+# ============================================================================
+SUBSYSTEM=="gpio", ACTION=="add", KERNEL=="gpiochip*", RUN+="/bin/chgrp gpio /sys/class/gpio/export /sys/class/gpio/unexport", RUN+="/bin/chmod 220 /sys/class/gpio/export /sys/class/gpio/unexport"
+# 已 export 的引脚设备名是 gpio<N>（5.15 内核下这些设备没有 label 属性，
+# 不能用 ATTR{label} 匹配，否则规则不生效，value/direction 仍是 root:root）
+SUBSYSTEM=="gpio", ACTION=="add", KERNEL=="gpio[0-9]*", RUN+="/bin/chgrp gpio /sys%p/value /sys%p/active_low /sys%p/direction /sys%p/edge", RUN+="/bin/chmod 660 /sys%p/value /sys%p/active_low /sys%p/direction /sys%p/edge"
