@@ -7,14 +7,14 @@
   /leadscrew/sim/pusher_{a,b,c,d}/cmd_pos (std_msgs/Float64, 10Hz,
     仅 simulate=true 且 publish_sim_joints=true：驱动 Gazebo 模型
     r680_4wd 的 4 个推杆棱柱关节；组1→pusher_a/pusher_c，
-    组2→pusher_b/pusher_d。q=0 螺母在外侧(pos=0)，q=-0.067 到内侧
+    组2→pusher_b/pusher_d。q=0 螺母在外侧(pos=0)，q=-0.062 到内侧
     (pos=travel_mm)，与 model.sdf 关节限位一致)
 参数：
   simulate          (bool,  True)           True=本地模拟状态机（不操作 GPIO）
   publish_sim_joints (bool, True)           仿真时同步发布 Gazebo 推杆关节指令
   status_period     (float, 2.0)            状态发布周期 s（保留参数，当前固定 0.5s）
   sim_speed_mm_s    (float, 2.0)            仿真模式下的螺母移动速度 mm/s
-  travel_mm         (float, 67.0)           单边行程 mm
+  travel_mm         (float, 62.0)           单边行程 mm
   leadscrew_pitch_mm (float, 2.0)           丝杆导程 mm/圈
   pulses_per_rev    (int,   1600)           电机转一圈所需脉冲（CL42 微步设置）
   ramp_seconds      (float, 1.0)            加减速斜坡时间 s
@@ -171,7 +171,7 @@ class LeadscrewDriverNode(Node):
         self.declare_parameter('publish_sim_joints', True)
         self.declare_parameter('status_period', 2.0)
         self.declare_parameter('sim_speed_mm_s', 2.0)
-        self.declare_parameter('travel_mm', 67.0)
+        self.declare_parameter('travel_mm', 62.0)
         self.declare_parameter('leadscrew_pitch_mm', 2.0)
         self.declare_parameter('pulses_per_rev', 1600)
         self.declare_parameter('ramp_seconds', 1.0)
