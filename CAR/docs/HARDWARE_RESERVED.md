@@ -68,10 +68,24 @@ Linux 上设备一般为 `/dev/ttyACM*`（节点默认 `/dev/ttyACM0`，参数 `
   同步发布 `/imu/data`（sensor_msgs/Imu，无姿态角，`orientation_covariance[0]=-1`）。
 - 实机联调前建议关闭电机使能开关（大车 SW1），通过 OLED 确认目标速度后再使能。
 
-### ESP8266 双向丝杆协议（已实现）
+### 双向丝杆对接锁定机构：树莓派 GPIO 直驱（现行，v8.2 起）
+
+**实机已放弃 ESP8266 下位机，改为树莓派 4B GPIO 直驱双 CL42**（部署版 v8.2）：
+
+- 接线（共阴极，PUL-/DIR-/EN- 接 GND）：电机 1 STEP=GPIO17 / DIR=GPIO27 / EN+=GPIO13；
+  电机 2 STEP=GPIO23 / DIR=GPIO24 / EN+=GPIO5；电机 2 与电机 1 镜像安装，方向取反
+  （`dir_invert_2=true`）。CL42 逻辑：EN 悬空或低电平=使能，高电平=释放（RELAX）。
+- 驱动节点 `leadscrew_driver`（GPIO/sysfs 版，参数见节点 docstring：
+  `pulses_per_rev` 1600、`leadscrew_pitch_mm` 2.0、`travel_mm` 62）；
+  real_bringup 用 `enable_leadscrew:=true` 启动（需 ubuntu 用户在 gpio 组 +
+  `config/99-car-devices.rules` 的 GPIO udev 规则——5.15 内核无 label 属性，
+  不能用 ATTR{label} 匹配，规则按 KERNEL=="gpio[0-9]*" 写）。
+- 位置开环计数，上电默认螺母在外侧（pos=0），不在时先手动归位。
+
+### ESP8266 双向丝杆协议（旧方案存档，已弃用）
 
 对接锁定机构：双 42 步进（12V）+ T8 双向丝杆（双出轴电机在丝杆中点，
-左端正牙右端反牙，导程 2mm，单边行程 67mm = 33.5 圈 = 53600 步 @8 细分）。
+左端正牙右端反牙，导程 2mm，单边行程 62mm = 31 圈 = 49600 步 @8 细分）。
 固件工程 `tools/leadscrew42`（本仓 `esp8266-deploy` 分支，PlatformIO +
 Arduino 框架，nodemcuv2）。
 

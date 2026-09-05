@@ -1,0 +1,43 @@
+# R680 阿克曼小车设备固定命名规则（树莓派 4B，Ubuntu 22.04）
+# 安装：sudo cp 99-car-devices.rules /etc/udev/rules.d/ && sudo udevadm control --reload && sudo udevadm trigger
+# 生效后启动参数可用：motor_port:=/dev/wheeltec lidar_port:=/dev/wheeltec_lidar gps_port:=/dev/wheeltec_gps
+# （也可以用 vendor/lslidar_ros2/wheeltec_udev.sh 厂商脚本建雷达规则，同名）
+#
+# 注意：VID:PID 需按实际设备核对（lsusb 查看）：
+# - WHEELTEC 控制板串口 3 用 CH9102/CH340 芯片（WCH 厂商 1a86）
+# - 镭神 N10P 的串口转接模块常见为 CH340（1a86:7523）或 CP2102（10c4:ea60）
+# - WHEELTEC G60 GPS 为 CH9102F（1a86:55d4），出厂串口序列号 0005
+# ⚠ 控制板与 GPS 同为 1a86:55d4：GPS 规则已用 serial==0005 区分，但下面的
+#   控制板规则无 serial 过滤，插入 GPS 时 /dev/wheeltec 也可能指向 GPS！
+#   务必用 `udevadm info -a -n /dev/ttyACM0 | grep serial` 查控制板实际序列号，
+#   给控制板规则补上 ATTRS{serial}=="<实际值>"。
+
+# WHEELTEC STM32 控制板（CH9102，WCH 1a86；本机实测序列号 0002）
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", ATTRS{serial}=="0002", SYMLINK+="wheeltec", MODE="0660", GROUP="dialout"
+
+# 镭神 N10P 串口转接模块（按实际模块芯片二选一，删掉另一行）：
+# CH340：
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="wheeltec_lidar", MODE="0660", GROUP="dialout"
+# CP2102：
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="wheeltec_lidar", MODE="0660", GROUP="dialout"
+# 本机实测：N10P 配的是 CH9102 转接（1a86:55d4，序列号 5B8E677903）
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", ATTRS{serial}=="5B8E677903", SYMLINK+="wheeltec_lidar", MODE="0660", GROUP="dialout"
+
+# WHEELTEC G60 GPS（CH9102F，1a86:55d4；本机实测序列号 5B0B031719，非出厂 0005）
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", ATTRS{serial}=="5B0B031719", SYMLINK+="wheeltec_gps", MODE="0660", GROUP="dialout"
+
+# K210 前视摄像头（CanMV 板载 CH9102，1a86:55d4；本机实测序列号 558B018651）
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", ATTRS{serial}=="558B018651", SYMLINK+="wheeltec_k210", MODE="0660", GROUP="dialout"
+
+# ============================================================================
+# 树莓派 GPIO sysfs 访问权限（CL42 步进电机、超声波等直连 GPIO 节点使用）
+# 应用后请确认 ubuntu 用户已在 gpio 组：
+#   sudo usermod -aG gpio ubuntu
+# 安装/重载：
+#   sudo cp config/99-car-devices.rules /etc/udev/rules.d/ && \
+#     sudo udevadm control --reload && sudo udevadm trigger
+# ============================================================================
+SUBSYSTEM=="gpio", ACTION=="add", KERNEL=="gpiochip*", RUN+="/bin/chgrp gpio /sys/class/gpio/export /sys/class/gpio/unexport", RUN+="/bin/chmod 220 /sys/class/gpio/export /sys/class/gpio/unexport"
+# 已 export 的引脚设备名是 gpio<N>（5.15 内核下这些设备没有 label 属性，
+# 不能用 ATTR{label} 匹配，否则规则不生效，value/direction 仍是 root:root）
+SUBSYSTEM=="gpio", ACTION=="add", KERNEL=="gpio[0-9]*", RUN+="/bin/chgrp gpio /sys%p/value /sys%p/active_low /sys%p/direction /sys%p/edge", RUN+="/bin/chmod 660 /sys%p/value /sys%p/active_low /sys%p/direction /sys%p/edge"

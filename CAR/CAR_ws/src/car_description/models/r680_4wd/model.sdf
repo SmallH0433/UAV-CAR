@@ -97,14 +97,14 @@
          180 mm；螺距 2 导程 2，双向牙）。
          螺母套 20(沿丝杆)x20x15 mm，丝杆穿过 20x15 面几何中心。
          行程约束：螺母中心距电机中心 113 mm(内，距电机端面 53 mm)~
-         180 mm(外，螺母端面与丝杆末端齐平，不超出丝杆)，
-         单边行程 67 mm —— 与固件 TRAVEL_MM=67 一致。
+         180 mm(外，螺母端面与丝杆末端齐平，不超出丝杆)，几何全长 67 mm；
+         节点行程限 62 mm（travel_mm=62，内侧留 5 mm 余量）。
          4 个 "[" 型推杆（10x10 方杆）与各自螺母套刚性一体：
            组1(电机A) pusher_a/pusher_c 横跨 A↔C，横臂距坪面 h1=30 mm；
            组2(电机B) pusher_b/pusher_d 横跨 B↔D，横臂距坪面 h2=55 mm；
            h1 != h2 保证十字交叉处不碰撞。垂腿落在坪边外侧 5 mm。
          棱柱关节语义：q=0 螺母在外侧（对应固件 pos=0 / AT_OUTER），
-         q=-0.067 到内侧（pos=67 mm / AT_INNER）；ROS 侧换算见
+         q=-0.062 到内侧（pos=62 mm / AT_INNER）；ROS 侧换算见
          car_nodes/leadscrew_driver.py 仿真模式。
          控制：JointPositionController x4（topic pusher_{a,b,c,d}/cmd_pos，
          Float64）+ JointStatePublisher（joint_states）。 -->
@@ -184,7 +184,7 @@
     </link>
     <joint name="pusher_a_joint" type="prismatic">
       <parent>landing_pad_link</parent><child>pusher_a_link</child>
-      <axis><xyz>0 -1 0</xyz><limit><lower>-0.067</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
+      <axis><xyz>0 -1 0</xyz><limit><lower>-0.062</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
     </joint>
 
     <link name="pusher_c_link">
@@ -204,7 +204,7 @@
     </link>
     <joint name="pusher_c_joint" type="prismatic">
       <parent>landing_pad_link</parent><child>pusher_c_link</child>
-      <axis><xyz>0 1 0</xyz><limit><lower>-0.067</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
+      <axis><xyz>0 1 0</xyz><limit><lower>-0.062</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
     </joint>
 
     <!-- 组2 推杆（横跨 B↔D，h2=55mm） -->
@@ -226,7 +226,7 @@
     </link>
     <joint name="pusher_b_joint" type="prismatic">
       <parent>landing_pad_link</parent><child>pusher_b_link</child>
-      <axis><xyz>1 0 0</xyz><limit><lower>-0.067</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
+      <axis><xyz>1 0 0</xyz><limit><lower>-0.062</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
     </joint>
 
     <link name="pusher_d_link">
@@ -246,7 +246,7 @@
     </link>
     <joint name="pusher_d_joint" type="prismatic">
       <parent>landing_pad_link</parent><child>pusher_d_link</child>
-      <axis><xyz>-1 0 0</xyz><limit><lower>-0.067</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
+      <axis><xyz>-1 0 0</xyz><limit><lower>-0.062</lower><upper>0.0</upper><effort>10.0</effort><velocity>0.05</velocity></limit></axis>
     </joint>
 
     <!-- 推杆关节位置控制（每关节一个实例；q=0 外侧，-0.057 内侧） -->

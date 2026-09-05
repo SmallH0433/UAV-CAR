@@ -1,0 +1,19 @@
+# R680 小车实机链路开机自启服务
+# 安装：sudo cp car-bringup.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable car-bringup
+# 日志：journalctl -u car-bringup -f
+[Unit]
+Description=R680 car real bringup (ROS 2)
+After=network.target
+
+[Service]
+Type=simple
+User=yahboom
+Group=yahboom
+Environment=HOME=/home/yahboom
+WorkingDirectory=/home/yahboom/CAR_ws
+ExecStart=/bin/bash /home/yahboom/CAR_ws/scripts/start_car.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
