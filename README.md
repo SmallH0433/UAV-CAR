@@ -105,19 +105,30 @@ GPS，但控制板规则需补实际 serial 过滤（见 `config/99-car-devices.
 （默认监听 0.0.0.0；WASD 组合按键弧线遥控，遥控优先于避障；前视画面，
 接了后摄时前后双画面；巡航开启后可用 A/D 手动微调方向，即转向辅助）。
 
-## Nav2 自主导航（已屏蔽）
+## Nav2 自主导航（已恢复）
 
 Nav2 地图自主导航（AMCL 定位 + NavFn 规划 + RPP 跟踪 + costmap 实时避障）
-**因性能不足已屏蔽**：Pi 4B 同时运行 GNOME 桌面/远程桌面/VS Code 时，
-雷达 460800 波特串口大量丢包（/scan 掉到 3Hz），AMCL 无法收敛，导航不可用。
-`real_bringup.launch.py` 已移除 `nav_mode` 参数，不再启动 Nav2 栈。
+**已恢复接入**。早期因 Pi 4B 同时运行 GNOME 桌面/远程桌面/VS Code 时
+雷达 460800 波特串口大量丢包（/scan 掉到 3Hz）、AMCL 无法收敛而屏蔽；
+更换轻量桌面（XFCE）并纯 SSH 运行后，实测真雷达 + 全栈 + Nav2 工况下
+/scan 保持满帧 10Hz、内存余量 2GB+，性能瓶颈已消除。
 
-相关实现保留备用：`car_sim/config/nav2_params.yaml`、
+用法（需先网页「一键建图」生成地图）：
+
+```bash
+# 树莓派上需已安装 nav2（sudo apt install ros-humble-nav2-bringup \
+#   ros-humble-nav2-regulated-pure-pursuit-controller）
+ros2 launch car_sim real_bringup.launch.py \
+  nav_mode:=nav2 map:=~/maps/<地图名>.yaml
+```
+
+nav2 模式下 avoidance_node 不启动（Nav2 经 velocity_smoother 独占
+/cmd_vel），自主巡航不可用；网页导航目标自动走 NavigateToPose action
+（web_gateway `nav_backend` 随 nav_mode 联动）。默认 `nav_mode:=avoidance`
+不变，自研避障/巡航行为与之前完全一致。
+
+相关文件：`car_sim/config/nav2_params.yaml`、
 `car_sim/launch/nav2_stack.launch.py`、web_gateway 的 `nav_backend` 后端。
-如需恢复：关掉 Pi 的桌面环境（纯 SSH 运行）释放算力后，在 real_bringup
-重新 include nav2_stack.launch.py 并恢复 nav_mode/map 参数即可（改动见
-git 历史或该 launch 文件头部注释）。自主巡航/避障不受影响，仍由
-avoidance_node 承担。
 
 ## 实机联调顺序（重要）
 

@@ -31,18 +31,21 @@ N10P 电机上电即转，无需开工令；如需停转/恢复：
 GPS（WHEELTEC G60）：默认随车启动（gps_port:=/dev/wheeltec_gps），
 不需要时 gps_port:='' 关闭；定位输出 `ros2 topic echo /fix` 查看。
 
-注意：Nav2 地图自主导航（AMCL + Nav2）因 Pi 4B 同时跑桌面环境性能不足
-（雷达 460800 波特串口丢包、AMCL 无法收敛）已屏蔽——launch 不再提供
-nav_mode 参数，相关文件（config/nav2_params.yaml、launch/nav2_stack.launch.py）
-保留备用。自主巡航/避障仍由 avoidance_node 承担（原有功能不受影响）。
+Nav2 地图自主导航（AMCL + Nav2）：nav_mode:=nav2 map:=<地图yaml完整路径> 启动
+（需先用网页「一键建图」生成地图）。该模式下 avoidance_node 不启动，
+Nav2 经 velocity_smoother 独占 /cmd_vel，自主巡航不可用。
+早期曾因桌面环境抢占算力（雷达串口丢包、AMCL 不收敛）屏蔽；更换轻量
+桌面（XFCE）+ 纯 SSH 运行后实测 /scan 满帧 10Hz，已恢复接入。
+自主避障仍由 avoidance_node 承担（nav_mode:=avoidance 默认模式）。
 """
 
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition, UnlessCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
@@ -70,6 +73,8 @@ def generate_launch_description():
     lidar_tf_x = LaunchConfiguration('lidar_tf_x')
     lidar_tf_y = LaunchConfiguration('lidar_tf_y')
     lidar_tf_z = LaunchConfiguration('lidar_tf_z')
+    nav_mode = LaunchConfiguration('nav_mode')
+    nav_map = LaunchConfiguration('map')
 
     n10p_params = os.path.join(
         get_package_share_directory('car_nodes'), 'config', 'lslidar_n10p_uart.yaml')
@@ -82,6 +87,10 @@ def generate_launch_description():
     has_gps = IfCondition(PythonExpression(["'", gps_port, "' != ''"]))
     v4l2_front = IfCondition(
         PythonExpression(["'", front_camera, "' == 'v4l2'"]))
+    # nav2 模式：Nav2 栈接管自主导航；avoidance 模式（默认）：自研避障节点
+    nav2_mode = IfCondition(PythonExpression(["'", nav_mode, "' == 'nav2'"]))
+    avoidance_mode = UnlessCondition(
+        PythonExpression(["'", nav_mode, "' == 'nav2'"]))
     k210_front = IfCondition(
         PythonExpression(["'", front_camera, "' == 'k210'"]))
 
@@ -172,6 +181,9 @@ def generate_launch_description():
             'vehicle_half_width': 0.235,
             'footprint_padding': 0.04,
         }],
+        # nav2 模式下不启动：Nav2 的 velocity_smoother 独占 /cmd_vel，
+        # 避免 avoidance 的待命零速与 Nav2 指令混在同一话题上
+        condition=avoidance_mode,
     )
     # teleop 优先：operator heartbeat 新鲜时 /ugv/teleop/cmd_vel 覆盖 /cmd_vel；
     # 无 heartbeat 时放行 avoidance 的 /cmd_vel（navigation_topic 默认值）。
@@ -226,7 +238,8 @@ def generate_launch_description():
         executable='web_gateway',
         name='web_gateway',
         output='screen',
-        parameters=[{'bind_address': web_bind}],
+        parameters=[{'bind_address': web_bind},
+                    {'nav_backend': nav_mode}],
     )
     # WHEELTEC G60 GPS（gps_port 非空时启动；上电即输出，无需启动命令）
     gps = Node(
@@ -247,8 +260,15 @@ def generate_launch_description():
         arguments=[lidar_tf_x, lidar_tf_y, lidar_tf_z,
                    '0', '0', '0', 'base_footprint', 'laser_frame'],
     )
-    # Nav2 地图自主导航已屏蔽（Pi 4B 桌面环境性能不足）：不再 include
-    # nav2_stack.launch.py；文件保留备用，恢复时重新接入并传 nav_mode 参数。
+    # Nav2 地图自主导航（nav_mode:=nav2 时启动）：AMCL 定位 + NavFn 规划 +
+    # RPP 跟踪 + costmap 实时避障，输出经 velocity_smoother → /cmd_vel
+    nav2_stack = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(
+            get_package_share_directory('car_sim'), 'launch',
+            'nav2_stack.launch.py')),
+        launch_arguments={'map': nav_map}.items(),
+        condition=nav2_mode,
+    )
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -317,6 +337,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'lidar_tf_z', default_value='0.15',
             description='雷达相对 base_footprint 的 Z 偏移 m'),
+        DeclareLaunchArgument(
+            'nav_mode', default_value='avoidance',
+            description="自主导航后端：avoidance=自研避障节点（默认）；nav2=AMCL+Nav2 地图导航"),
+        DeclareLaunchArgument(
+            'map', default_value='',
+            description='nav_mode:=nav2 时加载的地图 yaml 完整路径'),
         lidar_vendor,
         lidar_sim,
         camera,
@@ -332,4 +358,5 @@ def generate_launch_description():
         web_gateway,
         gps,
         lidar_static_tf,
+        nav2_stack,
     ])
