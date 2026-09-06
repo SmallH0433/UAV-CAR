@@ -7,9 +7,11 @@ mode acknowledgement carried by the next vehicle heartbeat.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import asdict, dataclass
 from enum import Enum
 import math
+import statistics
 from typing import Iterable, Optional
 
 
@@ -140,6 +142,474 @@ class HorizontalVelocityLimiter:
         return self._velocity
 
 
+class FollowContinuityState(str, Enum):
+    """State of one operator-authorized GUIDED follow session."""
+
+    IDLE = "IDLE"
+    WAITING_CANDIDATE = "WAITING_CANDIDATE"
+    ACTIVE = "ACTIVE"
+    GRACE_ZERO_HOLD = "GRACE_ZERO_HOLD"
+    REACQUIRE_WAIT = "REACQUIRE_WAIT"
+    REACQUIRING = "REACQUIRING"
+
+
+@dataclass(frozen=True)
+class FollowContinuityConfig:
+    dropout_grace_s: float = 1.0
+    reacquire_dwell_s: float = 0.0
+
+    def validate(self) -> None:
+        if self.dropout_grace_s <= 0.0 or self.reacquire_dwell_s < 0.0:
+            raise ValueError(
+                "follow dropout grace must be positive and reacquire dwell non-negative"
+            )
+
+
+@dataclass(frozen=True)
+class FollowContinuityResult:
+    state: FollowContinuityState
+    keep_guided: bool
+    live_candidate_allowed: bool
+    zero_velocity_hold: bool
+    reacquire_pending: bool
+    dropout_age_s: Optional[float]
+    reacquire_stable_age_s: Optional[float]
+    reason: str
+
+    @property
+    def session_available(self) -> bool:
+        return self.keep_guided
+
+
+class FollowContinuityGuard:
+    """Prevent brief vision stalls from creating a GUIDED/LOITER oscillator.
+
+    A fresh candidate starts or refreshes a session.  A short candidate loss
+    keeps GUIDED authorized, but only with a zero-velocity hold setpoint.  A
+    longer loss first rolls back, then allows a new GUIDED request only after
+    the RC authorization remains high and the candidate stream is continuously
+    healthy for the configured reacquisition dwell.
+
+    Missing/stale RC data and a MAVROS disconnect fail closed.  An explicit RC
+    low value always cancels the session immediately.
+    """
+
+    def __init__(self, config: FollowContinuityConfig) -> None:
+        config.validate()
+        self.config = config
+        self._session_started = False
+        self._last_fresh_s: Optional[float] = None
+        self._reacquire_required = False
+        self._reacquire_fresh_since_s: Optional[float] = None
+        self._latched_reason = "NONE"
+
+    @property
+    def reacquire_pending(self) -> bool:
+        return self._reacquire_required
+
+    def reset_from_explicit_rc_low(self) -> None:
+        self._session_started = False
+        self._last_fresh_s = None
+        self._reacquire_required = False
+        self._reacquire_fresh_since_s = None
+        self._latched_reason = "NONE"
+
+    def require_reacquire(
+        self,
+        *,
+        now_s: float,
+        reason: str,
+    ) -> FollowContinuityResult:
+        dropout_age_s = self._dropout_age(now_s)
+        self._session_started = False
+        self._reacquire_required = True
+        self._reacquire_fresh_since_s = None
+        self._latched_reason = str(reason).strip().upper() or "REACQUIRE_WAIT"
+        return self._result(
+            FollowContinuityState.REACQUIRE_WAIT,
+            reason=self._latched_reason,
+            dropout_age_s=dropout_age_s,
+        )
+
+    def update(
+        self,
+        *,
+        now_s: float,
+        connected: bool,
+        rc_authorized: bool,
+        rc_explicit_low: bool,
+        fresh_control_signal: bool,
+    ) -> FollowContinuityResult:
+        now_s = float(now_s)
+
+        if rc_explicit_low:
+            self.reset_from_explicit_rc_low()
+            return self._result(
+                FollowContinuityState.IDLE,
+                reason="RC_LOW_SESSION_RESET",
+            )
+
+        if not connected:
+            return self.require_reacquire(now_s=now_s, reason="MAVROS_DISCONNECTED")
+
+        if not rc_authorized:
+            if self._session_started or self._reacquire_required:
+                return self.require_reacquire(now_s=now_s, reason="RC_NOT_AUTHORIZED")
+            return self._result(
+                FollowContinuityState.IDLE,
+                reason="RC_NOT_AUTHORIZED",
+            )
+
+        if self._reacquire_required:
+            if not fresh_control_signal:
+                self._reacquire_fresh_since_s = None
+                return self._result(
+                    FollowContinuityState.REACQUIRE_WAIT,
+                    reason=self._latched_reason,
+                    dropout_age_s=self._dropout_age(now_s),
+                )
+            if self._reacquire_fresh_since_s is None:
+                self._reacquire_fresh_since_s = now_s
+            stable_age_s = max(0.0, now_s - self._reacquire_fresh_since_s)
+            if stable_age_s < self.config.reacquire_dwell_s:
+                return self._result(
+                    FollowContinuityState.REACQUIRING,
+                    reason="HIGH_RC_WAITING_FOR_STABLE_CANDIDATE",
+                    dropout_age_s=self._dropout_age(now_s),
+                    reacquire_stable_age_s=stable_age_s,
+                )
+            self._reacquire_required = False
+            self._reacquire_fresh_since_s = None
+            self._session_started = True
+            self._last_fresh_s = now_s
+            return self._result(
+                FollowContinuityState.ACTIVE,
+                keep_guided=True,
+                live_candidate_allowed=True,
+                reason="HIGH_RC_STABLE_CANDIDATE_REACQUIRED",
+                dropout_age_s=0.0,
+                reacquire_stable_age_s=stable_age_s,
+            )
+
+        if fresh_control_signal:
+            self._session_started = True
+            self._last_fresh_s = now_s
+            return self._result(
+                FollowContinuityState.ACTIVE,
+                keep_guided=True,
+                live_candidate_allowed=True,
+                reason="FRESH_CONTROL_SIGNAL",
+                dropout_age_s=0.0,
+            )
+
+        if not self._session_started or self._last_fresh_s is None:
+            return self._result(
+                FollowContinuityState.WAITING_CANDIDATE,
+                reason="WAITING_FOR_FIRST_CANDIDATE",
+            )
+
+        dropout_age_s = self._dropout_age(now_s)
+        if dropout_age_s is not None and dropout_age_s <= self.config.dropout_grace_s:
+            return self._result(
+                FollowContinuityState.GRACE_ZERO_HOLD,
+                keep_guided=True,
+                zero_velocity_hold=True,
+                reason="SHORT_DROPOUT_ZERO_VELOCITY_HOLD",
+                dropout_age_s=dropout_age_s,
+            )
+
+        return self.require_reacquire(
+            now_s=now_s,
+            reason="DROPOUT_TIMEOUT_AUTO_REACQUIRE_WAIT",
+        )
+
+    def _dropout_age(self, now_s: float) -> Optional[float]:
+        if self._last_fresh_s is None:
+            return None
+        return max(0.0, float(now_s) - self._last_fresh_s)
+
+    @staticmethod
+    def _result(
+        state: FollowContinuityState,
+        *,
+        keep_guided: bool = False,
+        live_candidate_allowed: bool = False,
+        zero_velocity_hold: bool = False,
+        reason: str,
+        dropout_age_s: Optional[float] = None,
+        reacquire_stable_age_s: Optional[float] = None,
+    ) -> FollowContinuityResult:
+        return FollowContinuityResult(
+            state=state,
+            keep_guided=keep_guided,
+            live_candidate_allowed=live_candidate_allowed,
+            zero_velocity_hold=zero_velocity_hold,
+            reacquire_pending=state in {
+                FollowContinuityState.REACQUIRE_WAIT,
+                FollowContinuityState.REACQUIRING,
+            },
+            dropout_age_s=dropout_age_s,
+            reacquire_stable_age_s=reacquire_stable_age_s,
+            reason=reason,
+        )
+
+
+@dataclass(frozen=True)
+class SlidingDistanceConfig:
+    window_s: float = 0.50
+    maximum_age_s: float = 0.30
+    minimum_m: float = 0.02
+    maximum_m: float = 8.0
+
+    def validate(self) -> None:
+        if self.window_s <= 0.0 or self.maximum_age_s <= 0.0:
+            raise ValueError("distance window and maximum age must be positive")
+        if not 0.0 <= self.minimum_m < self.maximum_m:
+            raise ValueError("distance limits are invalid")
+
+
+@dataclass(frozen=True)
+class SlidingDistanceResult:
+    healthy: bool
+    median_m: Optional[float]
+    age_s: Optional[float]
+    sample_count: int
+
+
+class SlidingDistanceMedian:
+    """Maintain a fresh, health-gated median for a noisy range stream."""
+
+    def __init__(self, config: SlidingDistanceConfig) -> None:
+        config.validate()
+        self.config = config
+        self._samples: deque[tuple[float, float]] = deque()
+        self._last_update_s: Optional[float] = None
+        self._latest_sample_healthy = False
+
+    def reset(self) -> None:
+        self._samples.clear()
+        self._last_update_s = None
+        self._latest_sample_healthy = False
+
+    def update(
+        self,
+        *,
+        now_s: float,
+        distance_m: float,
+        sensor_healthy: bool,
+    ) -> SlidingDistanceResult:
+        now_s = float(now_s)
+        distance_m = float(distance_m)
+        self._last_update_s = now_s
+        self._latest_sample_healthy = bool(
+            sensor_healthy
+            and math.isfinite(distance_m)
+            and self.config.minimum_m <= distance_m <= self.config.maximum_m
+        )
+        if self._latest_sample_healthy:
+            self._samples.append((now_s, distance_m))
+        self._prune(now_s)
+        return self.status(now_s)
+
+    def status(self, now_s: float) -> SlidingDistanceResult:
+        now_s = float(now_s)
+        self._prune(now_s)
+        age_s = (
+            None
+            if self._last_update_s is None
+            else max(0.0, now_s - self._last_update_s)
+        )
+        healthy = bool(
+            self._latest_sample_healthy
+            and age_s is not None
+            and age_s <= self.config.maximum_age_s
+            and self._samples
+        )
+        median_m = (
+            statistics.median(value for _, value in self._samples)
+            if healthy
+            else None
+        )
+        return SlidingDistanceResult(healthy, median_m, age_s, len(self._samples))
+
+    def _prune(self, now_s: float) -> None:
+        first_allowed_s = float(now_s) - self.config.window_s
+        while self._samples and self._samples[0][0] < first_allowed_s:
+            self._samples.popleft()
+
+
+class TerminalLandState(str, Enum):
+    IDLE = "IDLE"
+    VERIFYING = "VERIFYING"
+    LATCHED = "LATCHED"
+
+
+@dataclass(frozen=True)
+class TerminalLandConfig:
+    rangefinder_threshold_m: float = 0.15
+    inner_tag_threshold_m: float = 0.15
+    evidence_maximum_age_s: float = 0.50
+    dwell_s: float = 0.40
+
+    def validate(self) -> None:
+        if self.rangefinder_threshold_m <= 0.0:
+            raise ValueError("terminal LAND rangefinder threshold must be positive")
+        if self.inner_tag_threshold_m <= 0.0:
+            raise ValueError("terminal LAND inner-tag threshold must be positive")
+        if self.evidence_maximum_age_s <= 0.0 or self.dwell_s <= 0.0:
+            raise ValueError("terminal LAND evidence age and dwell must be positive")
+
+
+@dataclass(frozen=True)
+class TerminalLandResult:
+    state: TerminalLandState
+    latched: bool
+    reason: str
+    candidate_source: Optional[str]
+    candidate_age_s: Optional[float]
+    rangefinder_qualifies: bool
+    inner_tag_qualifies: bool
+
+
+class TerminalLandLatch:
+    """Keep an owned LAND session after stable, close-range confirmation.
+
+    Entry is deliberately stricter than continuation: the vehicle must already
+    be armed in heartbeat-confirmed LAND with fresh RC6 authorization and a
+    fresh, high SwD request.  Once latched, vision/landing-target loss and SwD
+    changes cannot return the vehicle to GUIDED or LOITER.  Disarm, an explicit
+    RC6 low, a link loss, or a pilot-selected non-LAND mode clears the latch.
+    """
+
+    def __init__(self, config: TerminalLandConfig) -> None:
+        config.validate()
+        self.config = config
+        self.state = TerminalLandState.IDLE
+        self._candidate_since_s: Optional[float] = None
+        self._candidate_source: Optional[str] = None
+        self._last_reason = "NOT_LATCHED"
+
+    def reset(self, reason: str = "RESET") -> TerminalLandResult:
+        self.state = TerminalLandState.IDLE
+        self._candidate_since_s = None
+        self._candidate_source = None
+        self._last_reason = str(reason).strip().upper() or "RESET"
+        return self._result(False, False, None)
+
+    def update(
+        self,
+        *,
+        now_s: float,
+        connected: bool,
+        armed: bool,
+        current_mode: str,
+        land_mode_confirmed: bool,
+        rc_authorized: bool,
+        rc_explicit_low: bool,
+        swd_high_and_fresh: bool,
+        rangefinder_healthy: bool,
+        rangefinder_median_m: Optional[float],
+        inner_tag_vertical_m: Optional[float],
+        inner_tag_age_s: Optional[float],
+    ) -> TerminalLandResult:
+        now_s = float(now_s)
+        mode = str(current_mode).strip().upper()
+
+        if self.state == TerminalLandState.LATCHED:
+            if not connected:
+                return self.reset("MAVROS_DISCONNECTED")
+            if not armed:
+                return self.reset("DISARMED_LATCH_COMPLETE")
+            if rc_explicit_low:
+                return self.reset("RC6_EXPLICIT_LOW_OVERRIDE")
+            if mode != "LAND":
+                return self.reset("PILOT_MODE_OVERRIDE")
+            self._last_reason = "TERMINAL_LAND_LATCHED"
+            return self._result(True, False, None)
+
+        entry_ready = bool(
+            connected
+            and armed
+            and mode == "LAND"
+            and land_mode_confirmed
+            and rc_authorized
+            and swd_high_and_fresh
+        )
+        if not entry_ready:
+            reason = "WAIT_TERMINAL_LAND_ENTRY_CONDITIONS"
+            if rc_explicit_low:
+                reason = "RC6_EXPLICIT_LOW_OVERRIDE"
+            return self.reset(reason)
+
+        rangefinder_qualifies = bool(
+            rangefinder_healthy
+            and rangefinder_median_m is not None
+            and math.isfinite(float(rangefinder_median_m))
+            and float(rangefinder_median_m) <= self.config.rangefinder_threshold_m
+        )
+        inner_tag_qualifies = bool(
+            inner_tag_vertical_m is not None
+            and inner_tag_age_s is not None
+            and 0.0 <= float(inner_tag_age_s) <= self.config.evidence_maximum_age_s
+            and math.isfinite(float(inner_tag_vertical_m))
+            and 0.0 < float(inner_tag_vertical_m) <= self.config.inner_tag_threshold_m
+        )
+        source = (
+            "RANGEFINDER+INNER_TAG"
+            if rangefinder_qualifies and inner_tag_qualifies
+            else "RANGEFINDER"
+            if rangefinder_qualifies
+            else "INNER_TAG"
+            if inner_tag_qualifies
+            else None
+        )
+        if source is None:
+            self.state = TerminalLandState.IDLE
+            self._candidate_since_s = None
+            self._candidate_source = None
+            self._last_reason = "WAIT_CLOSE_RANGE_EVIDENCE"
+            return self._result(False, False, None)
+
+        if self._candidate_since_s is None:
+            self._candidate_since_s = now_s
+            self._candidate_source = source
+        else:
+            self._candidate_source = source
+        candidate_age_s = max(0.0, now_s - self._candidate_since_s)
+        if candidate_age_s < self.config.dwell_s:
+            self.state = TerminalLandState.VERIFYING
+            self._last_reason = "VERIFYING_CLOSE_RANGE_DWELL"
+            return self._result(
+                rangefinder_qualifies,
+                inner_tag_qualifies,
+                candidate_age_s,
+            )
+
+        self.state = TerminalLandState.LATCHED
+        self._last_reason = "TERMINAL_LAND_LATCHED"
+        return self._result(
+            rangefinder_qualifies,
+            inner_tag_qualifies,
+            candidate_age_s,
+        )
+
+    def _result(
+        self,
+        rangefinder_qualifies: bool,
+        inner_tag_qualifies: bool,
+        candidate_age_s: Optional[float],
+    ) -> TerminalLandResult:
+        return TerminalLandResult(
+            state=self.state,
+            latched=self.state == TerminalLandState.LATCHED,
+            reason=self._last_reason,
+            candidate_source=self._candidate_source,
+            candidate_age_s=candidate_age_s,
+            rangefinder_qualifies=rangefinder_qualifies,
+            inner_tag_qualifies=inner_tag_qualifies,
+        )
+
+
 class LandingSwitchState(str, Enum):
     MISSING = "MISSING"
     STALE = "STALE"
@@ -179,21 +649,19 @@ class LandingSwitchResult:
 class RcLandingRequestGate:
     """Convert a two-position SwD channel into a fail-closed descent request.
 
-    A high switch is accepted only after follow has become active and the
-    operator has first presented a valid low value.  This prevents a switch
-    left high across startup or follow re-entry from causing an immediate
-    descent.  Returning the switch low cancels the request without revoking
-    the independent RC6 follow authorization.
+    A fresh high switch requests descent whenever follow is active.  It does
+    not require a preceding low-to-high edge, so a switch held high continues
+    to request LAND after an automatic GUIDED re-entry.  Returning the switch
+    low cancels the request without revoking the independent RC6 follow
+    authorization.
     """
 
     def __init__(self, config: LandingSwitchConfig) -> None:
         config.validate()
         self.config = config
-        self._armed_for_rising_edge = False
         self._requested = False
 
     def reset(self) -> None:
-        self._armed_for_rising_edge = False
         self._requested = False
 
     @property
@@ -229,17 +697,12 @@ class RcLandingRequestGate:
                 age_s,
             )
         if pwm <= self.config.off_below_pwm:
-            self._armed_for_rising_edge = True
             self._requested = False
             return LandingSwitchResult(LandingSwitchState.READY, pwm, age_s)
         if pwm >= self.config.on_above_pwm:
-            if self._requested:
-                return LandingSwitchResult(LandingSwitchState.REQUESTED, pwm, age_s)
-            if self._armed_for_rising_edge:
-                self._requested = True
-                return LandingSwitchResult(LandingSwitchState.REQUESTED, pwm, age_s)
+            self._requested = True
+            return LandingSwitchResult(LandingSwitchState.REQUESTED, pwm, age_s)
         self._requested = False
-        self._armed_for_rising_edge = False
         return LandingSwitchResult(LandingSwitchState.NEEDS_REARM, pwm, age_s)
 
 

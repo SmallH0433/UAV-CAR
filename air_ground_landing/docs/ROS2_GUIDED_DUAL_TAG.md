@@ -15,7 +15,7 @@
 执行顺序如下：
 
 1. CH6 高位且 Elastic/IBVS 候选有效，执行器请求 GUIDED；只有 `/mavros/state` HEARTBEAT 确认 GUIDED 后，才视为跟飞已建立。
-2. 每次跟飞建立后，SwD 必须先处于低位，再发生低到高的边沿；若启动跟飞时 SwD 已经在高位，状态为 `NEEDS_REARM`，不会意外下降。
+2. 跟飞建立后，只要新鲜的 SwD 信号保持高位就持续请求下降；不再要求先回低位再产生低到高边沿，因此自动重入 GUIDED 后会立即恢复 LAND 请求。
 3. SwD 高位发布 `/landing/descent_request=true`。监督器仍需确认目标、速度匹配和对准条件，随后协调器把唯一控制权切到 `AC_PRECLAND_LAND`，模式管理器才请求 LAND。
 4. SwD 回到低位立即发布 false，监督器退回 `MATCH_VELOCITY`，协调器恢复 IBVS/Elastic 跟飞，模式管理器请求 LAND→GUIDED；原进入模式仍作为最终回滚点。
 5. CH6 关闭、RC 数据陈旧、控制权超时或人工切换模式会撤销自动控制并走既有回滚/人工接管路径。

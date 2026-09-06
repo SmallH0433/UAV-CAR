@@ -30,6 +30,17 @@ CH6 follow + CH8/SwD descent --------------------+        +-> /landing/descent_r
 
 实机已按 `/mavros/rc/in` 验证 CH6、CH7、CH8 原始输入。物理拨杆映射仍应在拆桨状态核对低/中/高 PWM，确认通道未被云台或继电器占用。
 
+## 近地终端 LAND 锁存
+
+硬件配置启用 `terminal_land_latch_enabled`。只有飞控 HEARTBEAT 已确认进入 `LAND`、飞控仍解锁、CH6 授权有效且 SwD 高位新鲜时，执行器才检查近地证据：
+
+- `/mavros/distance_sensor/rangefinder_pub` 的健康 `sensor_msgs/msg/Range` 使用 0.5 s 滑动中值，距离不大于 0.15 m；或
+- landing-target 状态确认当前为小 Tag（ID 1），校正后垂直距离不大于 0.15 m，且证据年龄不大于 0.5 s。
+
+任一来源连续满足 0.4 s 后进入 `TERMINAL_LAND_LATCHED`。锁存后 landing-target 丢失及 SwD 变化不再触发 `LAND -> LOITER/GUIDED`；飞控上锁、MAVROS 断链、CH6 明确低位或飞手切到非 LAND 模式会清除锁存。状态、证据来源、持续时间、测距中值和小 Tag 距离均发布在 `/landing/guided_executor/status`。
+
+如果 MAVROS 实际测距话题名不同，必须在 `adapters.hardware.yaml` 中修改 `terminal_land_rangefinder_topic`；小 Tag 分支不依赖该话题。实机启用前应先在拆桨状态确认话题存在、单位为米、近地值连续且 `min_range/max_range` 合理。
+
 ## 构建
 
 ```bash

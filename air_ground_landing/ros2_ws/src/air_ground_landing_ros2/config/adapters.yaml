@@ -34,7 +34,7 @@ simple_landing_coordinator:
     mavros_state_topic: /mavros/state
     control_owner_topic: /landing/control_owner
     status_topic: /landing/simple_coordinator/status
-    ibvs_timeout_s: 0.25
+    ibvs_timeout_s: 0.40
     landing_target_timeout_s: 0.35
     require_landing_target_output: false
     output_rate_hz: 20.0
@@ -55,9 +55,11 @@ guided_executor:
     landing_switch_on_above_pwm: 1800
     landing_switch_maximum_age_s: 0.5
     landing_request_topic: /landing/descent_request
-    candidate_timeout_s: 0.4
+    candidate_timeout_s: 1.0
     owner_timeout_s: 0.5
     target_echo_timeout_s: 0.5
+    follow_dropout_grace_s: 1.0
+    follow_reacquire_dwell_s: 0.0
     follow_active_tone_repeat_s: 3.0
     landing_active_tone_repeat_s: 2.0
     target_mode: GUIDED

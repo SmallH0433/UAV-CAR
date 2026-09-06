@@ -153,11 +153,11 @@ class LandingTargetBridgeTests(unittest.TestCase):
         self.assertEqual(stale.reason, "STALE_FRAME")
         self.assertTrue(bridge.target_lost(10.6))
 
-    def test_per_tag_quality_gates_allow_two_bit_nested_tags(self):
+    def test_per_tag_quality_gates_allow_three_bit_nested_tags(self):
         config = BridgeConfig.from_mapping(load_config())
 
         accepted_outer = LandingTargetBridge(config).process_status(
-            vision_status(hamming=2, margin=55.0, reprojection=0.8),
+            vision_status(hamming=3, margin=20.0, reprojection=10.0),
             received_time_s=10.0,
             wall_time_usec=10_000_000,
         )
@@ -165,21 +165,21 @@ class LandingTargetBridgeTests(unittest.TestCase):
         self.assertEqual(accepted_outer.observation.tag_id, 0)
 
         outer_hamming_high = LandingTargetBridge(config).process_status(
-            vision_status(hamming=3, margin=55.0, reprojection=0.8),
+            vision_status(hamming=4, margin=55.0, reprojection=0.8),
             received_time_s=10.0,
             wall_time_usec=10_000_000,
         )
         self.assertEqual(outer_hamming_high.reason, "HAMMING_LIMIT")
 
         outer_margin_low = LandingTargetBridge(config).process_status(
-            vision_status(hamming=2, margin=49.0, reprojection=0.8),
+            vision_status(hamming=2, margin=19.9, reprojection=0.8),
             received_time_s=10.0,
             wall_time_usec=10_000_000,
         )
         self.assertEqual(outer_margin_low.reason, "LOW_DECISION_MARGIN")
 
         outer_reprojection_high = LandingTargetBridge(config).process_status(
-            vision_status(hamming=2, margin=55.0, reprojection=1.1),
+            vision_status(hamming=2, margin=55.0, reprojection=10.1),
             received_time_s=10.0,
             wall_time_usec=10_000_000,
         )
@@ -191,9 +191,9 @@ class LandingTargetBridgeTests(unittest.TestCase):
         accepted_inner = LandingTargetBridge(config).process_status(
             vision_status(
                 tag_id=1,
-                hamming=2,
-                margin=40.0,
-                reprojection=1.0,
+                hamming=3,
+                margin=20.0,
+                reprojection=10.0,
             ),
             received_time_s=10.0,
             wall_time_usec=10_000_000,
@@ -204,7 +204,7 @@ class LandingTargetBridgeTests(unittest.TestCase):
         inner_hamming_high = LandingTargetBridge(config).process_status(
             vision_status(
                 tag_id=1,
-                hamming=3,
+                hamming=4,
                 margin=40.0,
                 reprojection=1.0,
             ),

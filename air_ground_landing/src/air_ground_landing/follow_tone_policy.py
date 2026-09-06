@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 
 
@@ -26,6 +27,55 @@ TUNES = {
     FollowToneEvent.LANDING_ACTIVE: LANDING_ACTIVE_TUNE,
     FollowToneEvent.EXIT_CONFIRMED: EXIT_CONFIRMED_TUNE,
 }
+
+
+@dataclass(frozen=True)
+class FollowToneInputs:
+    """Flight-state-gated inputs consumed by the tone arbiter."""
+
+    observe_ready: bool
+    follow_active: bool
+    landing_active: bool
+    exit_confirmed: bool
+
+
+def gate_follow_tones(
+    *,
+    connected: bool,
+    armed: bool,
+    current_mode: str,
+    guided_mode: str,
+    land_mode: str,
+    tag_detected: bool,
+    control_active: bool,
+    target_echo_fresh: bool,
+    landing_requested_active: bool,
+    suppress_tag_after_land: bool,
+) -> FollowToneInputs:
+    """Apply flight-mode and arming gates before audible arbitration."""
+
+    mode = (current_mode or "UNKNOWN").upper()
+    guided = guided_mode.upper()
+    land = land_mode.upper()
+    active_vehicle = bool(connected and armed)
+    return FollowToneInputs(
+        observe_ready=bool(
+            active_vehicle
+            and tag_detected
+            and mode not in {guided, land}
+            and not suppress_tag_after_land
+        ),
+        follow_active=bool(
+            active_vehicle
+            and control_active
+            and target_echo_fresh
+            and mode == guided
+        ),
+        landing_active=bool(
+            active_vehicle and landing_requested_active and mode == land
+        ),
+        exit_confirmed=bool(not armed or mode not in {guided, land}),
+    )
 
 
 class FollowTonePolicy:
@@ -56,21 +106,9 @@ class FollowTonePolicy:
         exit_confirmed: bool,
         now_s: float,
     ) -> tuple[FollowToneEvent, ...]:
-        events: list[FollowToneEvent] = []
-        # OBSERVE_READY is driven by a fresh accepted AprilTag observation.
-        # It is deliberately one-shot per acquisition cycle.
-        if (
-            observe_ready
-            and not follow_active
-            and not landing_active
-            and not self.observation_announced
-        ):
-            self.observation_announced = True
-            events.append(FollowToneEvent.OBSERVE_READY)
-
-        # LANDING_ACTIVE has priority so follow and landing tunes never overlap.
-        effective_landing = bool(landing_active and self.session_started)
-        phase = "LANDING" if effective_landing else "FOLLOW" if follow_active else None
+        # One arbiter owns all audible output. LAND has priority over FOLLOW,
+        # and both have priority over the one-shot Tag-ready tone.
+        phase = "LANDING" if landing_active else "FOLLOW" if follow_active else None
         if phase == "FOLLOW":
             due = bool(
                 self.active_phase != "FOLLOW"
@@ -82,18 +120,21 @@ class FollowTonePolicy:
             self.last_landing_tone_s = None
             if due:
                 self.last_follow_tone_s = now_s
-                events.append(FollowToneEvent.FOLLOW_ACTIVE)
+                self.active_phase = phase
+                return (FollowToneEvent.FOLLOW_ACTIVE,)
         elif phase == "LANDING":
             due = bool(
                 self.active_phase != "LANDING"
                 or self.last_landing_tone_s is None
                 or now_s - self.last_landing_tone_s >= self.landing_repeat_interval_s
             )
+            self.session_started = True
             self.exit_pending = False
             self.last_follow_tone_s = None
             if due:
                 self.last_landing_tone_s = now_s
-                events.append(FollowToneEvent.LANDING_ACTIVE)
+                self.active_phase = phase
+                return (FollowToneEvent.LANDING_ACTIVE,)
         elif self.session_started:
             self.exit_pending = True
             self.last_follow_tone_s = None
@@ -104,10 +145,13 @@ class FollowTonePolicy:
         if self.exit_pending and exit_confirmed:
             self.session_started = False
             self.exit_pending = False
-            self.observation_announced = False
-            events.append(FollowToneEvent.EXIT_CONFIRMED)
+            return (FollowToneEvent.EXIT_CONFIRMED,)
+
+        if observe_ready and not self.observation_announced:
+            self.observation_announced = True
+            return (FollowToneEvent.OBSERVE_READY,)
 
         if not observe_ready and not self.session_started and not self.exit_pending:
             self.observation_announced = False
 
-        return tuple(events)
+        return ()

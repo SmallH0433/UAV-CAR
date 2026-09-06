@@ -1,6 +1,6 @@
 # 无人机下位机部署分支
 
-版本：`uav-rpi-7.6`
+版本：`uav-rpi-8.3`
 
 本分支只保存安装在无人机机载 Raspberry Pi 4B 上的代码和配置。它不包含：
 
@@ -17,7 +17,7 @@
 - `config/containers/`：rootless Podman 存储配置。
 - `config/boot/`：OV9281 和 Pixhawk UART 所需的启动配置片段。
 
-当前运行逻辑：CH6 授权跟飞，CH8 请求/取消降落；候选超时 0.4 s，水平速度上限 0.10 m/s，水平加速度上限 0.15 m/s²，MAVLink 目标回显 ID 85 为 5 Hz。
+当前运行逻辑：CH6 授权跟飞，CH8 请求/取消降落；候选超时 1.0 s，短时视觉丢失会在 1.0 s 宽限期内保持 GUIDED 并发送零速度，水平速度上限 0.20 m/s，水平加速度上限 0.40 m/s²。健康测距或内圈标签连续 0.4 s 小于等于 0.15 m 后锁存 LAND；解锁状态消失、链路丢失、CH6 明确关闭或飞手切换模式时解除锁存。AprilTag 质量门限为 decision margin 20、hamming 3、重投影误差 10 px；相机采集 30 FPS、分析 10 FPS、网页预览 10 FPS。Podman 服务使用文件锁串行完成存储初始化。
 
 ## 目标环境
 

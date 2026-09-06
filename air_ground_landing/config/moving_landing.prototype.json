@@ -19,9 +19,9 @@
         "role": "approach",
         "enabled": true,
         "quality_gate": {
-          "minimum_decision_margin": 50.0,
-          "maximum_hamming": 2,
-          "maximum_reprojection_error_px": 1.0
+          "minimum_decision_margin": 20.0,
+          "maximum_hamming": 3,
+          "maximum_reprojection_error_px": 10.0
         }
       },
       {
@@ -30,9 +30,9 @@
         "role": "close_range_nested",
         "enabled": true,
         "quality_gate": {
-          "minimum_decision_margin": 35.0,
-          "maximum_hamming": 2,
-          "maximum_reprojection_error_px": 1.5
+          "minimum_decision_margin": 20.0,
+          "maximum_hamming": 3,
+          "maximum_reprojection_error_px": 10.0
         }
       }
     ],
@@ -40,9 +40,9 @@
     "quality_gate": {
       "max_message_age_ms": 150.0,
       "loss_timeout_ms": 500.0,
-      "minimum_decision_margin": 30.0,
-      "maximum_hamming": 0,
-      "maximum_reprojection_error_px": 2.0,
+      "minimum_decision_margin": 20.0,
+      "maximum_hamming": 3,
+      "maximum_reprojection_error_px": 10.0,
       "minimum_distance_m": 0.03,
       "maximum_distance_m": 8.0,
       "distance_consistency_m": 0.05
@@ -143,8 +143,8 @@
       "ibvs_alignment_hold_s": 0.4,
       "require_ibvs_for_precland_handover": true,
       "maximum_target_feedforward_mps": 0.4,
-      "maximum_total_horizontal_speed_mps": 0.10,
-      "maximum_total_horizontal_acceleration_mps2": 0.15,
+      "maximum_total_horizontal_speed_mps": 0.20,
+      "maximum_total_horizontal_acceleration_mps2": 0.40,
       "phase_owners": {
         "RENDEZVOUS": "ELASTIC_GUIDED",
         "TRACK_PAD": "ELASTIC_GUIDED",
@@ -178,7 +178,7 @@
       "mavros_state_topic": "/mavros/state",
       "mavros_rc_topic": "/mavros/rc/in",
       "mavros_set_mode_service": "/mavros/set_mode",
-      "candidate_timeout_s": 0.4,
+      "candidate_timeout_s": 1.0,
       "owner_timeout_s": 0.5
     }
   },

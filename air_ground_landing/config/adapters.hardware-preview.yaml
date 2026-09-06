@@ -17,7 +17,7 @@ guided_executor:
     require_rc_authorization: true
     rc_channel: 6
     landing_switch_channel: 8
-    candidate_timeout_s: 0.4
+    candidate_timeout_s: 1.0
     target_echo_timeout_s: 0.5
     follow_active_tone_repeat_s: 3.0
     landing_active_tone_repeat_s: 2.0

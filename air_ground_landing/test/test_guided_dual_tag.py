@@ -15,6 +15,11 @@ from air_ground_landing.guided_execution import (
     RcGateConfig,
     RcGateState,
     RcLandingRequestGate,
+    SlidingDistanceConfig,
+    SlidingDistanceMedian,
+    TerminalLandConfig,
+    TerminalLandLatch,
+    TerminalLandState,
 )
 from air_ground_landing.follow_tone_policy import (
     EXIT_CONFIRMED_TUNE,
@@ -41,9 +46,9 @@ from ov9281_dual_tag import (  # noqa: E402
     parse_tag_specs,
     select_primary_tag,
 )
+
 # OpenCV DICT_APRILTAG_36h11 print matrices used by the deployed dual-tag setup.
-# Keep the test self-contained: the PDF generator is an upper-computer utility
-# and is intentionally excluded from this lower-computer deployment branch.
+# Keep the test independent from the upper-computer PDF generator and reportlab.
 OUTER_ID0 = (
     "11111111",
     "11101111",
@@ -67,6 +72,131 @@ INNER_ID1 = (
 
 
 class GuidedExecutionTests(unittest.TestCase):
+    @staticmethod
+    def terminal_land_inputs(**overrides):
+        values = {
+            "connected": True,
+            "armed": True,
+            "current_mode": "LAND",
+            "land_mode_confirmed": True,
+            "rc_authorized": True,
+            "rc_explicit_low": False,
+            "swd_high_and_fresh": True,
+            "rangefinder_healthy": True,
+            "rangefinder_median_m": 0.14,
+            "inner_tag_vertical_m": None,
+            "inner_tag_age_s": None,
+        }
+        values.update(overrides)
+        return values
+
+    def test_terminal_land_range_median_rejects_spike_and_stale_data(self):
+        distance = SlidingDistanceMedian(
+            SlidingDistanceConfig(
+                window_s=0.5,
+                maximum_age_s=0.5,
+                minimum_m=0.02,
+                maximum_m=8.0,
+            )
+        )
+        for now_s, value in ((0.0, 0.10), (0.1, 0.11), (0.2, 3.9), (0.3, 0.10)):
+            result = distance.update(
+                now_s=now_s,
+                distance_m=value,
+                sensor_healthy=True,
+            )
+        self.assertTrue(result.healthy)
+        self.assertAlmostEqual(result.median_m, 0.105)
+        self.assertFalse(distance.status(0.81).healthy)
+
+        invalid = distance.update(
+            now_s=0.7,
+            distance_m=float("nan"),
+            sensor_healthy=False,
+        )
+        self.assertFalse(invalid.healthy)
+        self.assertIsNone(invalid.median_m)
+
+    def test_terminal_land_latches_after_rangefinder_dwell(self):
+        latch = TerminalLandLatch(TerminalLandConfig())
+        result = latch.update(
+            now_s=1.0,
+            **self.terminal_land_inputs(),
+        )
+        self.assertEqual(result.state, TerminalLandState.VERIFYING)
+        result = latch.update(
+            now_s=1.39,
+            **self.terminal_land_inputs(),
+        )
+        self.assertFalse(result.latched)
+        result = latch.update(
+            now_s=1.41,
+            **self.terminal_land_inputs(),
+        )
+        self.assertTrue(result.latched)
+        self.assertEqual(result.candidate_source, "RANGEFINDER")
+
+    def test_terminal_land_can_latch_from_fresh_inner_tag(self):
+        latch = TerminalLandLatch(TerminalLandConfig())
+        inner = self.terminal_land_inputs(
+            rangefinder_healthy=False,
+            rangefinder_median_m=None,
+            inner_tag_vertical_m=0.14,
+            inner_tag_age_s=0.45,
+        )
+        latch.update(now_s=2.0, **inner)
+        result = latch.update(now_s=2.41, **inner)
+        self.assertTrue(result.latched)
+        self.assertEqual(result.candidate_source, "INNER_TAG")
+
+    def test_terminal_land_requires_confirmed_land_rc6_and_swd(self):
+        for missing in (
+            {"current_mode": "GUIDED"},
+            {"land_mode_confirmed": False},
+            {"rc_authorized": False},
+            {"swd_high_and_fresh": False},
+        ):
+            latch = TerminalLandLatch(TerminalLandConfig())
+            result = latch.update(
+                now_s=1.0,
+                **self.terminal_land_inputs(**missing),
+            )
+            self.assertEqual(result.state, TerminalLandState.IDLE)
+
+    def test_terminal_land_ignores_tag_loss_but_preserves_pilot_escape(self):
+        latch = TerminalLandLatch(TerminalLandConfig())
+        latch.update(now_s=1.0, **self.terminal_land_inputs())
+        latched = latch.update(now_s=1.41, **self.terminal_land_inputs())
+        self.assertTrue(latched.latched)
+
+        still_latched = latch.update(
+            now_s=2.0,
+            **self.terminal_land_inputs(
+                swd_high_and_fresh=False,
+                rangefinder_healthy=False,
+                rangefinder_median_m=None,
+                inner_tag_vertical_m=None,
+                inner_tag_age_s=None,
+            ),
+        )
+        self.assertTrue(still_latched.latched)
+
+        escaped = latch.update(
+            now_s=2.1,
+            **self.terminal_land_inputs(rc_explicit_low=True),
+        )
+        self.assertFalse(escaped.latched)
+        self.assertEqual(escaped.reason, "RC6_EXPLICIT_LOW_OVERRIDE")
+
+        latch.update(now_s=3.0, **self.terminal_land_inputs())
+        latch.update(now_s=3.41, **self.terminal_land_inputs())
+        mode_escape = latch.update(
+            now_s=3.9,
+            **self.terminal_land_inputs(current_mode="LOITER"),
+        )
+        self.assertFalse(mode_escape.latched)
+        self.assertEqual(mode_escape.reason, "PILOT_MODE_OVERRIDE")
+
     def test_follow_tones_require_echo_and_confirmed_exit(self):
         policy = FollowTonePolicy()
         self.assertEqual(
@@ -201,7 +331,7 @@ class GuidedExecutionTests(unittest.TestCase):
             RcGateState.ABORT,
         )
 
-    def test_swd_requires_confirmed_follow_and_a_low_to_high_edge(self):
+    def test_swd_high_requests_land_as_soon_as_follow_is_active(self):
         gate = RcLandingRequestGate(
             LandingSwitchConfig(channel=8, maximum_age_s=0.5)
         )
@@ -223,24 +353,12 @@ class GuidedExecutionTests(unittest.TestCase):
                 now_s=1.1,
                 follow_active=True,
             ).state,
-            LandingSwitchState.NEEDS_REARM,
+            LandingSwitchState.REQUESTED,
         )
-
-        channels[-1] = 1100
-        ready = gate.evaluate(
+        requested = gate.evaluate(
             channels,
             received_time_s=1.2,
             now_s=1.2,
-            follow_active=True,
-        )
-        self.assertEqual(ready.state, LandingSwitchState.READY)
-        self.assertFalse(ready.requested)
-
-        channels[-1] = 1900
-        requested = gate.evaluate(
-            channels,
-            received_time_s=1.3,
-            now_s=1.3,
             follow_active=True,
         )
         self.assertEqual(requested.state, LandingSwitchState.REQUESTED)
@@ -250,8 +368,8 @@ class GuidedExecutionTests(unittest.TestCase):
         channels[-1] = 1100
         cancelled = gate.evaluate(
             channels,
-            received_time_s=1.4,
-            now_s=1.4,
+            received_time_s=1.3,
+            now_s=1.3,
             follow_active=True,
         )
         self.assertEqual(cancelled.state, LandingSwitchState.READY)
@@ -471,7 +589,7 @@ class DualTagPolicyTests(unittest.TestCase):
         )
 
     def test_outer_first_uses_per_tag_quality_and_falls_back_to_inner(self):
-        gates = parse_tag_quality_specs("0:50:2:1.0,1:35:2:1.5")
+        gates = parse_tag_quality_specs("0:20:3:2.0,1:20:3:2.0")
         outer = {
             "tag_id": 0,
             "role": "outer",
@@ -499,7 +617,7 @@ class DualTagPolicyTests(unittest.TestCase):
         self.assertEqual(selected["tag_id"], 0)
 
         selected = select_primary_tag(
-            (dict(outer, hamming=3), inner),
+            (dict(outer, hamming=4), inner),
             previous_tag_id=0,
             switch_to_inner_below_m=0.35,
             hysteresis_m=0.05,
