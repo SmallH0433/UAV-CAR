@@ -37,6 +37,12 @@ Nav2 经 velocity_smoother 独占 /cmd_vel，自主巡航不可用。
 早期曾因桌面环境抢占算力（雷达串口丢包、AMCL 不收敛）屏蔽；更换轻量
 桌面（XFCE）+ 纯 SSH 运行后实测 /scan 满帧 10Hz，已恢复接入。
 自主避障仍由 avoidance_node 承担（nav_mode:=avoidance 默认模式）。
+
+双向丝杆（树莓派 GPIO 直连双 42 电机，对接锁定机构）：默认关闭，
+enable_leadscrew:=true 启动；需要 ubuntu 用户在 gpio 组且已加载 GPIO udev 规则。
+状态 `ros2 topic echo /leadscrew/status`，指令示例：
+  ros2 topic pub --once /leadscrew/cmd car_interfaces/msg/LeadscrewCommand \
+    "{group: 0, command: 1}"   # command: 0=STOP 1=IN 2=OUT 3=RELAX 4=LOCK
 """
 
 import os
@@ -68,6 +74,8 @@ def generate_launch_description():
     creep_speed = LaunchConfiguration('creep_speed')
     web_bind = LaunchConfiguration('web_bind')
     gps_port = LaunchConfiguration('gps_port')
+    enable_leadscrew = LaunchConfiguration('enable_leadscrew')
+    leadscrew_simulate = LaunchConfiguration('leadscrew_simulate')
     front_camera = LaunchConfiguration('front_camera')
     k210_port = LaunchConfiguration('k210_port')
     lidar_tf_x = LaunchConfiguration('lidar_tf_x')
@@ -85,6 +93,8 @@ def generate_launch_description():
     has_rear_camera = IfCondition(
         PythonExpression(["'", rear_camera_device, "' != ''"]))
     has_gps = IfCondition(PythonExpression(["'", gps_port, "' != ''"]))
+    has_leadscrew = IfCondition(
+        PythonExpression(["'", enable_leadscrew, "' == 'true'"]))
     v4l2_front = IfCondition(
         PythonExpression(["'", front_camera, "' == 'v4l2'"]))
     # nav2 模式：Nav2 栈接管自主导航；avoidance 模式（默认）：自研避障节点
@@ -250,6 +260,28 @@ def generate_launch_description():
         parameters=[g60_params, {'port': gps_port}],
         condition=has_gps,
     )
+    # 树莓派 GPIO 直连双向丝杆锁定机构（enable_leadscrew:=true 时启动；
+    # 指令 /leadscrew/cmd，状态 /leadscrew/status，见头部 docstring）
+    leadscrew = Node(
+        package='car_nodes',
+        executable='leadscrew_driver_node',
+        name='leadscrew_driver_node',
+        output='screen',
+        parameters=[{
+            'simulate': leadscrew_simulate,
+            'step_pin_1': 17,
+            'dir_pin_1': 27,
+            'step_pin_2': 23,
+            'dir_pin_2': 24,
+            'enable_pin_1': 13,
+            'enable_pin_2': 5,
+            # 电机 2 与电机 1 镜像安装，张开/收拢方向需取反
+            'dir_invert_2': True,
+            'pulses_per_rev': 1600,
+            'leadscrew_pitch_mm': 2.0,
+        }],
+        condition=has_leadscrew,
+    )
     # 常驻静态 TF base_footprint→laser_frame（雷达安装位置，建图依赖；
     # 数值需与 web_gateway 建图参数 mapping_lidar_x/y/z 一致）
     lidar_static_tf = Node(
@@ -323,6 +355,12 @@ def generate_launch_description():
             'gps_port', default_value='/dev/wheeltec_gps',
             description="WHEELTEC G60 GPS 串口（udev 规则名）；留空 ''=不启动 GPS"),
         DeclareLaunchArgument(
+            'enable_leadscrew', default_value='false',
+            description="true=启动树莓派 GPIO 直连双向丝杆节点；false=不启动"),
+        DeclareLaunchArgument(
+            'leadscrew_simulate', default_value='false',
+            description='true=丝杆本地仿真（不操作 GPIO，模拟状态机）'),
+        DeclareLaunchArgument(
             'front_camera', default_value='v4l2',
             description="前摄类型：v4l2=camera_device 摄像头；k210=K210 串口推流摄像头；none=不启动前摄"),
         DeclareLaunchArgument(
@@ -357,6 +395,7 @@ def generate_launch_description():
         ultrasonic,
         web_gateway,
         gps,
+        leadscrew,
         lidar_static_tf,
         nav2_stack,
     ])

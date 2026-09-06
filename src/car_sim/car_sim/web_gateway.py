@@ -14,6 +14,7 @@ default and exposes:
   GET  /api/photo/download  最新前摄帧 JPEG，带 Content-Disposition 供浏览器直接下载
   GET  /api/camera.jpg   latest gz-bridge front camera frame as JPEG (503 if absent)
   GET  /api/camera_rear.jpg  latest gz-bridge rear camera frame as JPEG (503 if absent)
+  POST /api/leadscrew/toggle  停机坪推杆开合：收拢状态→四杆向外，否则四杆向内
 
 Teleop is fail-closed: commands older than ``teleop_watchdog_s`` are replaced
 by a zero command, and the operator heartbeat published alongside teleop is
@@ -45,6 +46,8 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy
 from sensor_msgs.msg import Image, LaserScan, NavSatFix, Range
 from std_msgs.msg import Bool, String
+
+from car_interfaces.msg import LeadscrewCommand, LeadscrewStatus
 
 import tf2_ros
 from action_msgs.msg import GoalStatus
@@ -127,6 +130,22 @@ def _index_path() -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "index.html")
 
 
+def _index_sim_path() -> str:
+    """仿真专用控制台（带推杆俯视图），仅用于仿真调机，勿在真机使用。"""
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        candidate = os.path.join(
+            get_package_share_directory("car_sim"), "web", "index_sim.html"
+        )
+        if os.path.isfile(candidate):
+            return candidate
+    except Exception:
+        pass
+    return os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "web", "index_sim.html")
+
+
 class WebGateway(Node):
     """HTTP front-end for UGV teleop and status monitoring."""
 
@@ -139,6 +158,7 @@ class WebGateway(Node):
         self.declare_parameter("odom_topic", "/odom")
         self.declare_parameter("camera_topic", "/camera/image_raw")
         self.declare_parameter("rear_camera_topic", "/camera/rear/image_raw")
+        self.declare_parameter("top_camera_topic", "/camera/top/image_raw")
         self.declare_parameter("teleop_watchdog_s", 0.35)
         self.declare_parameter("max_linear_mps", 0.5)
         self.declare_parameter("max_angular_rps", 0.7)
@@ -161,6 +181,9 @@ class WebGateway(Node):
         self.declare_parameter("nav_backend", "avoidance")
         # 网页导航/巡航加载的地图名（~/maps/<name>.pgm/.yaml）
         self.declare_parameter("nav_map_name", "map_20260820_193257")
+        # 停机坪居中机构（ESP8266 丝杆下位机 / Gazebo 仿真共用话题契约）
+        self.declare_parameter("leadscrew_cmd_topic", "/leadscrew/cmd")
+        self.declare_parameter("leadscrew_status_topic", "/leadscrew/status")
 
         self.bind_address = str(self.get_parameter("bind_address").value)
         self.port = int(self.get_parameter("port").value)
@@ -191,6 +214,9 @@ class WebGateway(Node):
         self.image_time = 0.0
         self.rear_image_jpeg: Optional[bytes] = None
         self.rear_image_time = 0.0
+        # 俯视相机（停机坪正上方，仿真监控台 /sim 用）
+        self.top_image_jpeg: Optional[bytes] = None
+        self.top_image_time = 0.0
         self.bridge = CvBridge() if _CAMERA_AVAILABLE else None
         # 雷达/GPS 网页展示缓存
         self.scan_points = []          # [[angle_deg, dist_m], ...] 降采样极坐标点
@@ -224,6 +250,10 @@ class WebGateway(Node):
         self.auto_cruise_initial = None  # (x, y) 初始点
         self.auto_cruise_started = 0.0
         self.auto_cruise_returning = False
+        # 停机坪推杆状态缓存（/leadscrew/status）；last_cmd 为状态离线时的切换兜底
+        self.leadscrew_status = None   # {"state": [...], "pos_mm": [...], "enabled": [...]}
+        self.leadscrew_time = 0.0
+        self.leadscrew_last_cmd = None  # "in" / "out"
         # Nav2 导航后端（nav_backend=nav2）：当前 NavigateToPose 目标句柄
         self.nav2_goal_handle = None
         # TF 查询（map→base_footprint，定位模式下网页地图小车位置显示）
@@ -298,6 +328,16 @@ class WebGateway(Node):
         # Nav2 后端：NavigateToPose action 客户端（nav_backend=nav2 时使用）
         self.nav2_client = ActionClient(
             self, NavigateToPose, "navigate_to_pose")
+        # 停机坪推杆：指令发布 + 状态订阅
+        self.leadscrew_publisher = self.create_publisher(
+            LeadscrewCommand,
+            str(self.get_parameter("leadscrew_cmd_topic").value), 10)
+        self.create_subscription(
+            LeadscrewStatus,
+            str(self.get_parameter("leadscrew_status_topic").value),
+            self._on_leadscrew_status,
+            10,
+        )
         # SLAM 地图（slam_toolbox 以 transient_local 发布 /map，订阅需匹配才能
         # 立即收到最近一次地图；未启动 SLAM 时 /api/map.png 返回 503）
         map_qos = QoSProfile(depth=1)
@@ -312,13 +352,19 @@ class WebGateway(Node):
             self.create_subscription(
                 Image,
                 str(self.get_parameter("camera_topic").value),
-                lambda msg: self._on_image(msg, rear=False),
+                lambda msg: self._on_image(msg, "front"),
                 qos_profile_sensor_data,
             )
             self.create_subscription(
                 Image,
                 str(self.get_parameter("rear_camera_topic").value),
-                lambda msg: self._on_image(msg, rear=True),
+                lambda msg: self._on_image(msg, "rear"),
+                qos_profile_sensor_data,
+            )
+            self.create_subscription(
+                Image,
+                str(self.get_parameter("top_camera_topic").value),
+                lambda msg: self._on_image(msg, "top"),
                 qos_profile_sensor_data,
             )
         else:
@@ -462,6 +508,51 @@ class WebGateway(Node):
             return
         self._advance_nav_queue()
 
+    # ---------------- 停机坪推杆（居中机构） ----------------
+    def _on_leadscrew_status(self, message: LeadscrewStatus) -> None:
+        with self.lock:
+            self.leadscrew_status = {
+                # rosidl 数组元素是 numpy 标量，须转原生类型才能 JSON 序列化
+                "state": [int(s) for s in message.state],
+                "pos_mm": [round(float(p), 1) for p in message.pos_mm],
+                "enabled": [bool(e) for e in message.enabled],
+            }
+            self.leadscrew_time = time.monotonic()
+            self.topic_times["leadscrew"] = self.leadscrew_time
+
+    def leadscrew_is_closed(self) -> bool:
+        """当前是否处于收拢态（任意组在内侧/正在向内/离开外侧即视为收拢）。
+
+        状态离线时按最近一次网页下发的指令兜底，保证按键来回切换。
+        """
+        with self.lock:
+            status = self.leadscrew_status
+            fallback = self.leadscrew_last_cmd == "in"
+        if status is None:
+            return fallback
+        for state, pos in zip(status["state"], status["pos_mm"]):
+            if state in (
+                LeadscrewStatus.STATE_MOVING_IN, LeadscrewStatus.STATE_AT_INNER
+            ) or pos > 1.0:
+                return True
+        return False
+
+    def leadscrew_toggle(self) -> str:
+        """开合切换：收拢态→四杆向外，否则四杆向内。返回下发方向 in/out。"""
+        direction = "out" if self.leadscrew_is_closed() else "in"
+        msg = LeadscrewCommand()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.group = 0  # 两组同时
+        msg.command = (
+            LeadscrewCommand.CMD_OUT
+            if direction == "out" else LeadscrewCommand.CMD_IN
+        )
+        self.leadscrew_publisher.publish(msg)
+        with self.lock:
+            self.leadscrew_last_cmd = direction
+        self.get_logger().info(f"网页推杆指令：{'收拢（向内）' if direction == 'in' else '张开（向外）'}")
+        return direction
+
     def _advance_nav_queue(self) -> None:
         """当前路径点已到达：弹出并发下一个点；全部走完则结束导航。
 
@@ -541,10 +632,17 @@ class WebGateway(Node):
             self.nav2_goal_handle.cancel_goal_async()
             self.nav2_goal_handle = None
 
-    def _on_image(self, message: Image, rear: bool = False) -> None:
+    # 图像槽位：(jpeg 属性, 时间属性, topic_times 键)
+    _IMAGE_SLOTS = {
+        "front": ("image_jpeg", "image_time", "camera"),
+        "rear": ("rear_image_jpeg", "rear_image_time", "camera_rear"),
+        "top": ("top_image_jpeg", "top_image_time", "camera_top"),
+    }
+
+    def _on_image(self, message: Image, slot: str = "front") -> None:
+        jpeg_attr, time_attr, topic_key = self._IMAGE_SLOTS[slot]
         now = time.monotonic()
-        image_time = self.rear_image_time if rear else self.image_time
-        if now - image_time < self.camera_interval:
+        if now - getattr(self, time_attr) < self.camera_interval:
             return
         try:
             frame = self.bridge.imgmsg_to_cv2(message, desired_encoding="bgr8")
@@ -556,14 +654,9 @@ class WebGateway(Node):
             return
         if success:
             with self.lock:
-                if rear:
-                    self.rear_image_jpeg = encoded.tobytes()
-                    self.rear_image_time = now
-                    self.topic_times["camera_rear"] = now
-                else:
-                    self.image_jpeg = encoded.tobytes()
-                    self.image_time = now
-                    self.topic_times["camera"] = now
+                setattr(self, jpeg_attr, encoded.tobytes())
+                setattr(self, time_attr, now)
+                self.topic_times[topic_key] = now
 
     # ---------------- teleop safety ----------------
     def publish_teleop(self, linear: float, angular: float) -> None:
@@ -797,6 +890,10 @@ class WebGateway(Node):
                 if path in ("/", "/index.html"):
                     gateway._serve_index(self)
                     return
+                if path in ("/sim", "/index_sim.html"):
+                    # 仿真专用控制台（含推杆俯视图）
+                    gateway._serve_index(self, sim=True)
+                    return
                 if path == "/api/health":
                     self._json(HTTPStatus.OK, gateway.health_snapshot())
                     return
@@ -816,10 +913,13 @@ class WebGateway(Node):
                     gateway._serve_saved_map(self, path[10:-4])
                     return
                 if path == "/api/camera.jpg":
-                    gateway._serve_camera(self, rear=False)
+                    gateway._serve_camera(self)
                     return
                 if path == "/api/camera_rear.jpg":
-                    gateway._serve_camera(self, rear=True)
+                    gateway._serve_camera(self, slot="rear")
+                    return
+                if path == "/api/camera_top.jpg":
+                    gateway._serve_camera(self, slot="top")
                     return
                 if path == "/api/photo/download":
                     gateway._serve_photo_download(self)
@@ -838,7 +938,7 @@ class WebGateway(Node):
                     "/api/ugv/teleop", "/api/ugv/cruise", "/api/mapping",
                     "/api/photo", "/api/nav/set_goal", "/api/nav/stop",
                     "/api/nav/load_map", "/api/auto_cruise/start",
-                    "/api/auto_cruise/stop",
+                    "/api/auto_cruise/stop", "/api/leadscrew/toggle",
                 ):
                     self._json(HTTPStatus.NOT_FOUND, {"error": "unknown_command"})
                     return
@@ -884,6 +984,13 @@ class WebGateway(Node):
                     return
                 if path == "/api/auto_cruise/stop":
                     self._handle_auto_cruise_stop()
+                    return
+                if path == "/api/leadscrew/toggle":
+                    direction = gateway.leadscrew_toggle()
+                    self._json(
+                        HTTPStatus.ACCEPTED,
+                        {"accepted": True, "direction": direction},
+                    )
                     return
                 try:
                     linear, angular = clamped_teleop(
@@ -1018,9 +1125,9 @@ class WebGateway(Node):
 
         return Handler
 
-    def _serve_index(self, handler) -> None:
+    def _serve_index(self, handler, sim: bool = False) -> None:
         try:
-            with open(_index_path(), "rb") as stream:
+            with open(_index_sim_path() if sim else _index_path(), "rb") as stream:
                 body = stream.read()
         except OSError:
             handler._json(
@@ -1097,14 +1204,14 @@ class WebGateway(Node):
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             pass
 
-    def _serve_camera(self, handler, rear: bool = False) -> None:
+    def _serve_camera(self, handler, slot: str = "front") -> None:
         if not _CAMERA_AVAILABLE:
             handler._json(
                 HTTPStatus.SERVICE_UNAVAILABLE, {"error": "camera_backend_unavailable"}
             )
             return
         with self.lock:
-            image = self.rear_image_jpeg if rear else self.image_jpeg
+            image = getattr(self, self._IMAGE_SLOTS[slot][0])
         if image is None:
             handler._json(
                 HTTPStatus.SERVICE_UNAVAILABLE, {"error": "camera_not_ready"}
@@ -1538,6 +1645,14 @@ class WebGateway(Node):
             )
             map_info = dict(self.map_info) if self.map_info is not None else None
             map_age = None if not self.map_time else round(now - self.map_time, 2)
+            leadscrew = (
+                dict(self.leadscrew_status)
+                if self.leadscrew_status is not None else None
+            )
+            leadscrew_age = (
+                None if not self.leadscrew_time
+                else round(now - self.leadscrew_time, 2)
+            )
         return {
             "gateway": self.health_snapshot(),
             "server_time_ms": int(time.time() * 1000),
@@ -1555,6 +1670,11 @@ class WebGateway(Node):
             "battery_voltage": None,  # reserved for the real motor driver
             "gps": {"fix": fix, "age_s": fix_age},
             "ultrasonic": {"range": ultrasonic, "age_s": ultrasonic_age},
+            "leadscrew": {
+                "status": leadscrew,
+                "age_s": leadscrew_age,
+                "closed": self.leadscrew_is_closed(),
+            },
             "map": {"info": map_info, "age_s": map_age},
             "mapping": {
                 "active": self.mapping_active,

@@ -70,15 +70,15 @@
     max-width: 180px; background: #273142; color: #e6ecf5;
     border: 1px solid #3b4a63; border-radius: 6px; padding: 3px 6px;
   }
-  #cruiseBtn, #mappingBtn, #photoBtn {
+  #cruiseBtn, #mappingBtn, #photoBtn, #pusherBtn {
     width: 100%; padding: 9px 0; font-size: 15px; border: 1px solid #3b4a63;
     border-radius: 10px; background: #273142; color: #e6ecf5; cursor: pointer;
     transition: background .12s;
   }
-  #cruiseBtn:hover, #mappingBtn:hover, #photoBtn:hover { background: #31405c; }
-  #cruiseBtn.on, #mappingBtn.on { background: #2e7d46; border-color: #3da35f; }
-  #cruiseBtn.off, #mappingBtn.off { background: #273142; }
-  #cruiseBtn.na { background: #3a3a32; color: #8a8a7a; cursor: not-allowed; }
+  #cruiseBtn:hover, #mappingBtn:hover, #photoBtn:hover, #pusherBtn:hover { background: #31405c; }
+  #cruiseBtn.on, #mappingBtn.on, #pusherBtn.on { background: #2e7d46; border-color: #3da35f; }
+  #cruiseBtn.off, #mappingBtn.off, #pusherBtn.off { background: #273142; }
+  #cruiseBtn.na, #pusherBtn.na { background: #3a3a32; color: #8a8a7a; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -111,6 +111,9 @@
       </div>
       <div class="slider-row">
         <button id="cruiseBtn" class="cruise" title="自动避障定速巡航">开启巡航</button>
+      </div>
+      <div class="slider-row">
+        <button id="pusherBtn" class="off" title="停机坪居中机构：4 个推杆同时向内/向外">收拢推杆（4 杆向内）</button>
       </div>
       <div class="hint">
         开启巡航后小车自主避障；巡航中按住 A/D 可保持巡航速度手动调整方向（W/S 直接接管速度），松手恢复自主避障。<br>
@@ -212,6 +215,30 @@
     }).catch(function () { /* 状态轮询会纠正显示 */ });
   });
   renderCruise();
+
+  // 停机坪推杆开合（第一次按下四杆向内收拢，再按向外张开；
+  // 实际状态由 /api/status 的 leadscrew 字段 2Hz 轮询纠正）
+  var pusherBtn = document.getElementById("pusherBtn");
+  var pusherClosed = false, pusherAvail = false;
+  var PUSHER_STATE_NAMES = ["外侧自锁", "向内运动", "内侧自锁", "向外运动", "中途自锁"];
+  function renderPusher(posText) {
+    if (!pusherAvail) { pusherBtn.textContent = "推杆不可用（丝杆节点离线）"; pusherBtn.className = "na"; return; }
+    pusherBtn.textContent = pusherClosed
+      ? "张开推杆（当前：收拢" + posText + "）"
+      : "收拢推杆（当前：张开" + posText + "）";
+    pusherBtn.className = pusherClosed ? "on" : "off";
+  }
+  pusherBtn.addEventListener("click", function () {
+    if (!pusherAvail) { return; }
+    fetch("/api/leadscrew/toggle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}"
+    }).then(function (r) { return r.json(); }).then(function (resp) {
+      if (resp.accepted) { pusherClosed = (resp.direction === "in"); renderPusher(""); }
+    }).catch(function () { /* 状态轮询会纠正显示 */ });
+  });
+  renderPusher("");
 
   // 组合按键状态：阿克曼转向需要 v 与 ω 同时下发（弧线行驶），
   // 因此 W/S 与 A/D 可叠加，而不是单指令互斥。
@@ -339,6 +366,18 @@
         cruiseOn = !!av.cruise_enabled;
       }
       renderCruise();
+      // 推杆状态：在线 = 节点 2 秒内有状态上报；收拢判定与后端一致
+      var ls = s.leadscrew || {};
+      var lsSt = ls.status;
+      pusherAvail = !!(lsSt && (ls.age_s === null || ls.age_s === undefined || ls.age_s <= 2.0));
+      if (lsSt) {
+        pusherClosed = !!ls.closed;
+        var posText = " " + lsSt.pos_mm.map(function (p) { return p.toFixed(0); }).join("/") + "mm";
+        var st0 = PUSHER_STATE_NAMES[lsSt.state[0]] || "?";
+        renderPusher(posText + "·" + st0);
+      } else {
+        renderPusher("");
+      }
       var wasMapping = mappingOn;
       mappingOn = !!(s.mapping && s.mapping.active);
       renderMapping();
