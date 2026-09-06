@@ -7,6 +7,7 @@ landing_target_adapter:
 simple_landing_coordinator:
   ros__parameters:
     require_landing_target_output: true
+    ibvs_timeout_s: 0.40
 
 guided_executor:
   ros__parameters:
@@ -17,9 +18,21 @@ guided_executor:
     require_rc_authorization: true
     rc_channel: 6
     landing_switch_channel: 8
-    candidate_timeout_s: 0.4
-    maximum_horizontal_speed_mps: 0.10
-    maximum_horizontal_acceleration_mps2: 0.15
+    terminal_land_latch_enabled: true
+    terminal_land_rangefinder_threshold_m: 0.15
+    terminal_land_inner_tag_threshold_m: 0.15
+    terminal_land_dwell_s: 0.4
+    terminal_land_evidence_maximum_age_s: 0.5
+    terminal_land_rangefinder_window_s: 0.5
+    terminal_land_rangefinder_minimum_m: 0.02
+    terminal_land_rangefinder_maximum_m: 8.0
+    terminal_land_inner_tag_id: 1
+    terminal_land_rangefinder_topic: /mavros/distance_sensor/rangefinder_pub
+    candidate_timeout_s: 1.0
+    follow_dropout_grace_s: 1.0
+    follow_reacquire_dwell_s: 0.0
+    maximum_horizontal_speed_mps: 0.20
+    maximum_horizontal_acceleration_mps2: 0.40
     rollback_retry_interval_s: 1.0
     rollback_orphaned_guided: true
     orphaned_guided_grace_s: 1.0

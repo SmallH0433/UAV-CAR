@@ -69,16 +69,23 @@ async function update(){try{const s=await(await fetch('/api/status',{cache:'no-s
 
 
 class LatestMJPEG(io.BufferedIOBase):
-    def __init__(self):
+    def __init__(self, maximum_fps=10.0):
+        if maximum_fps <= 0:
+            raise ValueError('preview fps must be positive')
         self.condition = threading.Condition()
         self.frame: bytes | None = None
         self.sequence = 0
         self.frames = 0
         self.fps = 0.0
         self.rate_at = time.monotonic()
+        self.minimum_period_s = 1.0 / float(maximum_fps)
+        self.last_frame_at = 0.0
 
     def write(self, buf):
         now = time.monotonic()
+        if now - self.last_frame_at < self.minimum_period_s:
+            return len(buf)
+        self.last_frame_at = now
         with self.condition:
             self.frame = bytes(buf)
             self.sequence += 1
@@ -131,7 +138,7 @@ class VisionState:
             lores={'format':'YUV420','size':(640,400)},
             controls={'FrameDurationLimits':(period,period)},
             buffer_count=6, display=None, encode='lores')
-        self.camera.configure(config); self.encoder=MJPEGEncoder(bitrate=args.mjpeg_bitrate); self.stream=LatestMJPEG()
+        self.camera.configure(config); self.encoder=MJPEGEncoder(bitrate=args.mjpeg_bitrate); self.stream=LatestMJPEG(args.preview_fps)
         self.camera.start(); self.camera.start_encoder(self.encoder,FileOutput(self.stream),name='lores')
         self.thread=threading.Thread(target=self._analyse,daemon=True); self.thread.start()
 
@@ -299,7 +306,7 @@ def parse_args():
     p.add_argument('--tag-id',type=int,default=None,help='legacy single-tag override; requires --tag-size-m')
     p.add_argument('--tag-size-m',type=float,default=None,help='legacy single-tag override; requires --tag-id')
     p.add_argument('--switch-to-inner-below-m',type=float,default=0.35); p.add_argument('--tag-switch-hysteresis-m',type=float,default=0.05)
-    p.add_argument('--calibration',type=Path,default=Path.home()/'ov9281_debug/ov9281_calibration_fisheye_run2_flat_17mm.yaml'); p.add_argument('--range-correction',type=Path,default=Path.home()/'ov9281_debug/ov9281_range_correction_20260813.json'); p.add_argument('--capture-fps',type=float,default=30); p.add_argument('--analysis-fps',type=float,default=10); p.add_argument('--mjpeg-bitrate',type=int,default=6000000); p.add_argument('--collect-output',type=Path,default=Path.home()/'ov9281_calibration_run2_flat_17mm'); p.add_argument('--target-count',type=int,default=20); p.add_argument('--save-interval',type=float,default=1.2); p.add_argument('--min-view-change',type=float,default=.8)
+    p.add_argument('--calibration',type=Path,default=Path.home()/'ov9281_debug/ov9281_calibration_fisheye_run2_flat_17mm.yaml'); p.add_argument('--range-correction',type=Path,default=Path.home()/'ov9281_debug/ov9281_range_correction_20260813.json'); p.add_argument('--capture-fps',type=float,default=30); p.add_argument('--analysis-fps',type=float,default=10); p.add_argument('--preview-fps',type=float,default=10); p.add_argument('--mjpeg-bitrate',type=int,default=6000000); p.add_argument('--collect-output',type=Path,default=Path.home()/'ov9281_calibration_run2_flat_17mm'); p.add_argument('--target-count',type=int,default=20); p.add_argument('--save-interval',type=float,default=1.2); p.add_argument('--min-view-change',type=float,default=.8)
     args=p.parse_args()
     if (args.tag_id is None)!=(args.tag_size_m is None):
         p.error('--tag-id and --tag-size-m must be supplied together')

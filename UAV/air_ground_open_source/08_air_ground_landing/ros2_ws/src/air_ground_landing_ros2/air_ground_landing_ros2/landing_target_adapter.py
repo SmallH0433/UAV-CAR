@@ -96,6 +96,9 @@ class LandingTargetAdapter(Node):
         accepted = False
         transmitted = False
         reason = "NO_SAMPLE"
+        accepted_target_num = None
+        accepted_distance_m = None
+        accepted_vertical_distance_m = None
         try:
             with urllib.request.urlopen(self.status_url, timeout=self.http_timeout_s) as response:
                 status = json.loads(response.read().decode("utf-8"))
@@ -106,6 +109,9 @@ class LandingTargetAdapter(Node):
             )
             reason = result.reason
             if result.packet is not None:
+                accepted_target_num = int(result.packet.target_num)
+                accepted_distance_m = float(result.packet.distance)
+                accepted_vertical_distance_m = abs(float(result.packet.z))
                 message = self._message(result.packet)
                 self.preview_publisher.publish(message)
                 accepted = True
@@ -129,6 +135,9 @@ class LandingTargetAdapter(Node):
                 "last_accepted_age_s": age_s,
                 "output_enabled": self.output_enabled,
                 "mavlink_transmitted": transmitted,
+                "accepted_target_num": accepted_target_num,
+                "accepted_distance_m": accepted_distance_m,
+                "accepted_vertical_distance_m": accepted_vertical_distance_m,
             },
             separators=(",", ":"),
         )

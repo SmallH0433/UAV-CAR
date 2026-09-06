@@ -35,14 +35,14 @@ DEFAULT_TELEM_BAUD = 57_600
 DEFAULT_RESTORE_STREAM_RATE_HZ = 10
 
 COMPANION_FILES = (
-    "/home/PI/ov9281_debug/follow_props_off_latest.jsonl",
-    "/home/PI/ov9281_debug/follow_props_off_latest.summary.json",
-    "/home/PI/ov9281_debug/follow_props_off_status.json",
-    "/home/PI/ov9281_debug/ov9281_follow_props_off_control_20260814.json",
-    "/home/PI/ov9281_debug/ov9281_range_correction_dual_tag_20260817.json",
-    "/home/PI/ov9281_debug/ov9281_calibration_fisheye_run2_flat_17mm.yaml",
-    "/home/PI/.config/systemd/user/ov9281-follow-props-off-manual.service",
-    "/home/PI/.config/systemd/user/ov9281-vision.service",
+    "/home/pi/ov9281_debug/follow_props_off_latest.jsonl",
+    "/home/pi/ov9281_debug/follow_props_off_latest.summary.json",
+    "/home/pi/ov9281_debug/follow_props_off_status.json",
+    "/home/pi/ov9281_debug/ov9281_follow_props_off_control_20260814.json",
+    "/home/pi/ov9281_debug/ov9281_range_correction_dual_tag_20260817.json",
+    "/home/pi/ov9281_debug/ov9281_calibration_fisheye_run2_flat_17mm.yaml",
+    "/home/pi/.config/systemd/user/ov9281-follow-props-off-manual.service",
+    "/home/pi/.config/systemd/user/ov9281-vision.service",
 )
 
 
@@ -519,6 +519,11 @@ def main() -> int:
     parser.add_argument("--companion-service", default="ov9281-follow-props-off-manual.service")
     parser.add_argument("--journal-since", default="1 hour ago")
     parser.add_argument("--skip-companion", action="store_true")
+    parser.add_argument(
+        "--skip-hash",
+        action="store_true",
+        help="Do not calculate SHA-256 after a complete download",
+    )
     args = parser.parse_args()
 
     transport, port, baud = resolve_transport(args.transport, args.port, args.baud)
@@ -596,7 +601,12 @@ def main() -> int:
             )
             bitmap = destination.with_suffix(destination.suffix + ".blocks").read_bytes()
             full["complete"] = all(bitmap)
-            full["sha256"] = sha256(destination) if full["complete"] else None
+            full["sha256"] = (
+                sha256(destination)
+                if full["complete"] and not args.skip_hash
+                else None
+            )
+            full["hash_skipped"] = bool(args.skip_hash)
             results["full"] = full
             write_json(session_dir / "export_full_manifest.json", full)
     finally:

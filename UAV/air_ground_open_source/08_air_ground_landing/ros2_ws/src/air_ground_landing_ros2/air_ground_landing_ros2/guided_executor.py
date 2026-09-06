@@ -12,10 +12,19 @@ import rclpy
 from mavros_msgs.msg import Mavlink, PositionTarget, RCIn, State
 from mavros_msgs.srv import CommandLong, SetMode
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    QoSDurabilityPolicy,
+    QoSProfile,
+    QoSReliabilityPolicy,
+    qos_profile_sensor_data,
+)
+from sensor_msgs.msg import Range
 from std_msgs.msg import Bool, String
 
 from air_ground_landing.guided_execution import (
+    FollowContinuityConfig,
+    FollowContinuityGuard,
+    FollowContinuityResult,
     ModeRequest,
     ModeTransitionConfig,
     ModeTransitionManager,
@@ -29,11 +38,17 @@ from air_ground_landing.guided_execution import (
     RcLandingRequestGate,
     LandingSwitchConfig,
     LandingSwitchResult,
+    SlidingDistanceConfig,
+    SlidingDistanceMedian,
+    TerminalLandConfig,
+    TerminalLandLatch,
+    TerminalLandResult,
 )
 from air_ground_landing.follow_tone_policy import (
     FollowToneEvent,
     FollowTonePolicy,
     TUNES,
+    gate_follow_tones,
 )
 from air_ground_landing.legacy_mavlink_tune import (
     MAVLINK_V2_MAGIC,
@@ -78,12 +93,29 @@ class GuidedExecutor(Node):
         self.target_echo_timeout_s = float(
             self.get_parameter("target_echo_timeout_s").value
         )
+        self.follow_dropout_grace_s = float(
+            self.get_parameter("follow_dropout_grace_s").value
+        )
+        self.follow_reacquire_dwell_s = float(
+            self.get_parameter("follow_reacquire_dwell_s").value
+        )
         if (
             self.candidate_timeout_s <= 0.0
             or self.owner_timeout_s <= 0.0
             or self.target_echo_timeout_s <= 0.0
+            or self.follow_dropout_grace_s <= 0.0
+            or self.follow_reacquire_dwell_s < 0.0
         ):
-            raise ValueError("GUIDED candidate/owner timeouts must be positive")
+            raise ValueError(
+                "GUIDED candidate/owner/grace timeouts must be positive and "
+                "reacquire dwell non-negative"
+            )
+        self.follow_continuity = FollowContinuityGuard(
+            FollowContinuityConfig(
+                dropout_grace_s=self.follow_dropout_grace_s,
+                reacquire_dwell_s=self.follow_reacquire_dwell_s,
+            )
+        )
         self.manager = ModeTransitionManager(
             ModeTransitionConfig(
                 target_ack_timeout_s=float(
@@ -142,6 +174,45 @@ class GuidedExecutor(Node):
                 ),
             )
         )
+        self.terminal_land_latch_enabled = bool(
+            self.get_parameter("terminal_land_latch_enabled").value
+        )
+        self.terminal_land_latch = TerminalLandLatch(
+            TerminalLandConfig(
+                rangefinder_threshold_m=float(
+                    self.get_parameter("terminal_land_rangefinder_threshold_m").value
+                ),
+                inner_tag_threshold_m=float(
+                    self.get_parameter("terminal_land_inner_tag_threshold_m").value
+                ),
+                evidence_maximum_age_s=float(
+                    self.get_parameter("terminal_land_evidence_maximum_age_s").value
+                ),
+                dwell_s=float(self.get_parameter("terminal_land_dwell_s").value),
+            )
+        )
+        self.terminal_land_inner_tag_id = int(
+            self.get_parameter("terminal_land_inner_tag_id").value
+        )
+        if self.terminal_land_inner_tag_id < 0:
+            raise ValueError("terminal LAND inner-tag ID must not be negative")
+        self.rangefinder_filter = SlidingDistanceMedian(
+            SlidingDistanceConfig(
+                window_s=float(
+                    self.get_parameter("terminal_land_rangefinder_window_s").value
+                ),
+                maximum_age_s=float(
+                    self.get_parameter("terminal_land_evidence_maximum_age_s").value
+                ),
+                minimum_m=float(
+                    self.get_parameter("terminal_land_rangefinder_minimum_m").value
+                ),
+                maximum_m=float(
+                    self.get_parameter("terminal_land_rangefinder_maximum_m").value
+                ),
+            )
+        )
+        self.terminal_land_result = self.terminal_land_latch.reset("NOT_STARTED")
 
         self.vehicle_state = State()
         self.vehicle_state.connected = False
@@ -159,12 +230,15 @@ class GuidedExecutor(Node):
         self.last_setpoint_sent_s: Optional[float] = None
         self.last_setpoint_sent_wall_s: Optional[float] = None
         self.last_setpoint_sent: Optional[PositionTarget] = None
+        self.last_authorized_candidate: Optional[PositionTarget] = None
         self.connected_since_s: Optional[float] = None
         self.target_echo_interval_pending = False
         self.target_echo_interval_confirmed = False
         self.target_echo_interval_result: Optional[int] = None
         self.next_target_echo_interval_request_s = 0.0
         self.tag_detected_received_s: Optional[float] = None
+        self.inner_tag_received_s: Optional[float] = None
+        self.inner_tag_vertical_m: Optional[float] = None
         self.tag_detection_timeout_s = float(
             self.get_parameter("tag_detection_timeout_s").value
         )
@@ -196,6 +270,8 @@ class GuidedExecutor(Node):
             follow_repeat_interval_s=self.follow_active_tone_repeat_s,
             landing_repeat_interval_s=self.landing_active_tone_repeat_s,
         )
+        self.tone_previous_armed = False
+        self.tag_tone_suppressed_after_land = False
         self.tone_event_counts = {event.value: 0 for event in FollowToneEvent}
 
         self.actual_publisher = self.create_publisher(
@@ -253,7 +329,11 @@ class GuidedExecutor(Node):
             State,
             str(self.get_parameter("mavros_state_topic").value),
             self._vehicle_state,
-            10,
+            QoSProfile(
+                depth=1,
+                reliability=QoSReliabilityPolicy.RELIABLE,
+                durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            ),
         )
         self.create_subscription(
             RCIn,
@@ -265,6 +345,12 @@ class GuidedExecutor(Node):
             PositionTarget,
             str(self.get_parameter("target_echo_topic").value),
             self._target_echo,
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            Range,
+            str(self.get_parameter("terminal_land_rangefinder_topic").value),
+            self._rangefinder,
             qos_profile_sensor_data,
         )
         self.create_subscription(
@@ -290,10 +376,22 @@ class GuidedExecutor(Node):
             "landing_switch_off_below_pwm": 1200,
             "landing_switch_on_above_pwm": 1800,
             "landing_switch_maximum_age_s": 0.5,
+            "terminal_land_latch_enabled": False,
+            "terminal_land_rangefinder_threshold_m": 0.15,
+            "terminal_land_inner_tag_threshold_m": 0.15,
+            "terminal_land_dwell_s": 0.4,
+            "terminal_land_evidence_maximum_age_s": 0.5,
+            "terminal_land_rangefinder_window_s": 0.5,
+            "terminal_land_rangefinder_minimum_m": 0.02,
+            "terminal_land_rangefinder_maximum_m": 8.0,
+            "terminal_land_inner_tag_id": 1,
+            "terminal_land_rangefinder_topic": "/mavros/distance_sensor/rangefinder_pub",
             "landing_request_topic": "/landing/descent_request",
-            "candidate_timeout_s": 0.4,
+            "candidate_timeout_s": 1.0,
             "owner_timeout_s": 0.5,
             "target_echo_timeout_s": 0.5,
+            "follow_dropout_grace_s": 1.0,
+            "follow_reacquire_dwell_s": 0.0,
             "target_mode": "GUIDED",
             "land_mode": "LAND",
             "rollback_mode": "LOITER",
@@ -303,8 +401,8 @@ class GuidedExecutor(Node):
             "rollback_retry_interval_s": 1.0,
             "rollback_orphaned_guided": True,
             "orphaned_guided_grace_s": 1.0,
-            "maximum_horizontal_speed_mps": 0.10,
-            "maximum_horizontal_acceleration_mps2": 0.15,
+            "maximum_horizontal_speed_mps": 0.20,
+            "maximum_horizontal_acceleration_mps2": 0.40,
             "elastic_candidate_topic": "/landing/elastic/candidate",
             "ibvs_candidate_topic": "/landing/ibvs/candidate",
             "control_owner_topic": "/landing/control_owner",
@@ -389,7 +487,36 @@ class GuidedExecutor(Node):
         except (json.JSONDecodeError, TypeError):
             return
         if bool(status.get("accepted_this_poll", False)):
-            self.tag_detected_received_s = self._now_s()
+            now_s = self._now_s()
+            self.tag_detected_received_s = now_s
+            try:
+                target_num = int(status.get("accepted_target_num"))
+                vertical_m = float(status.get("accepted_vertical_distance_m"))
+            except (TypeError, ValueError):
+                return
+            if (
+                target_num == self.terminal_land_inner_tag_id
+                and math.isfinite(vertical_m)
+                and vertical_m > 0.0
+            ):
+                self.inner_tag_received_s = now_s
+                self.inner_tag_vertical_m = vertical_m
+
+    def _rangefinder(self, message: Range) -> None:
+        distance_m = float(message.range)
+        minimum_m = float(message.min_range)
+        maximum_m = float(message.max_range)
+        sensor_healthy = bool(
+            math.isfinite(distance_m)
+            and math.isfinite(minimum_m)
+            and math.isfinite(maximum_m)
+            and minimum_m <= distance_m <= maximum_m
+        )
+        self.rangefinder_filter.update(
+            now_s=self._now_s(),
+            distance_m=distance_m,
+            sensor_healthy=sensor_healthy,
+        )
 
     def _tag_detected(self, now_s: float) -> bool:
         return bool(
@@ -496,21 +623,29 @@ class GuidedExecutor(Node):
             and now_s - self.owner_received_s <= self.owner_timeout_s
         )
 
-    def _follow_session_active(self, now_s: float, rc: RcGateResult) -> bool:
-        if not self.vehicle_state.connected or not rc.authorized or not self._owner_fresh(now_s):
+    def _follow_session_active(
+        self,
+        now_s: float,
+        rc: RcGateResult,
+        continuity: FollowContinuityResult,
+    ) -> bool:
+        if (
+            not self.vehicle_state.connected
+            or not rc.authorized
+            or not continuity.session_available
+        ):
             return False
         mode = (self.vehicle_state.mode or "UNKNOWN").upper()
         transition = self.manager.status()
         confirmed_guided_follow = bool(
-            self.owner in GUIDED_OWNERS
-            and mode == self.guided_mode
+            mode == self.guided_mode
             and transition.target_mode == self.guided_mode
             and transition.setpoint_stream_authorized
         )
         continuing_landing_session = bool(
             self.landing_switch.requested
-            and self.owner == LAND_OWNER
             and mode in {self.guided_mode, self.land_mode}
+            and transition.target_mode in {self.guided_mode, self.land_mode}
         )
         return confirmed_guided_follow or continuing_landing_session
 
@@ -521,9 +656,13 @@ class GuidedExecutor(Node):
         rc: RcGateResult,
         landing: LandingSwitchResult,
         guided_candidate,
+        continuity: FollowContinuityResult,
+        terminal_land_latched: bool,
     ) -> tuple[Optional[str], str]:
         if not self.execution_enabled:
             return None, "EXECUTION_DISABLED"
+        if terminal_land_latched:
+            return self.land_mode, "TERMINAL_LAND_LATCHED"
         transition = self.manager.status()
         connected_age_s = (
             None
@@ -535,7 +674,7 @@ class GuidedExecutor(Node):
             and transition.phase == ModeTransitionPhase.IDLE
             and self.vehicle_state.connected
             and (self.vehicle_state.mode or "UNKNOWN").upper() == self.guided_mode
-            and guided_candidate is None
+            and not continuity.keep_guided
             and connected_age_s is not None
             and connected_age_s
             >= float(self.get_parameter("orphaned_guided_grace_s").value)
@@ -552,32 +691,136 @@ class GuidedExecutor(Node):
                 return self.land_mode, "SWD_LAND_AUTHORIZED"
             # SwD OFF means resume the already-authorized follow session.  Ask
             # for GUIDED immediately; fresh setpoints remain owner-gated.
-            return self.guided_mode, f"SWD_{landing.state.value}_RESUME_GUIDED"
-        if guided_candidate is not None:
-            return self.guided_mode, "GUIDED_CANDIDATE_AUTHORIZED"
+            if continuity.keep_guided:
+                return self.guided_mode, f"SWD_{landing.state.value}_RESUME_GUIDED"
+            return None, f"SWD_{landing.state.value}_{continuity.state.value}"
+        current_mode = (self.vehicle_state.mode or "UNKNOWN").upper()
+        if (
+            landing.requested
+            and continuity.keep_guided
+            and (
+                current_mode == self.land_mode
+                or transition.target_mode == self.land_mode
+            )
+        ):
+            return self.land_mode, "LAND_TARGET_DROPOUT_GRACE"
+        if continuity.keep_guided:
+            if continuity.zero_velocity_hold:
+                return self.guided_mode, "GUIDED_SHORT_DROPOUT_ZERO_HOLD"
+            if guided_candidate is not None:
+                return self.guided_mode, "GUIDED_CANDIDATE_AUTHORIZED"
+            return self.guided_mode, "GUIDED_CONTINUITY_AUTHORIZED"
         return None, "NO_AUTHORIZED_MODE_REQUEST"
+
+    def _update_terminal_land_latch(
+        self,
+        *,
+        now_s: float,
+        current_mode: str,
+        rc: RcGateResult,
+        landing: LandingSwitchResult,
+    ) -> TerminalLandResult:
+        if not self.terminal_land_latch_enabled:
+            return self.terminal_land_latch.reset("TERMINAL_LAND_LATCH_DISABLED")
+        transition = self.manager.status()
+        land_mode_confirmed = bool(
+            current_mode == self.land_mode
+            and transition.phase == ModeTransitionPhase.ACTIVE
+            and transition.target_mode == self.land_mode
+            and transition.heartbeat_ack
+        )
+        swd_high_and_fresh = bool(
+            landing.pwm is not None
+            and landing.age_s is not None
+            and landing.age_s
+            <= float(self.get_parameter("landing_switch_maximum_age_s").value)
+            and landing.pwm
+            >= int(self.get_parameter("landing_switch_on_above_pwm").value)
+        )
+        rangefinder = self.rangefinder_filter.status(now_s)
+        inner_tag_age_s = (
+            None
+            if self.inner_tag_received_s is None
+            else max(0.0, now_s - self.inner_tag_received_s)
+        )
+        return self.terminal_land_latch.update(
+            now_s=now_s,
+            connected=bool(self.vehicle_state.connected),
+            armed=bool(self.vehicle_state.armed),
+            current_mode=current_mode,
+            land_mode_confirmed=land_mode_confirmed,
+            rc_authorized=rc.authorized,
+            rc_explicit_low=rc.state == RcGateState.ABORT,
+            swd_high_and_fresh=swd_high_and_fresh,
+            rangefinder_healthy=rangefinder.healthy,
+            rangefinder_median_m=rangefinder.median_m,
+            inner_tag_vertical_m=self.inner_tag_vertical_m,
+            inner_tag_age_s=inner_tag_age_s,
+        )
 
     def _tick(self) -> None:
         now_s = self._now_s()
         self._ensure_target_echo_interval(now_s)
         rc = self._rc_result(now_s)
         candidate, gate_reason = self._authorized_candidate(now_s, rc)
+        if candidate is not None:
+            self.last_authorized_candidate = deepcopy(candidate)
         ready_candidate, readiness_reason = self._ready_candidate_without_rc(now_s)
-        follow_session_active = self._follow_session_active(now_s, rc)
+        current_mode = (self.vehicle_state.mode or "UNKNOWN").upper()
+        transition_before = self.manager.status()
+
+        # A pilot-selected mode change is a hard session boundary.  Do not
+        # automatically fight it by requesting GUIDED again on the next tick.
+        if (
+            transition_before.phase == ModeTransitionPhase.ACTIVE
+            and transition_before.target_mode in {self.guided_mode, self.land_mode}
+            and current_mode != transition_before.target_mode
+        ):
+            self.follow_continuity.require_reacquire(
+                now_s=now_s,
+                reason="EXTERNAL_MODE_OVERRIDE_AUTO_REACQUIRE_WAIT",
+            )
+
+        landing_control_signal_fresh = bool(
+            self.landing_switch.requested
+            and self.owner == LAND_OWNER
+            and self._owner_fresh(now_s)
+            and current_mode in {self.guided_mode, self.land_mode}
+        )
+        continuity = self.follow_continuity.update(
+            now_s=now_s,
+            connected=bool(self.vehicle_state.connected),
+            rc_authorized=rc.authorized,
+            rc_explicit_low=rc.state == RcGateState.ABORT,
+            fresh_control_signal=bool(
+                candidate is not None or landing_control_signal_fresh
+            ),
+        )
+        follow_session_active = self._follow_session_active(now_s, rc, continuity)
         landing = self.landing_switch.evaluate(
             self.rc_channels,
             received_time_s=self.rc_received_s,
             now_s=now_s,
             follow_active=follow_session_active,
         )
+        self.terminal_land_result = self._update_terminal_land_latch(
+            now_s=now_s,
+            current_mode=current_mode,
+            rc=rc,
+            landing=landing,
+        )
         landing_message = Bool()
-        landing_message.data = landing.requested
+        landing_message.data = bool(
+            landing.requested or self.terminal_land_result.latched
+        )
         self.landing_request_publisher.publish(landing_message)
         desired_mode, mode_gate_reason = self._desired_mode(
             now_s=now_s,
             rc=rc,
             landing=landing,
             guided_candidate=candidate,
+            continuity=continuity,
+            terminal_land_latched=self.terminal_land_result.latched,
         )
         request = self.manager.update(
             now_s=now_s,
@@ -588,13 +831,17 @@ class GuidedExecutor(Node):
             self._dispatch_mode_request(request)
         transition = self.manager.status()
         output_candidate = None
-        output_authorized = bool(
-            candidate is not None
-            and self.execution_enabled
+        output_source = "NONE"
+        guided_stream_authorized = bool(
+            self.execution_enabled
             and transition.setpoint_stream_authorized
             and transition.target_mode == self.guided_mode
         )
-        if output_authorized:
+        if (
+            candidate is not None
+            and continuity.live_candidate_allowed
+            and guided_stream_authorized
+        ):
             output_candidate = deepcopy(candidate)
             limited_vx, limited_vy = self.horizontal_limiter.apply(
                 output_candidate.velocity.x,
@@ -603,6 +850,21 @@ class GuidedExecutor(Node):
             )
             output_candidate.velocity.x = limited_vx
             output_candidate.velocity.y = limited_vy
+            output_source = "LIVE_CANDIDATE"
+        elif continuity.zero_velocity_hold and guided_stream_authorized:
+            hold_source = self.last_setpoint_sent or self.last_authorized_candidate
+            if hold_source is not None:
+                output_candidate = deepcopy(hold_source)
+                output_candidate.velocity.x = 0.0
+                output_candidate.velocity.y = 0.0
+                output_candidate.velocity.z = 0.0
+                output_candidate.acceleration_or_force.x = 0.0
+                output_candidate.acceleration_or_force.y = 0.0
+                output_candidate.acceleration_or_force.z = 0.0
+                self.horizontal_limiter.reset()
+                output_source = "DROPOUT_ZERO_VELOCITY_HOLD"
+
+        if output_candidate is not None:
             output_candidate.header.stamp = self.get_clock().now().to_msg()
             self.preview_publisher.publish(output_candidate)
             self.actual_publisher.publish(output_candidate)
@@ -623,46 +885,58 @@ class GuidedExecutor(Node):
             and (self.vehicle_state.mode or "UNKNOWN").upper() == self.guided_mode
         )
         target_echo_fresh = self._target_echo_fresh(now_s)
-        follow_active = bool(control_active and target_echo_fresh)
-        landing_active = bool(
-            self.vehicle_state.connected
-            and self.vehicle_state.armed
-            and self._owner_fresh(now_s)
-            and self.owner == LAND_OWNER
-            and landing.requested
-            and (self.vehicle_state.mode or "UNKNOWN").upper() == self.land_mode
+        landing_requested_active = bool(
+            self.terminal_land_result.latched
+            or (
+                landing.requested
+                and continuity.keep_guided
+                and current_mode == self.land_mode
+            )
         )
         tag_detected = self._tag_detected(now_s)
-        # Do not consume the one-shot Tag event while MAVROS is unable to
-        # deliver PLAY_TUNE.  Follow tones additionally require a fresh ID 85
-        # target echo, but no longer compare echoed and commanded velocities.
-        tag_tone_ready = bool(tag_detected and self.vehicle_state.connected)
-        current_mode = (self.vehicle_state.mode or "UNKNOWN").upper()
-        exit_confirmed = bool(
-            current_mode not in {self.guided_mode, self.land_mode}
-            or (current_mode == self.land_mode and not self.vehicle_state.armed)
+        armed = bool(self.vehicle_state.armed)
+        if armed and not self.tone_previous_armed:
+            self.tag_tone_suppressed_after_land = False
+        if current_mode == self.land_mode:
+            self.tag_tone_suppressed_after_land = True
+        self.tone_previous_armed = armed
+        tone_inputs = gate_follow_tones(
+            connected=bool(self.vehicle_state.connected),
+            armed=armed,
+            current_mode=current_mode,
+            guided_mode=self.guided_mode,
+            land_mode=self.land_mode,
+            tag_detected=tag_detected,
+            control_active=control_active,
+            target_echo_fresh=target_echo_fresh,
+            landing_requested_active=landing_requested_active,
+            suppress_tag_after_land=self.tag_tone_suppressed_after_land,
         )
         tone_events = self.tone_policy.update(
-            observe_ready=tag_tone_ready,
-            follow_active=follow_active,
-            landing_active=landing_active,
-            exit_confirmed=exit_confirmed,
+            observe_ready=tone_inputs.observe_ready,
+            follow_active=tone_inputs.follow_active,
+            landing_active=tone_inputs.landing_active,
+            exit_confirmed=tone_inputs.exit_confirmed,
             now_s=now_s,
         )
         self._emit_tones(tone_events)
         self._publish_status(
             rc,
             landing,
+            continuity,
             gate_reason,
             mode_gate_reason,
             follow_session_active,
             readiness_reason,
             ready_candidate is not None,
             tag_detected,
+            tone_inputs.observe_ready,
             target_echo_fresh,
-            follow_active,
-            landing_active,
+            tone_inputs.follow_active,
+            tone_inputs.landing_active,
             tone_events,
+            output_candidate is not None,
+            output_source,
         )
 
     def _ensure_target_echo_interval(self, now_s: float) -> None:
@@ -738,35 +1012,55 @@ class GuidedExecutor(Node):
         self,
         rc: RcGateResult,
         landing: LandingSwitchResult,
+        continuity: FollowContinuityResult,
         gate_reason: str,
         mode_gate_reason: str,
         follow_session_active: bool,
         readiness_reason: str,
         observe_ready: bool,
         tag_detected: bool,
+        tag_tone_ready: bool,
         target_echo_fresh: bool,
         follow_active: bool,
         landing_active: bool,
         tone_events: tuple[FollowToneEvent, ...],
+        setpoint_transmitted: bool,
+        setpoint_source: str,
     ) -> None:
         status = self.manager.status().as_dict()
         transition = self.manager.status()
+        now_s = self._now_s()
+        rangefinder = self.rangefinder_filter.status(now_s)
+        inner_tag_age_s = (
+            None
+            if self.inner_tag_received_s is None
+            else max(0.0, now_s - self.inner_tag_received_s)
+        )
         status.update(
             {
                 "node": "GUIDED_EXECUTOR_ROS2",
                 "execution_enabled": self.execution_enabled,
-                "setpoint_transmitted": bool(
-                    self.execution_enabled
-                    and transition.setpoint_stream_authorized
-                    and transition.target_mode == self.guided_mode
-                ),
+                "setpoint_transmitted": setpoint_transmitted,
+                "setpoint_source": setpoint_source,
                 "control_owner": self.owner,
                 "candidate_gate": gate_reason,
                 "mode_gate": mode_gate_reason,
                 "follow_session_active": follow_session_active,
+                "follow_continuity_state": continuity.state.value,
+                "follow_continuity_reason": continuity.reason,
+                "follow_dropout_age_s": continuity.dropout_age_s,
+                "follow_dropout_grace_s": self.follow_dropout_grace_s,
+                "follow_zero_velocity_hold": continuity.zero_velocity_hold,
+                "follow_reacquire_pending": continuity.reacquire_pending,
+                "follow_reacquire_stable_age_s": continuity.reacquire_stable_age_s,
+                "follow_reacquire_dwell_s": self.follow_reacquire_dwell_s,
                 "observe_ready": observe_ready,
                 "readiness_reason": readiness_reason,
                 "tag_detected": tag_detected,
+                "tag_tone_ready": tag_tone_ready,
+                "tag_tone_suppressed_after_land": (
+                    self.tag_tone_suppressed_after_land
+                ),
                 "tag_detection_age_s": None
                 if self.tag_detected_received_s is None
                 else max(0.0, self._now_s() - self.tag_detected_received_s),
@@ -800,6 +1094,7 @@ class GuidedExecutor(Node):
                 "latest_sent_unix_s": self.last_setpoint_sent_wall_s,
                 "echo_minus_latest_sent_velocity_mps": self._velocity_difference(),
                 "tone_output_enabled": self.tone_output_enabled,
+                "tone_arbiter_priority": ["LAND", "FOLLOW", "TAG"],
                 "tone_transport": "MAVLINK_PLAY_TUNE_LEGACY",
                 "tone_events": [event.value for event in tone_events],
                 "tone_event_counts": dict(self.tone_event_counts),
@@ -807,7 +1102,32 @@ class GuidedExecutor(Node):
                 "follow_rc_pwm": rc.pwm,
                 "landing_switch_state": landing.state.value,
                 "landing_switch_pwm": landing.pwm,
-                "landing_requested": landing.requested,
+                "landing_requested": bool(
+                    landing.requested or self.terminal_land_result.latched
+                ),
+                "terminal_land_latch_enabled": self.terminal_land_latch_enabled,
+                "terminal_land_state": self.terminal_land_result.state.value,
+                "terminal_land_latched": self.terminal_land_result.latched,
+                "terminal_land_reason": self.terminal_land_result.reason,
+                "terminal_land_candidate_source": (
+                    self.terminal_land_result.candidate_source
+                ),
+                "terminal_land_candidate_age_s": (
+                    self.terminal_land_result.candidate_age_s
+                ),
+                "terminal_land_rangefinder_qualifies": (
+                    self.terminal_land_result.rangefinder_qualifies
+                ),
+                "terminal_land_inner_tag_qualifies": (
+                    self.terminal_land_result.inner_tag_qualifies
+                ),
+                "terminal_land_rangefinder_healthy": rangefinder.healthy,
+                "terminal_land_rangefinder_median_m": rangefinder.median_m,
+                "terminal_land_rangefinder_age_s": rangefinder.age_s,
+                "terminal_land_rangefinder_sample_count": rangefinder.sample_count,
+                "terminal_land_inner_tag_id": self.terminal_land_inner_tag_id,
+                "terminal_land_inner_tag_vertical_m": self.inner_tag_vertical_m,
+                "terminal_land_inner_tag_age_s": inner_tag_age_s,
             }
         )
         message = String()

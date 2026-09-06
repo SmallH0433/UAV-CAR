@@ -33,8 +33,8 @@
 
 ## 实机部署分支
 
-- `uav-rpi-deploy` / `uav-rpi-7.6`：无人机机载 Raspberry Pi 4B 的最小部署包。
-- `uav-pixhawk-deploy` / `uav-pixhawk-7.6`：QAV280 Pixhawk1 的固件和参数恢复包。
+- `uav-rpi-deploy` / `uav-rpi-8.3`：无人机机载 Raspberry Pi 4B 的最小部署包。
+- `uav-pixhawk-deploy` / `uav-pixhawk-8.3`：QAV280 Pixhawk1 的固件和参数恢复包。
 
 `main` 保存完整的无人机工程源码、配置与分析工具；部署分支只保留对应设备运行或恢复所需的内容。
 无人车工程独立保存在 `CAR/`，不属于上述两个无人机部署包。
