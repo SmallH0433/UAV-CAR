@@ -33,6 +33,7 @@ setup(
             "landing_target_adapter = air_ground_landing_ros2.landing_target_adapter:main",
             "simple_landing_coordinator = air_ground_landing_ros2.simple_landing_coordinator:main",
             "guided_executor = air_ground_landing_ros2.guided_executor:main",
+            "flight_status_http = air_ground_landing_ros2.flight_status_http:main",
         ]
     },
 )

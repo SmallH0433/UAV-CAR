@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, TextIO
 
-from .math3d import Matrix3, clamp, finite_vector, norm, transform_point, validate_rotation
+from .math3d import Matrix3, clamp, finite_vector, norm, transform_point, validate_rotation, rotate_by_quaternion
 from .models import (
     BridgeResult,
     LandingTargetObservation,
@@ -246,6 +246,28 @@ class LandingTargetBridge:
             quality_gate,
         )
         covariance = self._covariance(body_distance, reprojection_error)
+        orientation_q = None
+        orientation = status.get('orientation')
+        if isinstance(orientation, Mapping) and orientation.get('valid'):
+            try:
+                if orientation.get('frame') != 'BODY_FRD' or orientation.get('source') != 'PNP_TAG_TO_PAD_TO_BODY':
+                    raise ValueError('unexpected orientation frame')
+                declared = validate_rotation(orientation['rotation_camera_optical_to_body_frd'])
+                if any(abs(declared[i][j] - self.config.rotation_camera_to_body[i][j]) > 1e-6 for i in range(3) for j in range(3)):
+                    return self._reject('ORIENTATION_EXTRINSICS_MISMATCH', now_s)
+                rcp = validate_rotation(orientation['rotation_pad_to_camera'])
+                q = tuple(float(v) for v in orientation['quaternion_pad_to_body_frd_wxyz'])
+                if len(q) != 4 or not all(math.isfinite(v) for v in q) or abs(sum(v*v for v in q)-1) > 1e-5:
+                    raise ValueError('invalid orientation quaternion')
+                for column in range(3):
+                    axis = tuple(1.0 if i == column else 0.0 for i in range(3))
+                    measured = rotate_by_quaternion(axis, q)
+                    expected = tuple(sum(declared[i][k]*rcp[k][column] for k in range(3)) for i in range(3))
+                    if any(abs(measured[i]-expected[i]) > 1e-5 for i in range(3)):
+                        raise ValueError('inconsistent orientation transform')
+                orientation_q = q
+            except (KeyError, TypeError, ValueError):
+                return self._reject('INVALID_BODY_ORIENTATION', now_s)
         capture_time_s = now_s - frame_age_s
         capture_wall_usec = max(0, int(wall_time_usec) - int(frame_age_s * 1_000_000.0))
         observation = LandingTargetObservation(
@@ -262,6 +284,7 @@ class LandingTargetBridge:
             quality=quality,
             covariance_m2=covariance,
             source_sequence=sequence,
+            orientation_body_frd_wxyz=orientation_q,
         )
         self._last_observation_time_s = now_s
 
@@ -281,7 +304,11 @@ class LandingTargetBridge:
             return "VISION_NOT_IN_APRILTAG_MODE"
         if str(status.get("tag_family", "")) != self.config.tag_family:
             return "TAG_FAMILY_MISMATCH"
-        if status.get("flight_controller_connected") is not False:
+        # Explicit camera ownership is distinct from FC telemetry availability.
+        # Legacy producers must still explicitly declare no direct connection.
+        camera_owns_mavlink = status.get("camera_owns_mavlink",
+                                        status.get("flight_controller_connected"))
+        if camera_owns_mavlink is not False:
             return "CAMERA_SERVICE_MUST_NOT_OWN_MAVLINK"
         if self.config.analysis_size is not None:
             try:
@@ -345,7 +372,7 @@ class LandingTargetBridge:
             x=x,
             y=y,
             z=z,
-            q=(1.0, 0.0, 0.0, 0.0),
+            q=observation.orientation_body_frd_wxyz or (1.0, 0.0, 0.0, 0.0),
             type=LANDING_TARGET_TYPE_VISION_FIDUCIAL,
             position_valid=1,
         )

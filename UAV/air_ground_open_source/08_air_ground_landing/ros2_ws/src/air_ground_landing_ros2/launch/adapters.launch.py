@@ -59,5 +59,11 @@ def generate_launch_description():
                 output="screen",
                 parameters=[parameters],
             ),
+            Node(
+                package="air_ground_landing_ros2",
+                executable="flight_status_http",
+                name="flight_status_http",
+                output="screen",
+            ),
         ]
     )

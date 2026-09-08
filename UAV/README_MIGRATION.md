@@ -1,8 +1,10 @@
 # UAV / AprilTag 项目迁移包
 
-生成日期：2026-08-11  
-原项目路径：`D:\Codex\UAV`  
-建议恢复路径：`D:\Codex\UAV`
+更新日期：2026-09-08
+
+项目根目录：仓库中的 `UAV/`
+
+建议恢复位置：不含空格的本地工作区
 
 ## 项目目标
 
@@ -10,7 +12,7 @@
 并将 Raspberry Pi 4B、IMX296、Pixhawk、MTF-01P、NEO-M9N 与移动小车结合，
 实现无人机识别并跟随小车顶部 `tag36h11 / ID 0` AprilTag 的实验。
 
-## 新 Codex 首先阅读
+## 首次使用时先阅读
 
 1. `WINDOWS_SETUP_STATUS.md`
 2. `docs/APRILTAG_MOVING_FOLLOW_DESIGN_20260806.md`
@@ -33,8 +35,10 @@
 
 ## 实机部署分支
 
-- `uav-rpi-deploy` / `uav-rpi-8.3`：无人机机载 Raspberry Pi 4B 的最小部署包。
-- `uav-pixhawk-deploy` / `uav-pixhawk-8.3`：QAV280 Pixhawk1 的固件和参数恢复包。
+- `uav-rpi-deploy` / `uav-rpi-8.4`：无人机机载 Raspberry Pi 4B 的最小部署包。
+- `uav-pixhawk-deploy` / `uav-pixhawk-8.4`：QAV280 Pixhawk1 的固件和参数恢复包。
+
+8.4 发布线增加飞手接管后的 RC6 会话锁定、CH8 高电平下降请求、实验性 companion GUIDED 下降/普通 DISARM 策略、大小 AprilTag 的 BODY_FRD 姿态链路和网页已发送指令方向显示。硬件部署配置仍关闭实验性 companion 下降；完整实飞验收不由离线测试替代。Pixhawk 包继续使用实机日志确认的官方 ArduCopter 4.7.0，并更新为 Log 76 的 1015 项参数快照。
 
 `main` 保存完整的无人机工程源码、配置与分析工具；部署分支只保留对应设备运行或恢复所需的内容。
 无人车工程独立保存在 `CAR/`，不属于上述两个无人机部署包。

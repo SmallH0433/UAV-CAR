@@ -27,6 +27,8 @@ class LandingTargetObservation:
     quality: float
     covariance_m2: tuple[float, ...]
     source_sequence: Optional[int] = None
+    # Common pad frame -> aircraft BODY_FRD; absent for legacy position-only feeds.
+    orientation_body_frd_wxyz: Optional[Quaternion] = None
 
     @property
     def age_s(self) -> float:
@@ -118,4 +120,3 @@ class MovingPadEstimate:
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
-

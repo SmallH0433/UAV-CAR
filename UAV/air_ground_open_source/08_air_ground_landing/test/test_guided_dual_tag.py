@@ -86,6 +86,7 @@ class GuidedExecutionTests(unittest.TestCase):
             "rangefinder_median_m": 0.14,
             "inner_tag_vertical_m": None,
             "inner_tag_age_s": None,
+            "swd_explicit_low": False,
         }
         values.update(overrides)
         return values
@@ -181,8 +182,20 @@ class GuidedExecutionTests(unittest.TestCase):
         )
         self.assertTrue(still_latched.latched)
 
+        ch8_escape = latch.update(
+            now_s=2.05,
+            **self.terminal_land_inputs(
+                swd_high_and_fresh=False,
+                swd_explicit_low=True,
+            ),
+        )
+        self.assertFalse(ch8_escape.latched)
+        self.assertEqual(ch8_escape.reason, "CH8_EXPLICIT_LOW_OVERRIDE")
+
+        latch.update(now_s=2.06, **self.terminal_land_inputs())
+        latch.update(now_s=2.47, **self.terminal_land_inputs())
         escaped = latch.update(
-            now_s=2.1,
+            now_s=2.5,
             **self.terminal_land_inputs(rc_explicit_low=True),
         )
         self.assertFalse(escaped.latched)
@@ -331,7 +344,7 @@ class GuidedExecutionTests(unittest.TestCase):
             RcGateState.ABORT,
         )
 
-    def test_swd_high_requests_land_as_soon_as_follow_is_active(self):
+    def test_swd_high_requests_after_follow_is_active(self):
         gate = RcLandingRequestGate(
             LandingSwitchConfig(channel=8, maximum_age_s=0.5)
         )
@@ -355,6 +368,9 @@ class GuidedExecutionTests(unittest.TestCase):
             ).state,
             LandingSwitchState.REQUESTED,
         )
+        channels[-1] = 1100
+        gate.evaluate(channels, received_time_s=1.15, now_s=1.15, follow_active=True)
+        channels[-1] = 1900
         requested = gate.evaluate(
             channels,
             received_time_s=1.2,
