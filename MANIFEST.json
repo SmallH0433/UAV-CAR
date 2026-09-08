@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "release": "uav-pixhawk-8.3",
+  "release": "uav-pixhawk-8.4",
   "scope": "uav_pixhawk_flight_controller_only",
   "hardware": {
     "board": "Pixhawk1",
@@ -22,17 +22,17 @@
   },
   "parameters": {
     "current_snapshot": {
-      "file": "parameters/qav280-current-20260828.param",
-      "source": "DataFlash Log 67 PARM messages",
-      "captured_date": "2026-08-28",
+      "file": "parameters/qav280-current-20260908.param",
+      "source": "DataFlash Log 76 PARM messages",
+      "captured_date": "2026-09-08",
       "unique_parameters": 1015,
-      "sha256": "ce95c29f3a4b7f13c2d1bbc6f86efa77983563050744a95a6a1cf627383c4c05"
+      "sha256": "61c272c0cd19ca08dd7a2c4512a6c6f94293107fd6c421baffd9353d6095863a"
     },
     "project_settings": {
       "file": "parameters/qav280-project-settings.param",
       "parameters": 108,
       "hardware_specific_calibration_excluded": true,
-      "sha256": "7ee0d8fbe57310ab4cb3e0f8d0e3b446c02d36265d0cafcc33ab78f902c3ffac"
+      "sha256": "2f9a90a430e53bfc9ac7809e1086c4d87b376669435810f082291e803f5e4f4b"
     }
   },
   "excluded": [

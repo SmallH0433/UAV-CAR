@@ -1,6 +1,6 @@
 # UAV Pixhawk 飞控部署分支
 
-版本：`uav-pixhawk-8.3`
+版本：`uav-pixhawk-8.4`
 
 本分支只保存实际写入 QAV280 无人机 Pixhawk 飞控的固件和参数。它不包含：
 
@@ -23,9 +23,11 @@
 
 ## 参数文件
 
-### `parameters/qav280-current-20260828.param`
+### `parameters/qav280-current-20260908.param`
 
-从 2026-08-28 最新完整实机 DataFlash Log 67 的 `PARM` 消息提取，包含 1015 项当前参数。它包含当前这台 QAV280 的 IMU、罗盘、遥控器、动力和其他硬件标定值，只适合原机原飞控恢复或审计，不能直接复制到另一台飞机。
+从 2026-09-08 最新完整实机 DataFlash Log 76 的 `PARM` 消息提取，包含 1015 项当前参数。日志中的固件身份仍为 ArduCopter 4.7.0 official（ArduPilot Git `1511f271`）。它包含当前这台 QAV280 的 IMU、罗盘、遥控器、动力和其他硬件标定值，只适合原机原飞控恢复或审计，不能直接复制到另一台飞机。
+
+相对 Log 67 快照，本次纳入实际飞控中的 `BRD_SD_SLOWDOWN=5`、`PLND_OPTIONS=0`，以及气压基准、陀螺仪温漂/零偏和运行统计变化。项目级迁移参数同步将 `PLND_OPTIONS` 更新为 `0`；其余仅有 float32 文本舍入差异，108 项均已与 Log 76 快照核对。
 
 ### `parameters/qav280-project-settings.param`
 
@@ -38,7 +40,7 @@
 1. 拆除螺旋桨，备份目标飞控现有固件身份、参数和日志。
 2. 仅在确认硬件为 Pixhawk1 后，通过 Mission Planner 的自定义固件功能刷入 `.apj`。
 3. 更换飞控时，先恢复默认参数，再加载 `qav280-project-settings.param`，随后完成全部硬件标定。
-4. 只有恢复同一台飞控时，才考虑加载 `qav280-current-20260828.param`；加载前必须逐项确认硬件没有变化。
+4. 只有恢复同一台飞控时，才考虑加载 `qav280-current-20260908.param`；加载前必须逐项确认硬件没有变化。
 5. 重启后核对固件版本、机架、串口、RC、EKF、光流、测距、精准降落和失控保护；保持无桨、未解锁，直至全部预检通过。
 
 `SHA256SUMS.txt` 给出固件、参数和上游许可文件的 SHA-256，可用于下载后完整性校验。
