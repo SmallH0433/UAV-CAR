@@ -15,6 +15,99 @@ import statistics
 from typing import Iterable, Optional
 
 
+FOLLOW_ENTRY_MODES = frozenset({"ALT_HOLD", "LOITER"})
+
+
+class PilotSessionGate:
+    """Operator session, separate from retryable mode transactions.
+
+    A new session requires fresh low RC samples spanning the dwell, then high.
+    External mode changes invalidate it even between executor timer ticks.
+    """
+
+    def __init__(self, low_dwell_s: float = 0.4) -> None:
+        if not math.isfinite(low_dwell_s) or low_dwell_s <= 0:
+            raise ValueError("RC rearm dwell must be finite and positive")
+        self.low_dwell_s = low_dwell_s
+        self.enabled = False
+        self.reason = "STARTUP_REARM_REQUIRED"
+        self.session_sequence = 0
+        self.mode = None
+        self.low_since = None
+        self.low_last = None
+        self.low_ready = False
+        self.boundary = -math.inf
+        self.last_update_s: Optional[float] = None
+
+    def invalidate(self, reason: str, now_s: float) -> None:
+        self.enabled = False
+        self.reason = reason
+        self.low_since = self.low_last = None
+        self.low_ready = False
+        self.boundary = now_s
+
+    def observe_mode(self, mode: str, *, expected_mode: Optional[str], now_s: float,
+                     watch_transition: bool = False) -> bool:
+        mode = str(mode).strip().upper()
+        expected_mode = None if expected_mode is None else str(expected_mode).strip().upper()
+        override = ((self.enabled or watch_transition or self.low_since is not None)
+                    and self.mode is not None and mode != self.mode
+                    and mode != expected_mode)
+        self.mode = mode
+        if override:
+            self.invalidate("PILOT_OVERRIDE_LOCKOUT", now_s)
+        return bool(override)
+
+    def update(self, *, now_s: float, healthy: bool, rc: "RcGateResult",
+               received_s: Optional[float], entry_allowed: bool) -> bool:
+        if (not math.isfinite(now_s)
+                or (self.last_update_s is not None and now_s < self.last_update_s)):
+            self.invalidate("INVALID_CLOCK_REARM_REQUIRED",
+                            self.last_update_s if self.last_update_s is not None else 0.0)
+            return False
+        self.last_update_s = now_s
+        if not healthy or rc.state in (RcGateState.MISSING, RcGateState.STALE):
+            self.invalidate("LINK_OR_STATE_REARM_REQUIRED", now_s)
+            return False
+        if (received_s is None or not math.isfinite(received_s)
+                or not 0.0 <= now_s - received_s <= 0.5
+                or (self.low_last is not None and received_s < self.low_last)):
+            self.invalidate("INVALID_RC_TIME_REARM_REQUIRED", now_s)
+            return False
+        if rc.state == RcGateState.ABORT:
+            self.enabled = False
+            self.reason = "RC_LOW_REARMING"
+            if received_s is not None and received_s > self.boundary:
+                if self.low_last is not None and received_s - self.low_last > 0.5:
+                    self.low_since = None
+                    self.low_ready = False
+                if self.low_since is None:
+                    self.low_since = received_s
+                self.low_last = received_s
+                self.low_ready = received_s - self.low_since >= self.low_dwell_s
+            return False
+        if rc.state != RcGateState.AUTHORIZED:
+            self.invalidate("RC_NEUTRAL_REARM_REQUIRED", now_s)
+            return False
+        # The high edge itself must be new and adjacent to the verified low
+        # stream. A scheduler pause must not preserve an old authorization.
+        fresh_high_edge = (self.low_last is not None
+                           and 0.0 < received_s - self.low_last <= 0.5)
+        if not self.enabled and self.low_ready and fresh_high_edge and entry_allowed:
+            self.enabled = True
+            self.session_sequence += 1
+            self.reason = "SESSION_AUTHORIZED"
+        # An early high edge cannot be queued until the mode becomes eligible.
+        self.low_since = self.low_last = None
+        self.low_ready = False
+        return self.enabled
+
+
+def follow_mode_allowed(current_mode: str, guided_mode: str = "GUIDED", land_mode: str = "LAND") -> bool:
+    """Permit entry from pilot altitude/position hold, or continuation of follow/LAND."""
+    return str(current_mode).strip().upper() in FOLLOW_ENTRY_MODES | {guided_mode, land_mode}
+
+
 class RcGateState(str, Enum):
     MISSING = "MISSING"
     STALE = "STALE"
@@ -476,9 +569,10 @@ class TerminalLandLatch:
 
     Entry is deliberately stricter than continuation: the vehicle must already
     be armed in heartbeat-confirmed LAND with fresh RC6 authorization and a
-    fresh, high SwD request.  Once latched, vision/landing-target loss and SwD
-    changes cannot return the vehicle to GUIDED or LOITER.  Disarm, an explicit
-    RC6 low, a link loss, or a pilot-selected non-LAND mode clears the latch.
+    fresh, high SwD request.  Once latched, vision/landing-target loss does not
+    return the vehicle to GUIDED or LOITER.  Disarm, an explicit CH8 low, an
+    explicit RC6 low, a link loss, or a pilot-selected non-LAND mode clears the
+    latch.
     """
 
     def __init__(self, config: TerminalLandConfig) -> None:
@@ -511,6 +605,7 @@ class TerminalLandLatch:
         rangefinder_median_m: Optional[float],
         inner_tag_vertical_m: Optional[float],
         inner_tag_age_s: Optional[float],
+        swd_explicit_low: bool = False,
     ) -> TerminalLandResult:
         now_s = float(now_s)
         mode = str(current_mode).strip().upper()
@@ -522,6 +617,8 @@ class TerminalLandLatch:
                 return self.reset("DISARMED_LATCH_COMPLETE")
             if rc_explicit_low:
                 return self.reset("RC6_EXPLICIT_LOW_OVERRIDE")
+            if swd_explicit_low:
+                return self.reset("CH8_EXPLICIT_LOW_OVERRIDE")
             if mode != "LAND":
                 return self.reset("PILOT_MODE_OVERRIDE")
             self._last_reason = "TERMINAL_LAND_LATCHED"
@@ -640,6 +737,7 @@ class LandingSwitchResult:
     state: LandingSwitchState
     pwm: Optional[int]
     age_s: Optional[float]
+    explicit_low: bool = False
 
     @property
     def requested(self) -> bool:
@@ -647,22 +745,21 @@ class LandingSwitchResult:
 
 
 class RcLandingRequestGate:
-    """Convert a two-position SwD channel into a fail-closed descent request.
+    """Request descent on a fresh high level while follow is active.
 
-    A fresh high switch requests descent whenever follow is active.  It does
-    not require a preceding low-to-high edge, so a switch held high continues
-    to request LAND after an automatic GUIDED re-entry.  Returning the switch
-    low cancels the request without revoking the independent RC6 follow
-    authorization.
+    No preceding low/high edge is required. Low, neutral, stale RC and loss
+    of follow cancel the request; session authorization is checked upstream.
     """
 
     def __init__(self, config: LandingSwitchConfig) -> None:
         config.validate()
         self.config = config
-        self._requested = False
+        self.reset()
 
     def reset(self) -> None:
         self._requested = False
+        self._last_received_s: Optional[float] = None
+        self._last_now_s: Optional[float] = None
 
     @property
     def requested(self) -> bool:
@@ -684,9 +781,12 @@ class RcLandingRequestGate:
         if index >= len(values):
             self.reset()
             return LandingSwitchResult(LandingSwitchState.MISSING, None, None)
-        age_s = max(0.0, float(now_s) - float(received_time_s))
+        age_s = float(now_s) - float(received_time_s)
         pwm = values[index]
-        if age_s > self.config.maximum_age_s:
+        if (not math.isfinite(now_s) or not math.isfinite(received_time_s)
+                or not 0.0 <= age_s <= self.config.maximum_age_s
+                or (self._last_now_s is not None and now_s < self._last_now_s)
+                or (self._last_received_s is not None and received_time_s < self._last_received_s)):
             self.reset()
             return LandingSwitchResult(LandingSwitchState.STALE, pwm, age_s)
         if not follow_active:
@@ -695,10 +795,18 @@ class RcLandingRequestGate:
                 LandingSwitchState.FOLLOW_INACTIVE,
                 pwm,
                 age_s,
+                pwm <= self.config.off_below_pwm,
             )
+        self._last_received_s = received_time_s
+        self._last_now_s = now_s
         if pwm <= self.config.off_below_pwm:
             self._requested = False
-            return LandingSwitchResult(LandingSwitchState.READY, pwm, age_s)
+            return LandingSwitchResult(
+                LandingSwitchState.READY,
+                pwm,
+                age_s,
+                True,
+            )
         if pwm >= self.config.on_above_pwm:
             self._requested = True
             return LandingSwitchResult(LandingSwitchState.REQUESTED, pwm, age_s)
@@ -791,6 +899,21 @@ class ModeTransitionManager:
             return None
         normalized = str(value).strip().upper()
         return normalized or None
+
+    def release_to_pilot(self, current_mode: str) -> None:
+        """Cancel queued transitions and ignore their late callbacks without a rollback."""
+        self.current_mode = self._mode(current_mode) or "UNKNOWN"
+        self.desired_mode = None
+        self._reset("PILOT_MODE_NOT_FOLLOW_ELIGIBLE")
+
+    def request_is_current(self, action: ModeRequest) -> bool:
+        """A cancelled/superseded request must never reach the transport."""
+        return action.sequence == self._outstanding_sequence and (
+            (self.phase == ModeTransitionPhase.REQUESTING_TARGET
+             and not action.rollback and action.mode == self.target_mode)
+            or (self.phase == ModeTransitionPhase.REQUESTING_ROLLBACK
+                and action.rollback and action.mode == self.rollback_mode)
+        )
 
     def update(
         self,

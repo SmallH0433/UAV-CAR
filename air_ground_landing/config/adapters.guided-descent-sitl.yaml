@@ -1,0 +1,5 @@
+# Load last after the existing SITL configuration. Never load as hardware config.
+guided_executor:
+  ros__parameters:
+    environment: sitl
+    companion_descent_enabled: true

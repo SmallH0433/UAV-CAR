@@ -43,15 +43,15 @@
       "minimum_decision_margin": 20.0,
       "maximum_hamming": 3,
       "maximum_reprojection_error_px": 10.0,
-      "minimum_distance_m": 0.03,
+      "minimum_distance_m": 0.02,
       "maximum_distance_m": 8.0,
       "distance_consistency_m": 0.05
     },
     "camera_to_body": {
       "frame": "CAMERA_OPTICAL_TO_BODY_FRD",
       "rotation_camera_optical_to_body_frd": [
-        [-1.0, 0.0, 0.0],
         [0.0, -1.0, 0.0],
+        [1.0, 0.0, 0.0],
         [0.0, 0.0, 1.0]
       ],
       "translation_m": [0.0, 0.0, 0.0],
@@ -110,8 +110,8 @@
       "cx_px": 649.741100705223,
       "cy_px": 430.2853449683943,
       "rotation_camera_optical_to_body_frd": [
-        [-1.0, 0.0, 0.0],
         [0.0, -1.0, 0.0],
+        [1.0, 0.0, 0.0],
         [0.0, 0.0, 1.0]
       ]
     },

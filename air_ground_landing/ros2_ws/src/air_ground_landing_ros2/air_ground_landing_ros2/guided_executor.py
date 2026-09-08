@@ -19,9 +19,15 @@ from rclpy.qos import (
     qos_profile_sensor_data,
 )
 from sensor_msgs.msg import Range
+from geometry_msgs.msg import PoseStamped, TwistStamped
+from mavros_msgs.msg import ExtendedState
+from air_ground_landing.guided_descent import GuidedDescent, DescentInput
+from air_ground_landing.landing_disarm import LandingDisarm, LandingEvidence
 from std_msgs.msg import Bool, String
 
 from air_ground_landing.guided_execution import (
+    follow_mode_allowed,
+    PilotSessionGate,
     FollowContinuityConfig,
     FollowContinuityGuard,
     FollowContinuityResult,
@@ -70,6 +76,27 @@ class GuidedExecutor(Node):
         super().__init__("guided_executor")
         self._declare_parameters()
         environment = str(self.get_parameter("environment").value).lower()
+        self.companion_descent = bool(self.get_parameter("companion_descent_enabled").value)
+        hardware_observe_only = environment == "hardware" and not any(
+            bool(self.get_parameter(name).value) for name in (
+                "flight_use_approved", "allow_mode_change", "allow_setpoint_output"))
+        hardware_approved = environment == "hardware" and bool(
+            self.get_parameter("flight_use_approved").value)
+        if (self.companion_descent and environment != "sitl"
+                and not hardware_observe_only and not hardware_approved):
+            raise ValueError("Companion hardware descent requires explicit flight_use_approved")
+        self.pilot_session = PilotSessionGate()
+        self.descent_policy = GuidedDescent()
+        self.landing_disarm = LandingDisarm()
+        self.disarm_future = None
+        self.disarm_sent_s = None
+        self.disarm_status = "INACTIVE"
+        self.descent_source_stamps = {}
+        self.descent_telemetry = {}
+        self.descent_last_candidate_s = None
+        self.descent_stream_index = 0
+        self.descent_stream_next_s = 0.0
+        self.descent_stream_pending = None
         if environment not in ("offline", "sitl", "hardware"):
             raise ValueError("environment must be offline, sitl or hardware")
         flight_approved = bool(self.get_parameter("flight_use_approved").value)
@@ -359,10 +386,19 @@ class GuidedExecutor(Node):
             self._tag_detection_status,
             qos_profile_sensor_data,
         )
+        self.create_subscription(PoseStamped, "/mavros/local_position/pose",
+                                 lambda m: self._descent_observe("pose", m), qos_profile_sensor_data)
+        self.create_subscription(TwistStamped, "/mavros/local_position/velocity_local",
+                                 lambda m: self._descent_observe("velocity", m), qos_profile_sensor_data)
+        self.create_subscription(ExtendedState, "/mavros/extended_state",
+                                 lambda m: self._descent_observe("extended", m), qos_profile_sensor_data)
+        self.create_subscription(String, "/landing/ibvs/status",
+                                 lambda m: self._descent_observe("vision", m), 10)
         self.create_timer(0.05, self._tick)
 
     def _declare_parameters(self) -> None:
         defaults = {
+            "companion_descent_enabled": False,
             "environment": "offline",
             "flight_use_approved": False,
             "allow_mode_change": False,
@@ -449,8 +485,24 @@ class GuidedExecutor(Node):
         self.owner_received_s = self._now_s()
 
     def _vehicle_state(self, message: State) -> None:
+        self._descent_observe("state", message)
         was_connected = bool(self.vehicle_state.connected)
         self.vehicle_state = message
+        transition = self.manager.status()
+        expected = None
+        if transition.phase in (ModeTransitionPhase.REQUESTING_TARGET,
+                                ModeTransitionPhase.WAITING_TARGET_HEARTBEAT):
+            expected = transition.target_mode
+        elif transition.phase in (ModeTransitionPhase.REQUESTING_ROLLBACK,
+                                  ModeTransitionPhase.WAITING_ROLLBACK_HEARTBEAT):
+            expected = transition.rollback_mode
+        override = self.pilot_session.observe_mode(
+            message.mode, expected_mode=expected, now_s=self._now_s(),
+            watch_transition=transition.target_mode is not None)
+        if override or not message.connected or not message.armed:
+            if not override:
+                self.pilot_session.invalidate("DISCONNECTED_OR_DISARMED", self._now_s())
+            self.manager.release_to_pilot(message.mode)
         if message.connected and not was_connected:
             self.connected_since_s = self._now_s()
             self.target_echo_interval_pending = False
@@ -465,6 +517,31 @@ class GuidedExecutor(Node):
     def _rc(self, message: RCIn) -> None:
         self.rc_channels = tuple(int(value) for value in message.channels)
         self.rc_received_s = self._now_s()
+        # Observe every switch sample, including pulses between control ticks.
+        # This updates authorization only; mode actions remain in the tick.
+        rc = self._session_rc(self.rc_received_s)
+        self._landing_rc(self.rc_received_s, rc)
+
+    def _landing_rc(self, now_s: float, rc: RcGateResult,
+                    follow_active: Optional[bool] = None) -> LandingSwitchResult:
+        transition = self.manager.status()
+        mode = (self.vehicle_state.mode or "UNKNOWN").upper()
+        guided = bool(transition.setpoint_stream_authorized
+                      and transition.target_mode == self.guided_mode
+                      and mode == self.guided_mode)
+        # Preserve only a previously confirmed request during our LAND handover.
+        continuing_land = bool(self.landing_switch.requested
+            and transition.target_mode == self.land_mode
+            and mode in {self.guided_mode, self.land_mode}
+            and transition.phase in {ModeTransitionPhase.ACTIVE,
+                ModeTransitionPhase.REQUESTING_TARGET,
+                ModeTransitionPhase.WAITING_TARGET_HEARTBEAT})
+        active = bool(self.pilot_session.enabled and rc.authorized
+                      and (guided or continuing_land)
+                      and follow_active is not False)
+        return self.landing_switch.evaluate(
+            self.rc_channels, received_time_s=self.rc_received_s, now_s=now_s,
+            follow_active=active)
 
     def _target_echo(self, message: PositionTarget) -> None:
         now_s = self._now_s()
@@ -536,6 +613,8 @@ class GuidedExecutor(Node):
     def _authorized_candidate(self, now_s: float, rc: RcGateResult):
         if not self.vehicle_state.connected:
             return None, "MAVROS_DISCONNECTED"
+        if not follow_mode_allowed(self.vehicle_state.mode, self.guided_mode, self.land_mode):
+            return None, "PILOT_MODE_NOT_FOLLOW_ELIGIBLE"
         if self.owner_received_s is None or now_s - self.owner_received_s > self.owner_timeout_s:
             return None, "CONTROL_OWNER_STALE"
         if self.owner not in GUIDED_OWNERS:
@@ -558,7 +637,7 @@ class GuidedExecutor(Node):
         if self.owner not in GUIDED_OWNERS:
             return None, f"OWNER_{self.owner}_NOT_GUIDED"
         mode = (self.vehicle_state.mode or "UNKNOWN").upper()
-        if mode not in self.ready_entry_modes:
+        if mode not in self.ready_entry_modes or not follow_mode_allowed(mode, self.guided_mode, self.land_mode):
             return None, f"MODE_{mode}_NOT_READY"
         entry = self.candidates.get(self.owner)
         if entry is None:
@@ -661,9 +740,24 @@ class GuidedExecutor(Node):
     ) -> tuple[Optional[str], str]:
         if not self.execution_enabled:
             return None, "EXECUTION_DISABLED"
+        if not self.pilot_session.enabled:
+            return None, self.pilot_session.reason
+        if not follow_mode_allowed(self.vehicle_state.mode, self.guided_mode, self.land_mode):
+            return None, "PILOT_MODE_NOT_FOLLOW_ELIGIBLE"
+        transition = self.manager.status()
+        current_mode = (self.vehicle_state.mode or "UNKNOWN").upper()
+        if (
+            landing.explicit_low
+            and (
+                current_mode == self.land_mode
+                or transition.target_mode == self.land_mode
+            )
+        ):
+            if continuity.keep_guided:
+                return self.guided_mode, "CH8_EXPLICIT_LOW_RESUME_GUIDED"
+            return None, "CH8_EXPLICIT_LOW_EXIT_LAND"
         if terminal_land_latched:
             return self.land_mode, "TERMINAL_LAND_LATCHED"
-        transition = self.manager.status()
         connected_age_s = (
             None
             if self.connected_since_s is None
@@ -694,7 +788,6 @@ class GuidedExecutor(Node):
             if continuity.keep_guided:
                 return self.guided_mode, f"SWD_{landing.state.value}_RESUME_GUIDED"
             return None, f"SWD_{landing.state.value}_{continuity.state.value}"
-        current_mode = (self.vehicle_state.mode or "UNKNOWN").upper()
         if (
             landing.requested
             and continuity.keep_guided
@@ -756,31 +849,47 @@ class GuidedExecutor(Node):
             rangefinder_median_m=rangefinder.median_m,
             inner_tag_vertical_m=self.inner_tag_vertical_m,
             inner_tag_age_s=inner_tag_age_s,
+            swd_explicit_low=landing.explicit_low,
         )
 
+    def _session_rc(self, now_s: float) -> RcGateResult:
+        rc = self._rc_result(now_s)
+        state_entry = self.descent_telemetry.get("state")
+        healthy = bool(self.execution_enabled and state_entry
+                       and 0 <= now_s - state_entry[1] <= 2.0
+                       and self.vehicle_state.connected and self.vehicle_state.armed)
+        allowed = self.pilot_session.update(
+            now_s=now_s, healthy=healthy, rc=rc, received_s=self.rc_received_s,
+            entry_allowed=(self.vehicle_state.mode.upper() in {"ALT_HOLD", "LOITER"}
+                           and self.manager.phase == ModeTransitionPhase.IDLE))
+        if not healthy:
+            self.manager.release_to_pilot(self.vehicle_state.mode)
+        if not allowed:
+            self.landing_switch.reset()
+            self.terminal_land_result = self.terminal_land_latch.reset("SESSION_NOT_AUTHORIZED")
+            self.follow_continuity.reset_from_explicit_rc_low()
+            self.last_authorized_candidate = None
+            self.horizontal_limiter.reset()
+        return rc if allowed else RcGateResult(RcGateState.ABORT, rc.pwm, rc.age_s)
+
     def _tick(self) -> None:
+        if self.companion_descent:
+            self._tick_companion_descent()
+            return
         now_s = self._now_s()
         self._ensure_target_echo_interval(now_s)
-        rc = self._rc_result(now_s)
+        rc = self._session_rc(now_s)
         candidate, gate_reason = self._authorized_candidate(now_s, rc)
         if candidate is not None:
             self.last_authorized_candidate = deepcopy(candidate)
         ready_candidate, readiness_reason = self._ready_candidate_without_rc(now_s)
         current_mode = (self.vehicle_state.mode or "UNKNOWN").upper()
-        transition_before = self.manager.status()
-
-        # A pilot-selected mode change is a hard session boundary.  Do not
-        # automatically fight it by requesting GUIDED again on the next tick.
-        if (
-            transition_before.phase == ModeTransitionPhase.ACTIVE
-            and transition_before.target_mode in {self.guided_mode, self.land_mode}
-            and current_mode != transition_before.target_mode
-        ):
-            self.follow_continuity.require_reacquire(
-                now_s=now_s,
-                reason="EXTERNAL_MODE_OVERRIDE_AUTO_REACQUIRE_WAIT",
-            )
-
+        if not follow_mode_allowed(current_mode, self.guided_mode, self.land_mode):
+            # The session gate requires a fresh RC6 low/high cycle before reentry.
+            self.manager.release_to_pilot(current_mode)
+            self.follow_continuity.reset_from_explicit_rc_low()
+            self.last_authorized_candidate = None
+            self.horizontal_limiter.reset()
         landing_control_signal_fresh = bool(
             self.landing_switch.requested
             and self.owner == LAND_OWNER
@@ -797,12 +906,7 @@ class GuidedExecutor(Node):
             ),
         )
         follow_session_active = self._follow_session_active(now_s, rc, continuity)
-        landing = self.landing_switch.evaluate(
-            self.rc_channels,
-            received_time_s=self.rc_received_s,
-            now_s=now_s,
-            follow_active=follow_session_active,
-        )
+        landing = self._landing_rc(now_s, rc, follow_session_active)
         self.terminal_land_result = self._update_terminal_land_latch(
             now_s=now_s,
             current_mode=current_mode,
@@ -834,6 +938,8 @@ class GuidedExecutor(Node):
         output_source = "NONE"
         guided_stream_authorized = bool(
             self.execution_enabled
+            and self.pilot_session.enabled
+            and rc.authorized
             and transition.setpoint_stream_authorized
             and transition.target_mode == self.guided_mode
         )
@@ -939,6 +1045,210 @@ class GuidedExecutor(Node):
             output_source,
         )
 
+    def _descent_observe(self, key, message):
+        # Replayed/duplicated ROS samples must not refresh safety evidence.
+        if hasattr(message, "header"):
+            stamp = message.header.stamp.sec * 1000000000 + message.header.stamp.nanosec
+            if stamp <= self.descent_source_stamps.get(key, -1):
+                return
+            self.descent_source_stamps[key] = stamp
+        self.descent_telemetry[key] = (message, self._now_s())
+
+    def _tick_companion_descent(self):
+        """Experimental single-writer path; gated ordinary DISARM, never LAND."""
+        now = self._now_s()
+        # These streams are not enabled by default on every MAVLink port.
+        # Missing ACK/data remains a hold; never manufacture a landed state.
+        # Telemetry acquisition is independent of actuator authorization.
+        # Observation-only hardware must also receive evidence after restart.
+        if (self.vehicle_state.connected
+                and now >= self.descent_stream_next_s
+                and (self.descent_stream_pending is None or self.descent_stream_pending.done())
+                and self.command_client.service_is_ready()):
+            request = CommandLong.Request()
+            request.command = MAV_CMD_SET_MESSAGE_INTERVAL
+            request.param1 = float((32, 30, 245, 65, 132)[self.descent_stream_index % 5])
+            request.param2 = 100000.0
+            self.descent_stream_pending = self.command_client.call_async(request)
+            self.descent_stream_index += 1
+            self.descent_stream_next_s = now + 1.0 if self.descent_stream_index < 5 else now + 10.0
+        def fresh(key, maximum=.3):
+            entry = self.descent_telemetry.get(key)
+            return entry[0] if entry and 0 <= now-entry[1] <= maximum else None
+        state = fresh("state", 2.0)
+        rc = self._session_rc(now)
+        mode = (self.vehicle_state.mode or "UNKNOWN").upper()
+        authorized = bool(self.execution_enabled and state is not None
+                          and state.connected and state.armed and rc.authorized
+                          and mode in {"ALT_HOLD", "LOITER", self.guided_mode})
+        if not authorized:
+            # Preserve owned GUIDED transitions on RC/telemetry withdrawal so
+            # update(desired_mode=None) can actually request the rollback.
+            # A pilot-selected manual mode must never be fought by rollback.
+            if (not self.execution_enabled or not self.vehicle_state.connected
+                    or not self.vehicle_state.armed
+                    or mode not in {"ALT_HOLD", "LOITER", self.guided_mode}):
+                self.manager.release_to_pilot(mode)
+            self.descent_policy.reset()
+            self.horizontal_limiter.reset()
+            self.descent_last_candidate_s = None
+        candidate, _ = self._authorized_candidate(now, rc)
+        # This path uses only the image-based controller, not elastic guidance.
+        entry = self.candidates.get("IBVS_GUIDED")
+        tag_fresh = bool(candidate is not None and self.owner == "IBVS_GUIDED"
+                         and entry and 0 <= now-entry[1] <= .3)
+        if tag_fresh:
+            self.descent_last_candidate_s = now
+        transition = self.manager.status()
+        confirmed = bool(transition.setpoint_stream_authorized
+                         and transition.target_mode == self.guided_mode and mode == self.guided_mode)
+        landing = self._landing_rc(now, rc, authorized and confirmed)
+        # Keep coordinator on IBVS: CH8 is consumed here, not as native LAND ownership.
+        request_message = Bool()
+        request_message.data = False
+        self.landing_request_publisher.publish(request_message)
+        pose, velocity, extended, vision = (fresh("pose"), fresh("velocity"),
+                                           fresh("extended", 2.0), fresh("vision"))
+        yaw, tilt, speed = math.nan, math.nan, math.nan
+        if pose is not None:
+            q = pose.pose.orientation
+            norm = math.sqrt(q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w)
+            if math.isfinite(norm) and .9 <= norm <= 1.1:
+                x,y,z,w = q.x/norm,q.y/norm,q.z/norm,q.w/norm
+                yaw = math.atan2(2*(w*z+x*y), 1-2*(y*y+z*z))
+                tilt = math.degrees(math.acos(max(-1., min(1., 1-2*(x*x+y*y)))))
+        if velocity is not None:
+            v = velocity.twist.linear
+            speed = math.hypot(v.x, v.y)
+        aligned = False
+        if vision is not None:
+            try:
+                data = json.loads(vision.data)
+                aligned = data.get("healthy") is True and data.get("aligned") is True
+                tag_fresh = tag_fresh and data.get("healthy") is True
+            except (ValueError, AttributeError):
+                tag_fresh = False
+        else:
+            tag_fresh = False
+        rf = self.rangefinder_filter.status(now)
+        # This gate is independent of the descent policy's sticky landed flag.
+        # It demands current ON_GROUND and new telemetry for both confirmations.
+        if state is not None and state.armed and self.disarm_status == "DISARM_CONFIRMED":
+            # New externally armed flight; this adapter never sends an ARM request.
+            self.landing_disarm.reset()
+            self.disarm_sent_s = None
+            self.disarm_future = None
+            self.disarm_status = "INACTIVE"
+        def sample_time(key):
+            return self.descent_telemetry.get(key, (None, -1.))[1]
+        disarm_evidence = LandingEvidence(
+            now=now, active=bool(authorized and confirmed and landing.requested
+                                and self.rc_channels and len(self.rc_channels) >= 3
+                                and 900 <= self.rc_channels[2] <= 1550),
+            armed=bool(state and state.armed),
+            airborne=bool(extended and extended.landed_state == ExtendedState.LANDED_STATE_IN_AIR),
+            terminal=self.descent_policy.terminal_since is not None,
+            landed=bool(extended and extended.landed_state == ExtendedState.LANDED_STATE_ON_GROUND),
+            fresh=bool(fresh("pose", .5) and fresh("velocity", .5)
+                       and fresh("extended", .5) and state and rf.healthy),
+            heartbeat=sample_time("state"), extended=sample_time("extended"),
+            pose=sample_time("pose"), velocity=sample_time("velocity"),
+            range_m=rf.median_m if rf.median_m is not None else math.nan,
+            horizontal_mps=speed, vertical_mps=velocity.twist.linear.z if velocity else math.nan,
+            tilt_deg=tilt)
+        send_disarm = self.landing_disarm.update(disarm_evidence)
+        if self.disarm_sent_s is None:
+            self.disarm_status = self.landing_disarm.reason
+        if send_disarm and self.disarm_sent_s is None:
+            if self.command_client.service_is_ready():
+                request = CommandLong.Request()
+                request.command = 400  # MAV_CMD_COMPONENT_ARM_DISARM
+                request.param1 = 0.0
+                request.param2 = 0.0  # ordinary request, NEVER force (21196)
+                self.disarm_sent_s = now
+                try:
+                    self.disarm_future = self.command_client.call_async(request)
+                    self.disarm_status = "REQUESTED_WAIT_ARMED_FALSE"
+                except Exception as exc:
+                    self.disarm_status = "SEND_FAILED_OPERATOR_REQUIRED"
+                    self.get_logger().error(f"Ordinary DISARM transport failed: {exc}")
+            else:
+                self.disarm_status = "SERVICE_UNAVAILABLE_OPERATOR_REQUIRED"
+        if self.disarm_sent_s is not None:
+            if state is not None and not state.armed and sample_time("state") > self.disarm_sent_s:
+                self.disarm_status = "DISARM_CONFIRMED"
+            elif self.disarm_future is not None and self.disarm_future.done():
+                try:
+                    response = self.disarm_future.result()
+                    self.disarm_status = ("ACK_ACCEPTED_WAIT_ARMED_FALSE" if response.success
+                                          else "REJECTED_OPERATOR_REQUIRED")
+                except Exception:
+                    self.disarm_status = "ACK_FAILED_OPERATOR_REQUIRED"
+                self.disarm_future = None
+            if now-self.disarm_sent_s > 3.0 and self.disarm_status in {
+                    "REQUESTED_WAIT_ARMED_FALSE", "ACK_ACCEPTED_WAIT_ARMED_FALSE"}:
+                self.disarm_status = "CONFIRM_TIMEOUT_OPERATOR_REQUIRED"
+        result = self.descent_policy.update(DescentInput(
+            now=now, authorized=authorized, armed=bool(state and state.armed),
+            guided_confirmed=confirmed, requested=landing.requested,
+            landed=bool(extended and extended.landed_state == ExtendedState.LANDED_STATE_ON_GROUND),
+            telemetry_fresh=pose is not None and velocity is not None and extended is not None,
+            range_m=rf.median_m if rf.median_m is not None else math.nan,
+            range_fresh=rf.healthy, tag_fresh=tag_fresh, aligned=aligned,
+            horizontal_speed=speed, tilt_deg=tilt))
+        terminal_owned = self.descent_policy.terminal_since is not None or self.descent_policy.completed
+        recent = self.descent_last_candidate_s is not None and now-self.descent_last_candidate_s <= 1.0
+        desired = self.guided_mode if authorized and (tag_fresh or recent or terminal_owned) else None
+        action = self.manager.update(now_s=now, current_mode=mode, desired_mode=desired)
+        if action is not None:
+            self._dispatch_mode_request(action)
+        can_send = authorized and self.manager.status().setpoint_stream_authorized and mode == self.guided_mode
+        transmitted = False
+        if can_send:
+            target = PositionTarget()
+            target.coordinate_frame = PositionTarget.FRAME_LOCAL_NED
+            target.type_mask = (PositionTarget.IGNORE_PX | PositionTarget.IGNORE_PY |
+                PositionTarget.IGNORE_PZ | PositionTarget.IGNORE_AFX | PositionTarget.IGNORE_AFY |
+                PositionTarget.IGNORE_AFZ | PositionTarget.IGNORE_YAW | PositionTarget.IGNORE_YAW_RATE)
+            track = (tag_fresh and (result.track_tag or not landing.requested)
+                     and math.isfinite(yaw) and velocity is not None
+                     and all(math.isfinite(v) for v in (
+                         velocity.twist.linear.x, velocity.twist.linear.y,
+                         velocity.twist.linear.z)))
+            if track and all(math.isfinite(v) for v in (candidate.velocity.x, candidate.velocity.y)):
+                # MAVROS ROS input is ENU/FLU; MAVROS converts LOCAL_NED on the wire.
+                vx,vy = candidate.velocity.x,candidate.velocity.y
+                east,north = math.cos(yaw)*vx-math.sin(yaw)*vy, math.sin(yaw)*vx+math.cos(yaw)*vy
+                target.velocity.x,target.velocity.y = self.horizontal_limiter.apply(east,north,now_s=now)
+            else:
+                self.horizontal_limiter.reset()
+            target.velocity.z = result.up_mps
+            target.header.stamp = self.get_clock().now().to_msg()
+            self.actual_publisher.publish(target)
+            self.preview_publisher.publish(target)
+            self.last_setpoint_sent = deepcopy(target)
+            self.last_setpoint_sent_s = now
+            self.last_setpoint_sent_wall_s = time.time()
+            transmitted = True
+        status = String()
+        status.data = json.dumps({"node":"GUIDED_EXECUTOR_ROS2", "descent_backend":"COMPANION_GUIDED_EXPERIMENTAL",
+            "mode":mode, "descent_phase":result.phase, "landing_requested":landing.requested,
+            "landing_switch_state":landing.state.value, "landing_switch_pwm":landing.pwm,
+            "disarm_status":self.disarm_status,
+            "execution_enabled":self.execution_enabled,
+            "pilot_session_authorized":self.pilot_session.enabled,
+            "pilot_session_reason":self.pilot_session.reason,
+            "pilot_session_sequence":self.pilot_session.session_sequence,
+            "disarm_confirmation_s":0.5,
+            "descent_up_mps":result.up_mps, "terminal_descent":result.terminal,
+            "pose_fresh":pose is not None, "velocity_fresh":velocity is not None,
+            "extended_fresh":extended is not None, "range_healthy":rf.healthy,
+            "range_m":rf.median_m, "tilt_deg":tilt if math.isfinite(tilt) else None,
+            "horizontal_speed_mps":speed if math.isfinite(speed) else None,
+            "control_owner":self.owner, "setpoint_transmitted":transmitted,
+            "mode_gate":self.manager.status().reason})
+        self.status_publisher.publish(status)
+
     def _ensure_target_echo_interval(self, now_s: float) -> None:
         if (
             not self.vehicle_state.connected
@@ -979,6 +1289,10 @@ class GuidedExecutor(Node):
         future.add_done_callback(completed)
 
     def _dispatch_mode_request(self, action: ModeRequest) -> None:
+        if not self.manager.request_is_current(action):
+            return
+        if not action.rollback and not self.pilot_session.enabled:
+            return
         if not self.execution_enabled or not self.mode_client.service_is_ready():
             followup = self.manager.on_service_result(
                 sequence=action.sequence,
@@ -1040,6 +1354,9 @@ class GuidedExecutor(Node):
             {
                 "node": "GUIDED_EXECUTOR_ROS2",
                 "execution_enabled": self.execution_enabled,
+                "pilot_session_authorized": self.pilot_session.enabled,
+                "pilot_session_reason": self.pilot_session.reason,
+                "pilot_session_sequence": self.pilot_session.session_sequence,
                 "setpoint_transmitted": setpoint_transmitted,
                 "setpoint_source": setpoint_source,
                 "control_owner": self.owner,

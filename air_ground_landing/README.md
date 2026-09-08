@@ -36,7 +36,7 @@ landing-target-bridge \
 
 ROS 2 Humble 适配包位于 `ros2_ws/src/air_ground_landing_ros2`。它以标准 `MultiDOFJointTrajectory` 接收 Elastic 轨迹，从 OV9281 状态生成 IBVS 水平速度候选，并通过带 HEARTBEAT ACK、超时回滚和 RC 授权门的唯一执行器连接 MAVROS。默认只发布 preview，不会切模式或写飞控。
 
-遥控职责固定为：`CH5` 是 ArduPilot 飞行模式通道；`CH6` 开启或关闭跟飞；`CH7` 选择 EKF 定位源（低位光流，中/高位 GPS）；`CH8/SwD` 是独立下降开关。只有飞控 HEARTBEAT 已确认处于 GUIDED 跟飞，且 SwD 在该次跟飞中先回到低位再拨到高位，才发布下降请求。SwD 关闭会取消下降并返回速度匹配/定高跟飞；CH6 关闭则撤销整套自动控制。CH6 与 CH8 只由伴随计算机读取原始 PWM，CH7 由 ArduPilot `RC7_OPTION=90` 选择已经配置好的 EKF 源组。
+遥控职责固定为：`CH5` 是 ArduPilot 飞行模式通道；`CH6` 开启或关闭跟飞；`CH7` 选择 EKF 定位源（低位光流，中/高位 GPS）；`CH8/SwD` 是独立下降开关。启动或飞手接管后，CH6 必须先保持低位并连续收到至少跨越 0.4 秒的新鲜样本，再拨到高位建立自动会话；只有飞控 HEARTBEAT 已确认处于 GUIDED 跟飞且会话仍有效时，新鲜 CH8 高位才发布下降请求。CH8 低位或中立会取消下降，CH6 关闭则撤销整套自动控制。外部模式变化会立即锁定自动会话，持续高位不能抢回 GUIDED。CH6 与 CH8 只由伴随计算机读取原始 PWM，CH7 由 ArduPilot `RC7_OPTION=90` 选择已经配置好的 EKF 源组。
 
 ## 离线/SITL联合回放
 

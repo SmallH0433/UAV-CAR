@@ -140,8 +140,8 @@ class LandingTargetBridgeTests(unittest.TestCase):
         self.assertIsNotNone(result.packet)
         self.assertEqual(result.packet.frame, MAV_FRAME_BODY_FRD)
         self.assertEqual(result.packet.position_valid, 1)
-        self.assertAlmostEqual(result.observation.position_body_frd_m[0], -0.10)
-        self.assertAlmostEqual(result.observation.position_body_frd_m[1], 0.05)
+        self.assertAlmostEqual(result.observation.position_body_frd_m[0], 0.05)
+        self.assertAlmostEqual(result.observation.position_body_frd_m[1], 0.10)
         self.assertAlmostEqual(result.observation.position_body_frd_m[2], 0.65)
 
         stale = bridge.process_status(
@@ -250,7 +250,7 @@ class MovingPadEstimatorTests(unittest.TestCase):
         self.assertEqual(set(estimate.sources), {"APRILTAG", "UGV_ODOMETRY"})
         self.assertGreater(estimate.quality, 0.5)
         self.assertAlmostEqual(estimate.velocity_ned_mps[0], 0.1, places=2)
-        self.assertLess(abs(estimate.position_ned_m[0] - 0.91), 0.08)
+        self.assertLess(abs(estimate.position_ned_m[0] - 0.99), 0.08)
 
 
 class HybridGuidanceTests(unittest.TestCase):

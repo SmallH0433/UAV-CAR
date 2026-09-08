@@ -18,8 +18,8 @@ guided_executor:
     rc_channel: 6
     landing_switch_channel: 8
     terminal_land_latch_enabled: true
-    terminal_land_rangefinder_threshold_m: 0.15
-    terminal_land_inner_tag_threshold_m: 0.15
+    terminal_land_rangefinder_threshold_m: 0.10
+    terminal_land_inner_tag_threshold_m: 0.10
     terminal_land_dwell_s: 0.4
     terminal_land_evidence_maximum_age_s: 0.5
     terminal_land_rangefinder_window_s: 0.5

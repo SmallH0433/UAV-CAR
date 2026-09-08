@@ -65,6 +65,8 @@ class FollowContinuityTests(unittest.TestCase):
             ).state,
             LandingSwitchState.READY,
         )
+        # Real RC continues while only the visual candidate is in grace.
+        landing.evaluate(channels, received_time_s=0.3, now_s=0.3, follow_active=True)
         grace = self.update(0.6, fresh=False)
         channels[-1] = 1900
         self.assertEqual(
@@ -77,7 +79,7 @@ class FollowContinuityTests(unittest.TestCase):
             LandingSwitchState.REQUESTED,
         )
 
-    def test_swd_high_requests_immediately_when_follow_becomes_active(self):
+    def test_swd_high_requests_after_follow_becomes_active(self):
         landing = RcLandingRequestGate(LandingSwitchConfig(channel=8))
         channels = [1500] * 7 + [1900]
         self.assertEqual(
