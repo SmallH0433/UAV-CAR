@@ -43,6 +43,43 @@ class GuidedLandTests(unittest.TestCase):
         self.assertEqual(command.desired_mode, "LAND")
         self.assertIsNone(command.velocity_enu)
 
+    def test_unusable_tag_pose_cannot_block_near_ground_handoff(self):
+        self.executor.tick(flight(.2, landing_alignment_fresh=False))
+        status, command = self.executor.tick(flight(
+            .4, range_m=.10, landing_alignment_fresh=False))
+        self.assertEqual(status.detail, "GUIDED_DESCENT_COMPLETE_REQUEST_LAND")
+        self.assertEqual(command.desired_mode, "LAND")
+        self.assertEqual(self.executor.land_phase, "HYBRID_LAND_COMMITTED")
+        status, command = self.executor.tick(flight(
+            1.4, range_fresh=False, landing_alignment_fresh=False))
+        self.assertEqual(command.desired_mode, "LAND")
+        self.assertEqual(status.state, ActionState.RUNNING)
+
+    def test_brief_stale_pose_does_not_abandon_guided_landing(self):
+        self.executor.tick(flight(.2))
+        status, command = self.executor.tick(flight(.3, telemetry_fresh=False))
+        self.assertEqual(status.detail, "FLIGHT_TELEMETRY_GRACE_HOLD")
+        self.assertEqual(status.state, ActionState.RUNNING)
+        self.assertIsNone(command)
+        status, command = self.executor.tick(flight(.6))
+        self.assertEqual(status.detail, "GUIDED_TRACK_DESCENT")
+        self.assertLess(command.velocity_enu[2], 0)
+
+    def test_sustained_stale_pose_still_fails_above_handoff(self):
+        self.executor.tick(flight(.2, telemetry_fresh=False))
+        status, command = self.executor.tick(flight(1.21, telemetry_fresh=False))
+        self.assertEqual(status.reason, "FLIGHT_TELEMETRY_LOST")
+        self.assertEqual(status.state, ActionState.FAILED)
+        self.assertIsNone(command)
+
+    def test_stale_pose_at_handoff_still_requests_native_land(self):
+        status, command = self.executor.tick(flight(
+            .2, range_m=.10, telemetry_fresh=False,
+            landing_alignment_fresh=False))
+        self.assertEqual(status.state, ActionState.RUNNING)
+        self.assertEqual(command.desired_mode, "LAND")
+        self.assertIsNone(command.velocity_enu)
+
     def test_loss_immediately_stops_all_velocity_then_resumes_guided_descent(self):
         self.executor.tick(flight(.2))
         status, command = self.executor.tick(flight(.3, candidate_fresh=False))
@@ -128,6 +165,29 @@ class GuidedLandTests(unittest.TestCase):
         status, command = self.executor.tick(flight(.2, mode="LAND", landed=True))
         self.assertEqual(status.state, ActionState.RUNNING)
         self.assertEqual(status.detail, "LANDED_WAIT_DISARM")
+        self.assertTrue(command.request_disarm)
+
+    def test_fcu_ground_report_requests_land_before_normal_disarm(self):
+        status, command = self.executor.tick(flight(
+            .2, mode="GUIDED", landed=True, telemetry_fresh=False))
+        self.assertEqual(status.detail, "LANDED_REQUEST_LAND")
+        self.assertEqual(command.desired_mode, "LAND")
+        self.assertFalse(command.request_disarm)
+        status, command = self.executor.tick(flight(
+            .4, mode="LAND", landed=True, telemetry_fresh=False))
+        self.assertEqual(status.detail, "LANDED_WAIT_DISARM")
+        self.assertTrue(command.request_disarm)
+        status, command = self.executor.tick(flight(
+            .6, mode="LAND", armed=False))
+        self.assertEqual(status.reason, "LAND_AND_DISARM_CONFIRMED")
+        self.assertEqual(status.state, ActionState.DONE)
+
+    def test_landed_report_flicker_keeps_native_land_committed(self):
+        self.executor.tick(flight(.2, mode="LAND", landed=True))
+        status, command = self.executor.tick(flight(.4, mode="LAND", landed=False))
+        self.assertEqual(status.detail, "LAND_COMMITTED_WAIT_LANDED")
+        self.assertEqual(command.desired_mode, "LAND")
+        self.assertFalse(command.request_disarm)
 
     def test_ros_float32_threshold_hands_off_without_false_disarm(self):
         import struct
@@ -168,6 +228,30 @@ class RcFlowTests(unittest.TestCase):
         namespace['_command_result'](driver, future, lifecycle.request.action_id, 'DISARM')
         self.assertTrue(lifecycle.active)
         self.assertEqual(lifecycle.reason, 'DISARM_REJECTED_CONTINUING_LAND')
+
+    def test_ground_confirmed_land_uses_separate_normal_disarm_gate(self):
+        from types import SimpleNamespace
+        path = executor_source()
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        method = next(n for c in tree.body if isinstance(c, ast.ClassDef)
+                      for n in c.body if isinstance(n, ast.FunctionDef)
+                      and n.name == "_request_command")
+        namespace = dict(CommandLong=SimpleNamespace(Request=SimpleNamespace),
+                         MAV_CMD_COMPONENT_ARM_DISARM=400)
+        exec(compile(ast.Module(body=[method], type_ignores=[]), str(path), 'exec'), namespace)
+        sent = []
+        lifecycle = ActionExecutor()
+        lifecycle.start(request("LAND", guided_descent=True), flight())
+        lifecycle.tick(flight(.2, mode="LAND", landed=True))
+        driver = SimpleNamespace(
+            allow_disarm=False, allow_landing_disarm=True, lifecycle=lifecycle,
+            command_future=None, command_request_s=0, command_retry_s=1,
+            command_client=SimpleNamespace(service_is_ready=lambda: True,
+                call_async=lambda r: sent.append(r) or SimpleNamespace(add_done_callback=lambda cb: None)),
+        )
+        namespace['_request_command'](driver, 'DISARM', 2)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual((sent[0].command, sent[0].param1, sent[0].param2), (400, 0, 0))
 
     def test_actual_rc_driver_selects_hybrid_and_requires_ch8_reset_after_exit(self):
         # Compile the real orchestration method in isolation, without ROS stubs.

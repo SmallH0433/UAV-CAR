@@ -237,6 +237,7 @@ class ActionExecutor:
         self.land_phase = "INACTIVE"
         self.land_hold_started_s: Optional[float] = None
         self.land_reacquired_since_s: Optional[float] = None
+        self.land_telemetry_loss_started_s: Optional[float] = None
         self.land_exit_mode: Optional[str] = None
         self.land_exit_reason = ""
         self._land_expected_mode = self.land_mode
@@ -434,6 +435,30 @@ class ActionExecutor:
                 retain_hold=can_hold,
             )
             return self._status(snapshot.now_s), self._terminal_command
+        if self.request.kind == ActionKind.LAND:
+            # A fresh range or FCU ground indication is sufficient to hand the
+            # final centimetres to native LAND. Pose/velocity callbacks can
+            # briefly lag even while FCU state and range remain current.
+            near_ground = bool(
+                snapshot.connected and snapshot.authorized and
+                (snapshot.landed or self.land_phase in {
+                    "HYBRID_LAND_COMMITTED", "NEAR_GROUND_DISARM", "LANDED_DISARM"
+                } or (
+                    snapshot.range_fresh and math.isfinite(snapshot.range_m)
+                    and round(snapshot.range_m, 6) <= self.land_recovery_height_m
+                ))
+            )
+            if near_ground and (not snapshot.telemetry_fresh or not snapshot.ekf_healthy):
+                command = self._tick_land(snapshot)
+                return self._status(snapshot.now_s), command
+            if snapshot.telemetry_fresh:
+                self.land_telemetry_loss_started_s = None
+            elif snapshot.connected and snapshot.authorized:
+                if self.land_telemetry_loss_started_s is None:
+                    self.land_telemetry_loss_started_s = snapshot.now_s
+                if snapshot.now_s - self.land_telemetry_loss_started_s < 1.0:
+                    self.detail = "FLIGHT_TELEMETRY_GRACE_HOLD"
+                    return self._status(snapshot.now_s), None
         rejection = self._runtime_rejection(self.request.kind, snapshot)
         if rejection is not None:
             self._finish(
@@ -697,16 +722,15 @@ class ActionExecutor:
         return self._landing_tracking_command(snapshot, output.up_mps)
 
     def _tick_land(self, snapshot: VehicleSnapshot) -> ActionCommand:
-        if (self.request is not None
-                and self.guided_landing
-                and self.land_phase == "NEAR_GROUND_DISARM"
-                and snapshot.authorized):
-            return self._tick_guided_land(snapshot)
         if snapshot.landed:
             if self.guided_landing:
+                self.land_phase = "LANDED_DISARM"
                 self._land_expected_mode = self.land_mode
+                if snapshot.mode.strip().upper() != self.land_mode:
+                    self.detail = "LANDED_REQUEST_LAND"
+                    return ActionCommand(desired_mode=self.land_mode)
                 self.detail = "LANDED_WAIT_DISARM"
-                return ActionCommand(desired_mode=self.land_mode)
+                return ActionCommand(desired_mode=self.land_mode, request_disarm=True)
             self._finish(
                 ActionState.DONE,
                 "LANDING_DETECTED",
@@ -714,6 +738,15 @@ class ActionExecutor:
                 retain_hold=False,
             )
             return ActionCommand()
+        if self.guided_landing and self.land_phase == "LANDED_DISARM":
+            self._land_expected_mode = self.land_mode
+            self.detail = "LAND_COMMITTED_WAIT_LANDED"
+            return ActionCommand(desired_mode=self.land_mode)
+        if (self.request is not None
+                and self.guided_landing
+                and self.land_phase == "NEAR_GROUND_DISARM"
+                and snapshot.authorized):
+            return self._tick_guided_land(snapshot)
         assert self.request is not None
         params = self.request.params
         rc_managed = params.get("rc_managed", False) is True
@@ -945,6 +978,15 @@ class ActionExecutor:
             self.detail = "LAND_COMMITTED"
             return ActionCommand(desired_mode=self.land_mode)
 
+        # At the handoff height, native LAND must win over Tag-pose recovery.
+        # The camera often loses a usable landing pose at touchdown even while
+        # it still detects the Tag, so recovery here can strand FCU in GUIDED.
+        if range_valid and range_m <= self.land_recovery_height_m:
+            self.land_phase = "HYBRID_LAND_COMMITTED"
+            self._land_expected_mode = self.land_mode
+            self.detail = "GUIDED_DESCENT_COMPLETE_REQUEST_LAND"
+            return ActionCommand(desired_mode=self.land_mode)
+
         if self.land_phase == "GUIDED_REACQUIRE_HOLD":
             assert self.land_hold_started_s is not None
             # Deadline wins even if the first reacquired frame arrives this tick.
@@ -976,11 +1018,6 @@ class ActionExecutor:
             self.land_hold_started_s = snapshot.now_s
             self.land_reacquired_since_s = None
             return self._guided_land_hold(snapshot, "LANDING_POSE_INVALID_GUIDED_HOLD")
-        if range_m <= self.land_recovery_height_m:
-            self.land_phase = "HYBRID_LAND_COMMITTED"
-            self._land_expected_mode = self.land_mode
-            self.detail = "GUIDED_DESCENT_COMPLETE_REQUEST_LAND"
-            return ActionCommand(desired_mode=self.land_mode)
         if not tag_valid:
             self.land_phase = "GUIDED_REACQUIRE_HOLD"
             self.land_hold_started_s = snapshot.now_s

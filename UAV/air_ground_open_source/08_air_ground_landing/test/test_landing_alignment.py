@@ -62,15 +62,15 @@ class LandingCorrectionTests(unittest.TestCase):
         self.assertNotEqual(command.yaw_rate_rad_s, 0)
         self.assertLess(command.velocity_enu[2], 0)
 
-    def test_pose_loss_near_ground_is_not_a_disarm_or_land_trigger(self):
+    def test_pose_loss_near_ground_hands_off_to_native_land_without_disarm(self):
         executor = self.start()
         _, command = executor.tick(flight(.2, range_m=.09, landing_alignment_fresh=False))
-        self.assertEqual(command.desired_mode, "GUIDED")
+        self.assertEqual(command.desired_mode, "LAND")
         self.assertFalse(command.request_disarm)
-        self.assertEqual(command.velocity_enu, (0, 0, 0))
+        self.assertIsNone(command.velocity_enu)
         _, command = executor.tick(flight(1.21, range_m=.09, landing_alignment_fresh=False))
-        self.assertEqual(executor.land_exit_reason, "LAND_EXIT_TAG_REACQUIRE_TIMEOUT")
-        self.assertEqual(command.desired_mode, "GUIDED")
+        self.assertEqual(command.desired_mode, "LAND")
+        self.assertFalse(command.request_disarm)
 
     def test_small_yaw_error_has_deadband_without_stopping_centering(self):
         executor = self.start()

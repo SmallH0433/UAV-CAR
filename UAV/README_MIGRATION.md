@@ -35,10 +35,10 @@
 
 ## 实机部署分支
 
-- `uav-rpi-deploy` / `uav-rpi-8.7`：无人机机载 Raspberry Pi 4B 的最小部署包。
-- `uav-pixhawk-deploy` / `uav-pixhawk-8.7`：QAV280 Pixhawk1 的固件和参数恢复包。
+- `uav-rpi-deploy` / `uav-rpi-8.8`：无人机机载 Raspberry Pi 4B 的最小部署包。
+- `uav-pixhawk-deploy` / `uav-pixhawk-8.8`：QAV280 Pixhawk1 的固件和参数恢复包；8.8 与 8.7 使用同一提交和相同飞控内容。
 
-8.7 发布线增加独立 `ekf_report_filter`，把高频 MAVROS 原始流中的 FC `EKF_STATUS_REPORT` 筛选到 `/landing/ekf_report`，避免忙碌控制节点漏收；不健康报文仍会透传并触发原安全门。EKF 使用独立 5 秒有效期，其他飞行状态仍为 2 秒、位姿和速度仍为 0.3 秒；飞控与两份 TELEM1 维护脚本将 `MAV2_EXTRA3` 提高到 5 Hz。最终无桨复测中三次 CH6 FOLLOW 全部接受，两次 LOITER→GUIDED，降低 CH6 后返回 LOITER，132 秒内没有 EKF 误拒绝。CH8 LAND 被接受，但约 8 秒后因 `FLIGHT_TELEMETRY_LOST` 失败；真实飞行下降和退出后的垂直漂移仍未验证。CH6/EKF 相关回归 79 项通过；权威源工程 179 项全量回归仍有 `test_moving_landing_stack.py` 中 2 项既有失败。Pixhawk 包保留 ArduCopter 4.7.0 固件，刷新 1015 项完整参数快照和 114 项迁移设置。
+8.8 发布线修复 GUIDED 近地 LAND 交接：新鲜测距 `<= 0.10 m` 时优先并持续请求飞控原生 LAND，不再被 Tag 姿态恢复分支阻断；飞控确认 LAND+ON_GROUND 后，只发送普通、非强制 DISARM 作为原生自动上锁兜底，直到收到 `armed=false`。高于交接高度的位姿/速度短暂掉帧增加 1 秒安全恢复窗口，状态输出新增各传感器年龄、测距值和 LAND 阶段。LAND 相关 93 项测试通过，完整部署分支回归为 199 项通过、1 项因缺少 OpenCV 跳过。无桨记录已验证约 0.10 m 时交接 LAND，并由飞控原生逻辑自动上锁；普通上锁兜底目前仅有离线测试。最终版本已备份部署且服务在线，但尚无真实带桨着陆验收，稳定下降和退出后的垂直漂移仍需验证。本版本没有任何飞控固件或参数变更，Pixhawk 8.8 标签与 Release 复用 8.7 的同一提交和内容。
 
 `main` 保存完整的无人机工程源码、配置与分析工具；部署分支只保留对应设备运行或恢复所需的内容。
 无人车工程独立保存在 `CAR/`，不属于上述两个无人机部署包。
