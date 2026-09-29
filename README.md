@@ -1,6 +1,6 @@
 # UAV Pixhawk 飞控部署分支
 
-版本：`uav-pixhawk-8.6`
+版本：`uav-pixhawk-8.7`
 
 本分支只保存实际写入 QAV280 无人机 Pixhawk 飞控的固件和参数。它不包含：
 
@@ -21,7 +21,7 @@
 `licenses/ARDUPILOT_GPL-3.0.txt`，上游源码为
 [`ArduPilot/ardupilot@1511f271`](https://github.com/ArduPilot/ardupilot/commit/1511f271)。
 
-8.6 仅用于与本轮 Raspberry Pi EKF 解码修复保持发布线一致；飞控固件、完整参数快照和项目设置与 8.5 完全相同。
+8.7 保留相同的飞控固件，但将 TELEM1 `MAV2_EXTRA3` 从 3 Hz 提高到 5 Hz，并刷新完整参数快照和项目设置，以配合 Raspberry Pi 侧的独立 EKF 报文有效期。
 
 ## 参数文件
 
@@ -29,7 +29,7 @@
 
 从 2026-09-29 未解锁飞控的完整参数回读导出，包含 1015 项当前参数。固件身份仍为 ArduCopter 4.7.0 official（ArduPilot Git `1511f271`）。它包含当前这台 QAV280 的 IMU、罗盘、遥控器、动力和其他硬件标定值，只适合原机原飞控恢复或审计，不能直接复制到另一台飞机。
 
-本次实际写入并重启回读 `SERIAL1_BAUD=115`（115200 baud），并将 TELEM1 的 `MAV2_POSITION=10`、`MAV2_EXTRA1=10`、`MAV2_EXTRA2=3`、`MAV2_EXTRA3=3`、`MAV2_EXT_STAT=2`、`MAV2_RC_CHAN=5`纳入恢复基线。导出器当时只写六位有效数字；对与 8.4 数值等价的 994 项保留上一快照的精确文本，其余 21 项使用本次回读值，避免因文本舍入损失未改参数的精度。
+本次实际写入并重启回读 `SERIAL1_BAUD=115`（115200 baud），并将 TELEM1 的 `MAV2_POSITION=10`、`MAV2_EXTRA1=10`、`MAV2_EXTRA2=3`、`MAV2_EXTRA3=5`、`MAV2_EXT_STAT=2`、`MAV2_RC_CHAN=5`纳入恢复基线。最新回读仍只写六位有效数字；对数值等价的参数保留上一快照的精确文本，只用本次回读值更新真实变化项，避免因文本舍入损失未改参数的精度。
 
 ### `parameters/qav280-project-settings.param`
 
