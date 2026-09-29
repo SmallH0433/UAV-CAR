@@ -19,6 +19,7 @@ from mavros_msgs.msg import (
     EstimatorStatus,
     ExtendedState,
     HomePosition,
+    Mavlink,
     PositionTarget,
     RCIn,
     State,
@@ -49,6 +50,7 @@ from air_ground_landing.guided_execution import (
     RcAuthorizationGate,
     RcGateConfig,
 )
+from air_ground_landing.mavlink_ekf import report_health
 from air_ground_landing_ros2.action_peripherals import ActionPeripherals, PERIPHERAL_DEFAULTS
 from air_ground_landing.landing_alignment import LandingAlignment
 
@@ -205,6 +207,7 @@ class ActionExecutorNode(ActionPeripherals, Node):
         self.extended_received_s: Optional[float] = None
         self.estimator_healthy = False
         self.estimator_received_s: Optional[float] = None
+        self.ekf_report_received_s: Optional[float] = None
         self.home_set = False
         self.home_received_s: Optional[float] = None
         self.rc_channels: Optional[tuple[int, ...]] = None
@@ -280,6 +283,7 @@ class ActionExecutorNode(ActionPeripherals, Node):
                 self._estimator,
                 qos_profile_sensor_data,
             ),
+            (Mavlink, "ekf_report_topic", self._ekf_report, qos_profile_sensor_data),
             (HomePosition, "home_position_topic", self._home, reliable_latched),
             (PositionTarget, "ibvs_candidate_topic", self._candidate, 10),
             (String, "ibvs_status_topic", self._target_status, 10),
@@ -370,6 +374,7 @@ class ActionExecutorNode(ActionPeripherals, Node):
             "velocity_topic": "/mavros/local_position/velocity_local",
             "extended_state_topic": "/mavros/extended_state",
             "estimator_status_topic": "/mavros/estimator_status",
+            "ekf_report_topic": "/uas1/mavlink_source",
             "home_position_topic": "/mavros/home_position/home",
             "ibvs_candidate_topic": "/landing/ibvs/candidate",
             "ibvs_status_topic": "/landing/ibvs/status",
@@ -468,12 +473,30 @@ class ActionExecutorNode(ActionPeripherals, Node):
         self.extended_received_s = self._now_s()
 
     def _estimator(self, message: EstimatorStatus) -> None:
+        if self._fresh(self.ekf_report_received_s, self.state_maximum_age_s, self._now_s()):
+            return
         self.estimator_healthy = bool(
             message.attitude_status_flag
             and message.velocity_horiz_status_flag
             and (message.pos_horiz_rel_status_flag or message.pos_horiz_abs_status_flag)
         )
         self.estimator_received_s = self._now_s()
+
+    def _ekf_report(self, message: Mavlink) -> None:
+        healthy = report_health(
+            framing_status=int(message.framing_status),
+            system_id=int(message.sysid),
+            component_id=int(message.compid),
+            message_id=int(message.msgid),
+            length=int(message.len),
+            payload64=message.payload64,
+        )
+        if healthy is None:
+            return
+        now = self._now_s()
+        self.estimator_healthy = healthy
+        self.estimator_received_s = now
+        self.ekf_report_received_s = now
 
     def _home(self, _message: HomePosition) -> None:
         self.home_set = True
