@@ -19,7 +19,8 @@ TARGET_RATES_HZ = {
     "MAV2_POSITION": 10.0,
     "MAV2_EXTRA1": 10.0,
     "MAV2_EXTRA2": 3.0,
-    "MAV2_EXTRA3": 3.0,
+    # Includes EKF_STATUS_REPORT; keep it frequent enough for the 2 s gate.
+    "MAV2_EXTRA3": 5.0,
 }
 
 
@@ -119,7 +120,7 @@ def main() -> int:
             return 3
         args.full_param_file.parent.mkdir(parents=True, exist_ok=True)
         args.full_param_file.write_text(
-            "\n".join(f"{name},{record['value']:.9g}" for name, record in sorted(records.items())) + "\n",
+            "\n".join(f"{name},{record['value']:g}" for name, record in sorted(records.items())) + "\n",
             encoding="ascii",
         )
         print(f"FULL_PARAM_FILE={args.full_param_file.resolve()} COUNT={len(records)}")

@@ -30,6 +30,7 @@ action_executor:
     mode_retry_s: 1.0
     # FCU heartbeat is normally 1 Hz; this is a v2 freshness setting.
     state_maximum_age_s: 2.0
+    ekf_report_topic: /landing/ekf_report
     tone_output_enabled: false
     follow_active_tone_repeat_s: 3.0
     landing_active_tone_repeat_s: 2.0

@@ -35,10 +35,10 @@
 
 ## 实机部署分支
 
-- `uav-rpi-deploy` / `uav-rpi-8.6`：无人机机载 Raspberry Pi 4B 的最小部署包。
-- `uav-pixhawk-deploy` / `uav-pixhawk-8.6`：QAV280 Pixhawk1 的固件和参数恢复包。
+- `uav-rpi-deploy` / `uav-rpi-8.7`：无人机机载 Raspberry Pi 4B 的最小部署包。
+- `uav-pixhawk-deploy` / `uav-pixhawk-8.7`：QAV280 Pixhawk1 的固件和参数恢复包。
 
-8.6 发布线在 8.5 的唯一动作执行器、115200 baud TELEM1 和 10 Hz 位置流基础上，增加 ArduPilot `EKF_STATUS_REPORT`（消息 193）解码，使光流相对位置 EKF 能通过同一套安全门；常位置、未初始化和 GPS glitch 标志仍会失败关闭。Pi 上只读 ROS 探针已通过部署后的解码器收到 2 条健康飞控 EKF 报文。CH6/EKF 相关回归 79 项通过，发布分支回归为 192 项通过、1 项因缺少 OpenCV 跳过；权威源工程 179 项全量回归仍有 `test_moving_landing_stack.py` 中 2 项既有失败，与本次修改无关。Pixhawk 8.6 延用 8.5 的 ArduCopter 4.7.0 固件、1015 项完整参数快照和 114 项迁移设置。无桨 CH6 触发、进入 GUIDED 与完整起降仍需现场监护验收。
+8.7 发布线增加独立 `ekf_report_filter`，把高频 MAVROS 原始流中的 FC `EKF_STATUS_REPORT` 筛选到 `/landing/ekf_report`，避免忙碌控制节点漏收；不健康报文仍会透传并触发原安全门。EKF 使用独立 5 秒有效期，其他飞行状态仍为 2 秒、位姿和速度仍为 0.3 秒；飞控与两份 TELEM1 维护脚本将 `MAV2_EXTRA3` 提高到 5 Hz。最终无桨复测中三次 CH6 FOLLOW 全部接受，两次 LOITER→GUIDED，降低 CH6 后返回 LOITER，132 秒内没有 EKF 误拒绝。CH8 LAND 被接受，但约 8 秒后因 `FLIGHT_TELEMETRY_LOST` 失败；真实飞行下降和退出后的垂直漂移仍未验证。CH6/EKF 相关回归 79 项通过；权威源工程 179 项全量回归仍有 `test_moving_landing_stack.py` 中 2 项既有失败。Pixhawk 包保留 ArduCopter 4.7.0 固件，刷新 1015 项完整参数快照和 114 项迁移设置。
 
 `main` 保存完整的无人机工程源码、配置与分析工具；部署分支只保留对应设备运行或恢复所需的内容。
 无人车工程独立保存在 `CAR/`，不属于上述两个无人机部署包。
