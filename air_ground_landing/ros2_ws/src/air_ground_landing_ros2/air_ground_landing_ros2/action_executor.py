@@ -850,7 +850,7 @@ class ActionExecutorNode(ActionPeripherals, Node):
 
     def _request_command(self, kind: str, now: float) -> None:
         enabled = self.allow_disarm if kind == "DISARM" else self.allow_emergency_stop
-        if kind == "DISARM" and self.lifecycle.land_phase == "NEAR_GROUND_DISARM":
+        if kind == "DISARM" and self.lifecycle.land_phase in {"NEAR_GROUND_DISARM", "LANDED_DISARM"}:
             enabled = self.allow_landing_disarm
         if not enabled or not self.lifecycle.active:
             return
@@ -886,13 +886,13 @@ class ActionExecutorNode(ActionPeripherals, Node):
         try:
             accepted = bool(future.result().success)
         except Exception as exc:
-            if kind == "DISARM" and self.lifecycle.land_phase == "NEAR_GROUND_DISARM":
+            if kind == "DISARM" and self.lifecycle.land_phase in {"NEAR_GROUND_DISARM", "LANDED_DISARM"}:
                 self.lifecycle.reason = "DISARM_TRANSPORT_FAILED_CONTINUING_LAND"
                 return
             self.lifecycle.fail(self._now_s(), f"{kind}_TRANSPORT_FAILED", str(exc))
             return
         if not accepted:
-            if kind == "DISARM" and self.lifecycle.land_phase == "NEAR_GROUND_DISARM":
+            if kind == "DISARM" and self.lifecycle.land_phase in {"NEAR_GROUND_DISARM", "LANDED_DISARM"}:
                 self.lifecycle.reason = "DISARM_REJECTED_CONTINUING_LAND"
                 return
             self.lifecycle.fail(self._now_s(), f"{kind}_REJECTED", "WAITING_TASK_DECISION")
@@ -938,6 +938,12 @@ class ActionExecutorNode(ActionPeripherals, Node):
             "pilot_session_authorized": self.pilot_session.enabled if self.require_rc else True,
             "pilot_session_sequence": self.pilot_session.session_sequence,
             "fcu_mode": self.vehicle_state.mode or "UNKNOWN",
+            "land_phase": self.lifecycle.land_phase,
+            "fcu_state_age_s": None if self.state_received_s is None else max(0.0, now - self.state_received_s),
+            "pose_age_s": None if self.pose_received_s is None else max(0.0, now - self.pose_received_s),
+            "velocity_age_s": None if self.velocity_received_s is None else max(0.0, now - self.velocity_received_s),
+            "range_age_s": None if self.range_received_s is None else max(0.0, now - self.range_received_s),
+            "range_m": self.range_m if math.isfinite(self.range_m) else None,
             "ekf_healthy": self.estimator_healthy,
             "ekf_report_count": self.ekf_report_count,
             "ekf_report_age_s": (
