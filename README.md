@@ -1,6 +1,6 @@
 # UAV Pixhawk 飞控部署分支
 
-版本：`uav-pixhawk-8.5`
+版本：`uav-pixhawk-8.6`
 
 本分支只保存实际写入 QAV280 无人机 Pixhawk 飞控的固件和参数。它不包含：
 
@@ -20,6 +20,8 @@
 固件是 ArduPilot 上游版本，没有在本项目中修改飞控源码。对应许可见
 `licenses/ARDUPILOT_GPL-3.0.txt`，上游源码为
 [`ArduPilot/ardupilot@1511f271`](https://github.com/ArduPilot/ardupilot/commit/1511f271)。
+
+8.6 仅用于与本轮 Raspberry Pi EKF 解码修复保持发布线一致；飞控固件、完整参数快照和项目设置与 8.5 完全相同。
 
 ## 参数文件
 

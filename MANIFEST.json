@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "release": "uav-pixhawk-8.5",
+  "release": "uav-pixhawk-8.6",
   "scope": "uav_pixhawk_flight_controller_only",
   "hardware": {
     "board": "Pixhawk1",
