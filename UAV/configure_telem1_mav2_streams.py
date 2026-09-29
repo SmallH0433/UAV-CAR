@@ -14,7 +14,9 @@ from pymavlink import mavutil
 TARGET_RATES_HZ = {
     "MAV2_EXT_STAT": 2.0,
     "MAV2_RC_CHAN": 5.0,
-    "MAV2_POSITION": 3.0,
+    # The action executor rejects pose/velocity older than 0.3 s. 3 Hz
+    # (333 ms nominal) cannot satisfy that limit even without link jitter.
+    "MAV2_POSITION": 10.0,
     "MAV2_EXTRA1": 10.0,
     "MAV2_EXTRA2": 3.0,
     "MAV2_EXTRA3": 3.0,
@@ -58,6 +60,16 @@ def set_and_confirm(link, name: str, value: float, param_type: int):
     return None, None
 
 
+def wait_disarmed_heartbeat(link, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        message = link.recv_match(type="HEARTBEAT", blocking=True, timeout=0.5)
+        if message is None or message.get_srcSystem() != 1 or message.get_srcComponent() != 1:
+            continue
+        return not bool(message.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+    return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", default="COM4")
@@ -67,6 +79,7 @@ def main() -> int:
         type=Path,
         default=Path("telem1_mav2_stream_backup_20260806.json"),
     )
+    parser.add_argument("--full-param-file", type=Path)
     args = parser.parse_args()
 
     link = mavutil.mavlink_connection(
@@ -100,6 +113,17 @@ def main() -> int:
         print("REQUIRED_MAV2_PARAMETERS=NOT_COMPLETE")
         return 3
 
+    if args.full_param_file is not None:
+        if expected is None or len(records) < expected:
+            print(f"FULL_BACKUP_INCOMPLETE={len(records)}/{expected}")
+            return 3
+        args.full_param_file.parent.mkdir(parents=True, exist_ok=True)
+        args.full_param_file.write_text(
+            "\n".join(f"{name},{record['value']:.9g}" for name, record in sorted(records.items())) + "\n",
+            encoding="ascii",
+        )
+        print(f"FULL_PARAM_FILE={args.full_param_file.resolve()} COUNT={len(records)}")
+
     before = {name: records[name] for name in TARGET_RATES_HZ}
     backup = {
         "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -121,8 +145,15 @@ def main() -> int:
         print("MODE=READ_ONLY")
         return 0
 
+    if not wait_disarmed_heartbeat(link):
+        print("APPLY_ABORTED=FC_ARMED_OR_HEARTBEAT_UNAVAILABLE")
+        return 5
+
     failures = 0
     for name, minimum in TARGET_RATES_HZ.items():
+        if not wait_disarmed_heartbeat(link):
+            print("APPLY_ABORTED=FC_ARMED_OR_HEARTBEAT_UNAVAILABLE")
+            return 5
         old = before[name]["value"]
         target = max(old, minimum)
         if abs(target - old) < 0.001:

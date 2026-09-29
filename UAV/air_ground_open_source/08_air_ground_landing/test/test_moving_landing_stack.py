@@ -140,6 +140,8 @@ class LandingTargetBridgeTests(unittest.TestCase):
         self.assertIsNotNone(result.packet)
         self.assertEqual(result.packet.frame, MAV_FRAME_BODY_FRD)
         self.assertEqual(result.packet.position_valid, 1)
+        # Current camera mounting maps optical right/down/forward to
+        # BODY_FRD right/forward/down through [[0,-1,0],[1,0,0],[0,0,1]].
         self.assertAlmostEqual(result.observation.position_body_frd_m[0], 0.05)
         self.assertAlmostEqual(result.observation.position_body_frd_m[1], 0.10)
         self.assertAlmostEqual(result.observation.position_body_frd_m[2], 0.65)

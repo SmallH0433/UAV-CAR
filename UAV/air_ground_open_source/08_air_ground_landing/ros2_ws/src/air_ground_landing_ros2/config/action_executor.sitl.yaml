@@ -1,0 +1,29 @@
+action_executor:
+  ros__parameters:
+    environment: sitl
+    allow_mode_change: true
+    allow_setpoint_output: true
+    allow_landing_disarm_output: true
+    allow_disarm_output: true
+    allow_emergency_stop_output: false
+    require_rc_authorization: false
+    rc_flight_flow_enabled: true
+    allow_target_echo_request: true
+    tone_output_enabled: true
+    landing_switch_channel: 8
+    landing_switch_off_below_pwm: 1200
+    landing_switch_on_above_pwm: 1800
+    landing_switch_maximum_age_s: 0.5
+    land_guided_descent_mps: 0.10
+    land_yaw_tolerance_deg: 4.0
+    land_yaw_gain_per_s: 0.8
+    land_maximum_yaw_rate_deg_s: 15.0
+    landing_alignment_maximum_age_s: 0.3
+    land_recovery_height_m: 0.10
+    land_recovery_timeout_s: 1.0
+    land_reacquire_dwell_s: 0.0
+
+landing_target_adapter:
+  ros__parameters:
+    environment: sitl
+    allow_landing_target_output: true

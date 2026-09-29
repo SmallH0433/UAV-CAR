@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Read or configure a minimal ArduPilot TELEM1 telemetry stream set.
+"""Read or configure ArduCopter 4.7 TELEM1 telemetry stream rates.
 
-Only SR1_* stream-rate parameters are in scope. No arming, mode, motor,
+Only MAV2_* stream-rate parameters are in scope. No arming, mode, motor,
 navigation, or flight-control parameters are touched.
 """
 
@@ -17,12 +17,13 @@ from pymavlink import mavutil
 
 
 RECOMMENDED_RATES_HZ = {
-    "SR1_EXT_STAT": 2.0,
-    "SR1_RC_CHAN": 5.0,
-    "SR1_POSITION": 3.0,
-    "SR1_EXTRA1": 10.0,
-    "SR1_EXTRA2": 3.0,
-    "SR1_EXTRA3": 3.0,
+    "MAV2_EXT_STAT": 2.0,
+    "MAV2_RC_CHAN": 5.0,
+    # The executor requires pose and velocity younger than 0.3 s.
+    "MAV2_POSITION": 10.0,
+    "MAV2_EXTRA1": 10.0,
+    "MAV2_EXTRA2": 3.0,
+    "MAV2_EXTRA3": 3.0,
 }
 
 
@@ -35,6 +36,14 @@ def wait_autopilot_heartbeat(link, timeout: float = 15.0):
         if int(message.autopilot) != mavutil.mavlink.MAV_AUTOPILOT_INVALID:
             return message
     return None
+
+
+def wait_disarmed_heartbeat(link, timeout: float = 5.0) -> bool:
+    heartbeat = wait_autopilot_heartbeat(link, timeout)
+    return bool(
+        heartbeat is not None
+        and not (heartbeat.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+    )
 
 
 def normalized_param_id(message) -> str:
@@ -74,7 +83,7 @@ def set_param(
         target_component,
         name.encode("ascii"),
         float(value),
-        mavutil.mavlink.MAV_PARAM_TYPE_REAL32,
+        mavutil.mavlink.MAV_PARAM_TYPE_UINT16,
     )
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -85,7 +94,7 @@ def set_param(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Configure TELEM1 SR1 stream rates")
+    parser = argparse.ArgumentParser(description="Configure ArduCopter 4.7 TELEM1 MAV2 stream rates")
     parser.add_argument("--device", default="/dev/serial0")
     parser.add_argument("--baud", type=int, default=57600)
     parser.add_argument("--source-system", type=int, default=191)
@@ -155,9 +164,16 @@ def main() -> int:
         print("MODE=READ_ONLY")
         return 0
 
+    if not wait_disarmed_heartbeat(link):
+        print("APPLY_ABORTED=FC_ARMED_OR_HEARTBEAT_UNAVAILABLE")
+        return 4
+
     changed = 0
     failed = 0
     for name, minimum in RECOMMENDED_RATES_HZ.items():
+        if not wait_disarmed_heartbeat(link):
+            print("APPLY_ABORTED=FC_ARMED_OR_HEARTBEAT_UNAVAILABLE")
+            return 4
         old_value = current[name]
         if old_value is None:
             print(f"SKIP {name}=NOT_FOUND")
@@ -178,7 +194,7 @@ def main() -> int:
         changed += 1
 
     print(f"CHANGED={changed} FAILED={failed}")
-    print("SCOPE=SR1_STREAM_RATES_ONLY")
+    print("SCOPE=MAV2_STREAM_RATES_ONLY")
     print("ARM_COMMAND=0 MODE_CHANGE=0 MOTOR_COMMAND=0")
     return 0 if failed == 0 else 3
 

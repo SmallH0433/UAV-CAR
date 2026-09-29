@@ -53,9 +53,9 @@ aside{display:flex;flex-direction:column;gap:12px}.card{padding:14px}.tabs{displ
 <section class="card tabs"><button id="tagBtn" onclick="setMode('apriltag')">APRILTAG</button><button id="calBtn" onclick="setMode('calibration')">CALIBRATION</button></section>
 <section class="card"><div class="label">Vision state</div><div class="value wait" id="state">STARTING</div><div class="bar"><div class="fill" id="fill"></div></div></section>
 <section class="card"><div class="label">Flight controller</div><div class="value wait" id="flightMode">DISCONNECTED</div><div class="grid" style="margin-top:13px"><div><div class="label">Link / Armed</div><div class="notice" id="flightLink">—</div></div><div><div class="label">Landed state</div><div class="notice" id="landedState">—</div></div><div><div class="label">Forward / Back</div><div class="value" id="horizontalDirection">—</div></div><div><div class="label">Up / Down</div><div class="value" id="verticalDirection">—</div></div><div><div class="label">Left / Right</div><div class="value" id="lateralDirection">—</div></div><div><div class="label">Control state</div><div class="notice" id="controlState">—</div></div><div><div class="label">Body velocity X/Y/Z</div><div class="notice" id="bodyVelocity">—</div></div><div><div class="label">Last command X/Y/Z</div><div class="notice" id="lastCommand">—</div></div></div><div class="notice" style="margin-top:10px">Actual body-frame velocity: X forward, Y left, Z up; ±0.05 m/s is shown as HOLD.</div></section>
-<section class="card"><div class="label">准备运动 / Sent command</div><div class="direction-key" style="color:#ff1528"><b>➜</b><span>鲜红箭头＝树莓派已发出的水平速度方向</span></div><div class="notice" id="motionState">等待新指令</div><div class="notice" style="margin-top:8px">画面上＝机体前，画面右＝机体右（按 9 月 8 日现场确认）。箭头从画面中心出发；升降单独标注。表示指令，不是实际运动。</div></section>
+<section class="card"><div class="label">准备运动 / Sent command</div><div class="direction-key" style="color:#ff1528"><b>➜</b><span>鲜红箭头＝树莓派已发出的水平速度方向</span></div><div class="notice" id="motionState">等待新指令</div><div class="notice" style="margin-top:8px">红色与粉色箭头统一按机体系显示：上＝机体前，右＝机体右。红色箭头从画面中心出发；升降单独标注。表示准备运动的指令方向，不是实际运动；指令过期自动隐藏。</div></section>
 <section class="card"><div class="label">Candidate quality</div><div class="notice" id="rejectReason">No candidate</div></section>
-<section class="card"><div class="label">方向参照 / Direction</div><div class="direction-key" style="color:#00d9ff"><b>↑</b><span>画面正上方（相机 −Y）</span></div><div class="direction-key" style="color:#ffb020"><b>↑</b><span>大 Tag 自身上方 · ID 0</span></div><div class="direction-key" style="color:#ff54d9"><b>↑</b><span>小 Tag → 机体系 · ID 1</span></div><div class="notice" style="margin-top:10px">树莓派解算标签姿态，补偿小 Tag 的 45° 布局，再使用控制外参转换到机体前／右／下坐标。方向角 0°＝机头、+90°＝机体右侧。仅显示质量通过的姿态；不自动控制偏航。</div><div class="notice" id="directionState" style="margin-top:8px">等待标签</div></section>
+<section class="card"><div class="label">方向参照 / Direction</div><div class="direction-key" style="color:#00d9ff"><b>↑</b><span>画面正上方（相机 −Y）</span></div><div class="direction-key" style="color:#ffb020"><b>↑</b><span>大 Tag 自身上方 · ID 0</span></div><div class="direction-key" style="color:#ff54d9"><b>↑</b><span>小 Tag 校准方向 · 无人机坐标系 · ID 1</span></div><div class="notice" style="margin-top:10px">青色固定指向画面上方；橙色沿大 Tag 在图像中的上方。粉色使用树莓派识别并补偿 45° 布局后的小 Tag 方向，通过控制外参转换到机体系，按前＝上、右＝右绘制。方向角 0°＝机头、+90°＝机体右侧。仅显示质量通过的新鲜姿态；不自动控制偏航。</div><div class="notice" id="directionState" style="margin-top:8px">等待标签</div></section>
 <section class="card grid"><div><div class="label">Capture</div><div class="value"><span id="capture">0</span> fps</div></div><div><div class="label">Analysis</div><div class="value"><span id="analysis">0</span> fps</div></div><div><div class="label">Encoded</div><div class="value"><span id="encoded">0</span> fps</div></div><div><div class="label">Frame age</div><div class="value"><span id="age">0</span> ms</div></div></section>
 <section class="card grid" id="tagStats"><div><div class="label">Tag ID</div><div class="value" id="tagId">—</div></div><div><div class="label">Margin</div><div class="value" id="margin">—</div></div><div><div class="label">Distance</div><div class="value" id="distance">—</div></div><div><div class="label">Raw distance</div><div class="value" id="rawDistance">—</div></div><div><div class="label">Camera X</div><div class="value" id="xm">—</div></div><div><div class="label">Camera Y</div><div class="value" id="ym">—</div></div><div><div class="label">Camera Z</div><div class="value" id="zm">—</div></div><div><div class="label">Reproj.</div><div class="value" id="reproj">—</div></div><div><div class="label">Center X</div><div class="value" id="cx">—</div></div><div><div class="label">Center Y</div><div class="value" id="cy">—</div></div></section>
 <section class="card" id="calStats"><div class="label">Calibration views</div><div class="value"><span id="saved">0</span> / <span id="target">20</span></div><div class="notice" style="margin-top:10px">9×6 inner corners · 17 mm squares · mount board flat</div></section>
@@ -75,12 +75,18 @@ function updateFlight(f){flightMode.textContent=f.mode||'DISCONNECTED';flightMod
 function polygon(pts,color,width){if(!pts||!pts.length)return;ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=width;ctx.beginPath();ctx.moveTo(pts[0][0],pts[0][1]);for(let i=1;i<pts.length;i++)ctx.lineTo(pts[i][0],pts[i][1]);ctx.closePath();ctx.stroke()}
 function tagDirection(d){
   const o=d.orientation;
-  if(!o||!o.valid||o.frame!=='BODY_FRD'||o.source!=='PNP_TAG_TO_PAD_TO_BODY')return null;
+  if(!d.quality_passed||!o||!o.valid||o.frame!=='BODY_FRD'||o.source!=='PNP_TAG_TO_PAD_TO_BODY')return null;
   const p=o.arrow_image_px;if(!Array.isArray(p)||p.length!==2||!p.every(v=>Array.isArray(v)&&v.length===2&&v.every(Number.isFinite)))return null;
   const inner=d.role==='inner'||d.tag_id===1,origin=p[0],tip=p[1];
-  const dx=tip[0]-origin[0],dy=tip[1]-origin[1],n=Math.hypot(dx,dy);
+  const body=o.pad_forward_body_frd;
+  if(!Array.isArray(body)||body.length!==3||!body.every(Number.isFinite))return null;
+  // Inner heading uses the calibrated BODY_FRD vector: forward is screen up,
+  // right is screen right, matching the FLU command display below. Projecting
+  // back into the camera would undo the camera-to-body calibration.
+  // Outer heading deliberately remains the print's top in the camera image.
+  const dx=inner?body[1]:tip[0]-origin[0],dy=inner?-body[0]:tip[1]-origin[1],n=Math.hypot(dx,dy);
   if(!Number.isFinite(n)||n<1e-6)return null;
-  return {origin,unit:[dx/n,dy/n],inner,heading:o.pad_heading_body_deg,body:o.pad_forward_body_frd};
+  return {origin,unit:[dx/n,dy/n],inner,heading:o.pad_heading_body_deg,body};
 }
 function directionArrow(origin,unit,length,color,label,dashed=false,width=7){
   const end=[origin[0]+unit[0]*length,origin[1]+unit[1]*length],a=Math.atan2(unit[1],unit[0]);
@@ -94,9 +100,9 @@ function directionArrow(origin,unit,length,color,label,dashed=false,width=7){
 let directionReceivedAt=0;
 function motionDirection(f,elapsedMs){
   const c=f.motion_command,v=c&&c.body_velocity_mps;
-  if(!f.flight_controller_connected||f.mode!=='GUIDED'||!c||c.state!=='READY'||c.body_frame!=='FLU'||!Number.isFinite(c.age_s)||c.age_s+elapsedMs/1000>.7||!v||![v.x,v.y,v.z].every(Number.isFinite))return null;
-  // This is the user's current physical image convention, independent of
-  // the controller's older camera extrinsics. Do not rotate toward the tag.
+  if(!f.flight_controller_connected||f.mode!=='GUIDED'||!c||c.state!=='READY'||c.body_frame!=='FLU'||!Number.isFinite(c.age_s)||c.age_s<0||!Number.isFinite(elapsedMs)||elapsedMs<0||c.age_s+elapsedMs/1000>=.7||!v||![v.x,v.y,v.z].every(Number.isFinite))return null;
+  // FLU (forward/left/up) to the same body-heading display as the pink FRD
+  // arrow. The sent velocity determines motion; tag bearing does not.
   const x=-v.y,y=-v.x,speed=Math.hypot(x,y);
   return {unit:speed>1e-4?[x/speed,y/speed]:null,speed,up:v.z};
 }
@@ -114,7 +120,8 @@ function drawMotion(f){
 function draw(s){
   ctx.clearRect(0,0,1280,800);
   directionArrow([90,175],[0,-1],100,'#00d9ff','画面上方');
-  const fresh=Number.isFinite(s.frame_age_ms)&&s.frame_age_ms<700&&Date.now()-directionReceivedAt<1000;
+  const elapsedMs=Date.now()-directionReceivedAt;
+  const fresh=Number.isFinite(s.frame_age_ms)&&s.frame_age_ms>=0&&elapsedMs>=0&&s.frame_age_ms+elapsedMs<700;
   const detections=s.mode==='apriltag'&&fresh?(s.detections||[]):[];
   if(s.mode==='calibration'&&fresh)polygon(s.overlay_points,'#ffc15c',5);
   const shown=[];
@@ -122,7 +129,7 @@ function draw(s){
   // Long wide outer arrow and short narrow inner arrow remain distinct when aligned.
   for(const d of [...detections].sort((a,b)=>a.tag_id-b.tag_id)){
     const v=tagDirection(d);if(!v)continue;
-    directionArrow(v.origin,v.unit,v.inner?90:155,v.inner?'#ff54d9':'#ffb020',v.inner?'小 Tag 校正':'大 Tag 上方',!d.quality_passed,v.inner?5:9);
+    directionArrow(v.origin,v.unit,v.inner?90:155,v.inner?'#ff54d9':'#ffb020',v.inner?'小 Tag · 机体系':'大 Tag 上方',false,v.inner?5:9);
     shown.push((v.inner?'小 Tag':'大 Tag')+'：机体系方向角 '+(Number.isFinite(v.heading)?v.heading.toFixed(1)+'°':'未知')+'，前/右/下 ['+v.body.map(n=>n.toFixed(2)).join(', ')+']');
   }
   $('directionState').textContent=shown.join(' · ')||(fresh?'未识别到标签方向':'图像或数据已过期，标签箭头已隐藏');
@@ -458,3 +465,5 @@ def main():
 
 
 if __name__=='__main__': main()
+
+

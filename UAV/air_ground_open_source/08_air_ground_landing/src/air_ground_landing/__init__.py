@@ -1,5 +1,14 @@
 """Core contracts for the OV9281 moving-platform landing stack."""
 
+from .action_execution import (
+    ActionCommand,
+    ActionExecutor,
+    ActionKind,
+    ActionRequest,
+    ActionState,
+    ActionStatus,
+    VehicleSnapshot,
+)
 from .landing_target_bridge import BridgeConfig, LandingTargetBridge
 from .hybrid_guidance import (
     ControlOwner,
@@ -27,6 +36,12 @@ from .moving_landing_supervisor import (
 from .moving_pad_estimator import EstimatorConfig, MovingPadEstimator
 
 __all__ = [
+    "ActionCommand",
+    "ActionExecutor",
+    "ActionKind",
+    "ActionRequest",
+    "ActionState",
+    "ActionStatus",
     "BridgeConfig",
     "ControlOwner",
     "ElasticTrackerStatus",
@@ -48,4 +63,5 @@ __all__ = [
     "SupervisorInputs",
     "UavState",
     "UgvState",
+    "VehicleSnapshot",
 ]

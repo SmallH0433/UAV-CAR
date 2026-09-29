@@ -1,6 +1,6 @@
 # UAV / AprilTag 项目迁移包
 
-更新日期：2026-09-08
+更新日期：2026-09-29
 
 项目根目录：仓库中的 `UAV/`
 
@@ -35,10 +35,10 @@
 
 ## 实机部署分支
 
-- `uav-rpi-deploy` / `uav-rpi-8.4`：无人机机载 Raspberry Pi 4B 的最小部署包。
-- `uav-pixhawk-deploy` / `uav-pixhawk-8.4`：QAV280 Pixhawk1 的固件和参数恢复包。
+- `uav-rpi-deploy` / `uav-rpi-8.5`：无人机机载 Raspberry Pi 4B 的最小部署包。
+- `uav-pixhawk-deploy` / `uav-pixhawk-8.5`：QAV280 Pixhawk1 的固件和参数恢复包。
 
-8.4 发布线增加飞手接管后的 RC6 会话锁定、CH8 高电平下降请求、实验性 companion GUIDED 下降/普通 DISARM 策略、大小 AprilTag 的 BODY_FRD 姿态链路和网页已发送指令方向显示。硬件部署配置仍关闭实验性 companion 下降；完整实飞验收不由离线测试替代。Pixhawk 包继续使用实机日志确认的官方 ArduCopter 4.7.0，并更新为 Log 76 的 1015 项参数快照。
+8.5 发布线将 `action_executor` 固定为唯一 MAVROS 动作出口，同步 GUIDED 跟飞/降落、标签居中与方向对齐、测距桥、开机遥测记录器和 Podman 恢复记录。TELEM1 与 Pi MAVROS 同步为 115200 baud，位置流调整为 10 Hz；Pixhawk 包更新为 2026-09-29 的 1015 项完整回读快照和 114 项迁移设置。现场 65 项目标回归通过，公开分支完整纯 Python 控制回归为 189 项通过、1 项因缺少 OpenCV 跳过，记录器另有 5 项通过。未解锁无桨验证中 CH6 与位置/速度遥测正常到达，GPS 无定位时 EKF 门正确拒绝 FOLLOW，自动重试已限频为 1 秒；进入 GUIDED 与完整起降仍需监护实飞验收。
 
 `main` 保存完整的无人机工程源码、配置与分析工具；部署分支只保留对应设备运行或恢复所需的内容。
 无人车工程独立保存在 `CAR/`，不属于上述两个无人机部署包。

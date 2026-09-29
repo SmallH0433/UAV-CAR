@@ -10,6 +10,7 @@ from flight_log_export import (
     prepare_sparse,
     quick_block_indices,
     set_periodic_streams,
+    check_dataflash_content,
 )
 
 
@@ -27,6 +28,27 @@ class FakeLink:
 
 
 class FlightLogExportTests(unittest.TestCase):
+    def test_all_zero_recording_is_not_usable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "log.BIN"
+            path.write_bytes(bytes(2_326_528))
+            self.assertEqual(check_dataflash_content(path)["error"], "ALL_ZERO_RECORDING")
+            self.assertEqual(path.stat().st_size, 2_326_528)
+
+    def test_empty_or_non_dataflash_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "log.BIN"
+            path.write_bytes(b"")
+            self.assertEqual(check_dataflash_content(path)["error"], "EMPTY_FILE")
+            path.write_bytes(b"not a dataflash log")
+            self.assertFalse(check_dataflash_content(path)["usable_for_analysis"])
+
+    def test_initial_format_record_passes_basic_check(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "log.BIN"
+            path.write_bytes(bytes((0xA3, 0x95, 0x80, 0x80, 89)) + b"FMT\0" + bytes(80))
+            self.assertTrue(check_dataflash_content(path)["usable_for_analysis"])
+
     def test_staged_plan_compact_and_stream_guard(self) -> None:
         size = 16_818_052
         selected = quick_block_indices(size)

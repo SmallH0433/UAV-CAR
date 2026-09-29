@@ -1,0 +1,18 @@
+[Unit]
+Description=Persistent passive flight telemetry recorder
+After=ov9281-mavros.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-%h/.config/pi-flight-recorder/environment
+ExecStart=/usr/bin/podman run --rm --name pi-flight-recorder --network host --ipc=host --env PYTHONUNBUFFERED=1 --env ROS_DOMAIN_ID --env RMW_IMPLEMENTATION -v %h/flight_recorder:/recorder:ro -v %h/flight_logs:/logs localhost/air-ground-landing-ros2:humble /bin/bash -lc 'source /opt/ros/humble/setup.bash && source /opt/air_ground_landing/ros2_ws/install/setup.bash && exec python3 /recorder/pi_flight_recorder.py --output /logs --request-missing-telemetry'
+ExecStop=-/usr/bin/podman stop -t 10 pi-flight-recorder
+ExecStopPost=-/usr/bin/podman rm -f pi-flight-recorder
+Restart=always
+RestartSec=30
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

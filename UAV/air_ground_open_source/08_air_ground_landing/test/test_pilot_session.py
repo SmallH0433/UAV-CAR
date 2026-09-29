@@ -14,7 +14,6 @@ from air_ground_landing.guided_execution import (
     FollowContinuityGuard, FollowContinuityConfig, TerminalLandLatch,
     TerminalLandConfig, RcLandingRequestGate, LandingSwitchConfig,
     HorizontalVelocityLimiter, HorizontalVelocityLimitConfig,
-    follow_mode_allowed,
 )
 
 
@@ -127,8 +126,7 @@ isolated = ast.Module(body=[ast.ImportFrom(module='__future__',
     type_ignores=[])
 scope = dict(ModeTransitionPhase=ModeTransitionPhase, RcGateState=RcGateState,
              RcGateResult=RcGateResult, json=json, math=math, Bool=NS, String=NS,
-             LandingEvidence=LandingEvidence, DescentInput=DescentInput,
-             follow_mode_allowed=follow_mode_allowed)
+             LandingEvidence=LandingEvidence, DescentInput=DescentInput)
 scope['SetMode'] = NS(Request=NS)
 exec(compile(ast.fix_missing_locations(isolated), str(ADAPTER), 'exec'), scope)
 

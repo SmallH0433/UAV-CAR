@@ -3,3 +3,4 @@ guided_executor:
   ros__parameters:
     environment: sitl
     companion_descent_enabled: true
+

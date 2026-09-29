@@ -36,6 +36,23 @@ def axis_direction(value: Optional[float], positive: str, negative: str, deadban
     return "HOLD"
 
 
+def normalize_executor_status(payload: dict) -> dict:
+    """Expose v2 actions through the existing read-only console contract."""
+    if payload.get("node") != "ACTION_EXECUTOR_ROS2":
+        return payload
+    result = dict(payload)
+    active = payload.get("state") == "RUNNING" and payload.get("output_enabled") is True
+    result.update(
+        follow_active=active and payload.get("follow_active", payload.get("action") == "FOLLOW"),
+        landing_active=active and payload.get("landing_active", payload.get("action") in {"LAND", "PRECISION_LAND"}),
+        landing_requested=payload.get("landing_switch_state") == "HIGH",
+        control_owner="ACTION_EXECUTOR_V2" if active else "HOLD",
+        mode_gate=payload.get("detail", "UNKNOWN"),
+        executor_version="v2",
+    )
+    return result
+
+
 def command_to_body_flu(command: dict, quaternion: Optional[tuple]) -> Optional[dict]:
     """ROS MAVROS input: LOCAL frames use ENU; BODY frames use FLU."""
     v = command.get("velocity", {})
@@ -131,6 +148,12 @@ class FlightStatusState:
             "velocity_age_s": velocity_age,
             "extended_state_age_s": extended_age,
             "guided_executor_age_s": executor_age,
+            "executor_version": executor.get("executor_version", "legacy"),
+            "action": executor.get("action"),
+            "action_state": executor.get("state"),
+            "action_detail": executor.get("detail"),
+            **{key: value for key, value in executor.items()
+               if key.startswith(("target_echo_", "tone_", "orphaned_guided_"))},
             "follow_active": bool(executor.get("follow_active", False)),
             "landing_active": bool(executor.get("landing_active", False)),
             "landing_requested": bool(executor.get("landing_requested", False)),
@@ -250,6 +273,9 @@ class FlightStatusHttp(Node):
             payload = json.loads(message.data)
         except (TypeError, ValueError, json.JSONDecodeError):
             return
+        if not isinstance(payload, dict):
+            return
+        payload = normalize_executor_status(payload)
         with self.state.lock:
             self.state.executor_status = payload
             self.state.executor_received_s = time.monotonic()

@@ -62,6 +62,42 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def check_dataflash_content(path: Path) -> dict:
+    """Distinguish a completed transfer from a usable DataFlash recording.
+
+    ArduPilot binary logs start with a self-describing FMT record. A passing
+    header is only a basic check, not a guarantee that every record is intact.
+    Never delete suspect bytes: they are evidence of a recording/storage fault.
+    """
+    with path.open("rb") as handle:
+        header = handle.read(89)
+        fmt_header = (
+            len(header) == 89
+            and header[:5] == bytes((0xA3, 0x95, 0x80, 0x80, 89))
+            and header[5:9] == b"FMT\x00"
+        )
+        all_zero = not any(header)
+        while all_zero:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            all_zero = not any(chunk)
+    error = None
+    if not header:
+        error = "EMPTY_FILE"
+    elif all_zero:
+        error = "ALL_ZERO_RECORDING"
+    elif not fmt_header:
+        error = "MISSING_INITIAL_DATAFLASH_FMT"
+    return {
+        "usable_for_analysis": error is None,
+        "initial_fmt_valid": fmt_header,
+        "all_zero": all_zero,
+        "error": error,
+        "scope": "Basic content check; does not validate every record",
+    }
+
+
 def detect_pixhawk_usb_port() -> str | None:
     candidates: list[tuple[int, str]] = []
     for port in list_ports.comports():
@@ -585,6 +621,9 @@ def main() -> int:
                 args.tail_bytes,
             )
             results["quick"] = {"download": quick, "compact": compact}
+            results["quick"]["content_check"] = check_dataflash_content(
+                Path(compact["output"])
+            )
             write_json(session_dir / "export_quick_manifest.json", results["quick"])
 
         if args.mode in ("full", "all"):
@@ -607,6 +646,7 @@ def main() -> int:
                 else None
             )
             full["hash_skipped"] = bool(args.skip_hash)
+            full["content_check"] = check_dataflash_content(destination)
             results["full"] = full
             write_json(session_dir / "export_full_manifest.json", full)
     finally:
@@ -684,6 +724,13 @@ def main() -> int:
     }
     write_json(session_dir / f"export_{args.mode}_manifest.json", summary)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if any(
+        not result.get("content_check", {}).get("usable_for_analysis", True)
+        for result in results.values()
+    ):
+        print("ERROR: Transferred log failed the DataFlash content check; preserve it for diagnosis.",
+              file=sys.stderr)
+        return 2
     return 0
 
 

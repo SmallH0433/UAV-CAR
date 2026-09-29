@@ -1,7 +1,7 @@
 [Unit]
-Description=OV9281 ROS 2 GUIDED follow to AC_PrecLand LAND runtime
-Requires=ov9281-vision.service ov9281-mavros.service
-After=ov9281-vision.service ov9281-mavros.service
+Description=OV9281 ROS 2 single action executor runtime
+Requires=ov9281-vision.service ov9281-mavros.service ov9281-range-bridge.service
+After=ov9281-vision.service ov9281-mavros.service ov9281-range-bridge.service
 Conflicts=ov9281-follow-props-off-manual.service ov9281-landing-ros2-preview.service
 
 [Service]
@@ -9,7 +9,7 @@ Type=simple
 Environment=PYTHONUNBUFFERED=1
 ExecStartPre=/usr/bin/flock --exclusive --wait 60 %t/ov9281-podman-storage.lock /usr/bin/podman info
 ExecStartPre=-/usr/bin/podman rm -f ov9281-landing-ros2
-ExecStart=/usr/bin/podman run --rm --name ov9281-landing-ros2 --network host --ipc=host -v /home/pi/air_ground_landing/config:/config:ro localhost/air-ground-landing-ros2:humble /bin/bash -lc 'source /opt/ros/humble/setup.bash && source /opt/air_ground_landing/ros2_ws/install/setup.bash && exec ros2 launch air_ground_landing_ros2 adapters.launch.py parameters_file:=/config/adapters.hardware.yaml landing_config_file:=/config/moving_landing.prototype.json'
+ExecStart=/usr/bin/podman run --rm --name ov9281-landing-ros2 --network host --ipc=host localhost/air-ground-landing-ros2:humble /bin/bash -lc 'source /opt/ros/humble/setup.bash && source /opt/air_ground_landing/ros2_ws/install/setup.bash && exec ros2 launch air_ground_landing_ros2 action_executor.launch.py parameters_file:=/opt/air_ground_landing/ros2_ws/install/share/air_ground_landing_ros2/config/action_executor.hardware.yaml'
 ExecStop=/usr/bin/podman stop -t 8 ov9281-landing-ros2
 Restart=on-failure
 RestartSec=3

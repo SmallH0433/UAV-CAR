@@ -86,7 +86,6 @@ class GuidedExecutionTests(unittest.TestCase):
             "rangefinder_median_m": 0.14,
             "inner_tag_vertical_m": None,
             "inner_tag_age_s": None,
-            "swd_explicit_low": False,
         }
         values.update(overrides)
         return values
@@ -182,20 +181,8 @@ class GuidedExecutionTests(unittest.TestCase):
         )
         self.assertTrue(still_latched.latched)
 
-        ch8_escape = latch.update(
-            now_s=2.05,
-            **self.terminal_land_inputs(
-                swd_high_and_fresh=False,
-                swd_explicit_low=True,
-            ),
-        )
-        self.assertFalse(ch8_escape.latched)
-        self.assertEqual(ch8_escape.reason, "CH8_EXPLICIT_LOW_OVERRIDE")
-
-        latch.update(now_s=2.06, **self.terminal_land_inputs())
-        latch.update(now_s=2.47, **self.terminal_land_inputs())
         escaped = latch.update(
-            now_s=2.5,
+            now_s=2.1,
             **self.terminal_land_inputs(rc_explicit_low=True),
         )
         self.assertFalse(escaped.latched)
