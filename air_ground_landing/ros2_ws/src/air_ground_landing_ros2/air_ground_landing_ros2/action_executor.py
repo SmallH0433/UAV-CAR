@@ -94,6 +94,7 @@ class ActionExecutorNode(ActionPeripherals, Node):
             for value in self.get_parameter("entry_modes").value
         }
         self.state_maximum_age_s = float(self.get_parameter("state_maximum_age_s").value)
+        self.ekf_maximum_age_s = float(self.get_parameter("ekf_maximum_age_s").value)
         self.pose_maximum_age_s = float(self.get_parameter("pose_maximum_age_s").value)
         self.velocity_maximum_age_s = float(self.get_parameter("velocity_maximum_age_s").value)
         self.candidate_maximum_age_s = float(self.get_parameter("candidate_maximum_age_s").value)
@@ -123,6 +124,7 @@ class ActionExecutorNode(ActionPeripherals, Node):
             raise ValueError("guided_mode, land_mode and entry_modes are required")
         if not all(math.isfinite(v) and v > 0.0 for v in (
             self.state_maximum_age_s,
+            self.ekf_maximum_age_s,
             self.pose_maximum_age_s,
             self.velocity_maximum_age_s,
             self.candidate_maximum_age_s,
@@ -208,6 +210,7 @@ class ActionExecutorNode(ActionPeripherals, Node):
         self.estimator_healthy = False
         self.estimator_received_s: Optional[float] = None
         self.ekf_report_received_s: Optional[float] = None
+        self.ekf_report_count = 0
         self.home_set = False
         self.home_received_s: Optional[float] = None
         self.rc_channels: Optional[tuple[int, ...]] = None
@@ -351,6 +354,9 @@ class ActionExecutorNode(ActionPeripherals, Node):
             "maximum_horizontal_acceleration_mps2": 0.5,
             "maximum_vertical_acceleration_mps2": 0.3,
             "state_maximum_age_s": 0.5,
+            # EKF_STATUS_REPORT can have multi-second gaps on TELEM1 even
+            # while the 10 Hz pose and velocity streams remain fresh.
+            "ekf_maximum_age_s": 5.0,
             "pose_maximum_age_s": 0.3,
             "velocity_maximum_age_s": 0.3,
             "candidate_maximum_age_s": 0.3,
@@ -473,7 +479,7 @@ class ActionExecutorNode(ActionPeripherals, Node):
         self.extended_received_s = self._now_s()
 
     def _estimator(self, message: EstimatorStatus) -> None:
-        if self._fresh(self.ekf_report_received_s, self.state_maximum_age_s, self._now_s()):
+        if self._fresh(self.ekf_report_received_s, self.ekf_maximum_age_s, self._now_s()):
             return
         self.estimator_healthy = bool(
             message.attitude_status_flag
@@ -497,6 +503,7 @@ class ActionExecutorNode(ActionPeripherals, Node):
         self.estimator_healthy = healthy
         self.estimator_received_s = now
         self.ekf_report_received_s = now
+        self.ekf_report_count += 1
 
     def _home(self, _message: HomePosition) -> None:
         self.home_set = True
@@ -684,7 +691,7 @@ class ActionExecutorNode(ActionPeripherals, Node):
         state_fresh = self._fresh(self.state_received_s, self.state_maximum_age_s, now)
         pose_fresh = self._fresh(self.pose_received_s, self.pose_maximum_age_s, now)
         velocity_fresh = self._fresh(self.velocity_received_s, self.velocity_maximum_age_s, now)
-        estimator_fresh = self._fresh(self.estimator_received_s, self.state_maximum_age_s, now)
+        estimator_fresh = self._fresh(self.estimator_received_s, self.ekf_maximum_age_s, now)
         home_fresh = self.home_set
         telemetry_fresh = bool(state_fresh and pose_fresh and velocity_fresh)
         position = (math.nan, math.nan, math.nan)
@@ -931,6 +938,16 @@ class ActionExecutorNode(ActionPeripherals, Node):
             "pilot_session_authorized": self.pilot_session.enabled if self.require_rc else True,
             "pilot_session_sequence": self.pilot_session.session_sequence,
             "fcu_mode": self.vehicle_state.mode or "UNKNOWN",
+            "ekf_healthy": self.estimator_healthy,
+            "ekf_report_count": self.ekf_report_count,
+            "ekf_report_age_s": (
+                None if self.ekf_report_received_s is None
+                else max(0.0, now - self.ekf_report_received_s)
+            ),
+            "estimator_age_s": (
+                None if self.estimator_received_s is None
+                else max(0.0, now - self.estimator_received_s)
+            ),
             "expected_mode": self._expected_mode(),
             "landing_target_stream_healthy": self.landing_target_stream_healthy,
             "landing_target_output_enabled": self.landing_target_output_enabled,

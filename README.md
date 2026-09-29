@@ -1,6 +1,6 @@
 # 无人机下位机部署分支
 
-版本：`uav-rpi-8.6`
+版本：`uav-rpi-8.7`
 
 本分支只保存安装在无人机机载 Raspberry Pi 4B 上的代码和配置。它不包含：
 
@@ -18,11 +18,11 @@
 - `config/boot/`：OV9281 和 Pixhawk UART 所需的启动配置片段。
 - `tools/`：开机遥测记录器及安装、离线测试脚本；不包含实际飞行日志。
 
-当前运行逻辑：`action_executor` 是任务层到 MAVROS 的唯一动作出口，旧 `guided_executor` 不再由部署服务启动。CH6 先以低位新鲜样本完成 0.4 s 重新授权，再以高位开启跟飞；CH8 在已确认 GUIDED 会话中请求精准降落。执行器从 `/uas1/mavlink_source` 解码飞控的 `EKF_STATUS_REPORT`，在保留时效门和故障位拒绝逻辑的同时支持光流相对位置 EKF。降落过程在 GUIDED 中同时下降、居中和对齐标签方向，0.10 m 处交接原生 LAND；高于阈值丢标时最多保持 1.0 s 零速度等待重捕获。飞手外部切模、断连、上锁或状态过期会锁定自动会话，持续高位不能抢回 GUIDED。
+当前运行逻辑：`action_executor` 是任务层到 MAVROS 的唯一动作出口，旧 `guided_executor` 不再由部署服务启动。独立的 `ekf_report_filter` 从 `/uas1/mavlink_source` 筛选飞控 `EKF_STATUS_REPORT` 并发布到 `/landing/ekf_report`，执行器只订阅这个低频主题；不健康报文仍会透传并触发安全拒绝。CH6 先以低位新鲜样本完成 0.4 s 重新授权，再以高位开启跟飞；CH8 在已确认 GUIDED 会话中请求精准降落。EKF 报文使用独立的 5 秒有效期，其他飞行状态仍为 2 秒、位姿和速度仍为 0.3 秒。降落过程在 GUIDED 中同时下降、居中和对齐标签方向，0.10 m 处交接原生 LAND；高于阈值丢标时最多保持 1.0 s 零速度等待重捕获。飞手外部切模、断连、上锁或状态过期会锁定自动会话，持续高位不能抢回 GUIDED。
 
 相机外参按“画面上为机体前、画面右为机体右”更新。大小 AprilTag 的 PnP 姿态统一转换到 BODY_FRD 并随 `LANDING_TARGET` 传递；网页预览只读显示树莓派实际发布的运动指令方向。相机服务是否拥有 MAVLink 写入权与飞控遥测是否在线分开声明。
 
-CH6/EKF 相关回归 79 项全部通过；发布分支回归共运行 193 项，192 项通过、1 项因当前环境缺少 OpenCV 跳过。权威源工程的全套 179 项回归仍有 `test_moving_landing_stack.py` 中 2 项既有失败，分别涉及质量门体坐标预期和移动平台融合误差，与本次 EKF 解码修改无关。Pi 上只读 ROS 探针已通过部署后的解码器收到 2 条健康飞控 EKF 报文。自动 FOLLOW 重试保持至少 1 秒间隔；无桨 CH6 触发、进入 GUIDED 与完整起降流程仍需现场监护验收。
+CH6/EKF 相关回归 79 项全部通过；权威源工程的全套 179 项回归仍有 `test_moving_landing_stack.py` 中 2 项既有失败，分别涉及质量门体坐标预期和移动平台融合误差，与本次 EKF 过滤修改无关。最终无桨复测中，三次 CH6 FOLLOW 请求全部接受，两次 LOITER→GUIDED，并在降低 CH6 后返回 LOITER；132 秒窗口内没有 EKF 误拒绝。CH8 LAND 请求被接受，但约 8 秒后因 `FLIGHT_TELEMETRY_LOST` 失败。真实飞行下降、退出后的垂直漂移及完整起降仍未验证。
 
 ## 目标环境
 

@@ -23,7 +23,8 @@ RECOMMENDED_RATES_HZ = {
     "MAV2_POSITION": 10.0,
     "MAV2_EXTRA1": 10.0,
     "MAV2_EXTRA2": 3.0,
-    "MAV2_EXTRA3": 3.0,
+    # Includes EKF_STATUS_REPORT; keep it frequent enough for the 2 s gate.
+    "MAV2_EXTRA3": 5.0,
 }
 
 

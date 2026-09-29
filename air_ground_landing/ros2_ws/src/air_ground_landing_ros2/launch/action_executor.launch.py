@@ -4,7 +4,7 @@ from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -23,6 +23,10 @@ def generate_launch_description():
             "landing_config_file",
             default_value=str(share / "config" / "moving_landing.prototype.json"),
             description="IBVS vision configuration",
+        ),
+        ExecuteProcess(
+            cmd=["python3", "-m", "air_ground_landing_ros2.ekf_report_filter"],
+            output="screen",
         ),
         Node(
             package="air_ground_landing_ros2",
