@@ -9,10 +9,10 @@ without a heartbeat the autonomous command (avoidance node) passes through.
 
 Optional ``steering_assist`` parameter (default ``false``, dynamically
 settable): when true and both operator and autonomous inputs are fresh, the
-mux blends instead of overriding — angular (steering) comes from teleop while
-linear keeps the autonomous cruise speed, unless the operator explicitly
-commands a non-zero linear (then teleop linear wins, allowing braking).
-The web gateway flips this on while avoidance cruise is enabled.
+mux blends them while preserving the avoidance command as a safety envelope.
+Avoidance may reduce forward speed or demand a steering correction; operator
+steering is used only while avoidance is not correcting the path.  The web
+gateway flips this on while avoidance cruise is enabled.
 """
 
 import json
@@ -260,15 +260,30 @@ class UgvControlMux(Node):
         if operator_fresh:
             steering_assist = bool(self.get_parameter("steering_assist").value)
             if steering_assist and teleop_fresh and navigation_fresh:
-                # 定速巡航转向辅助：方向听操作员，速度保持巡航；
-                # 操作员明确给非零线速度（刹车/加速）时以遥控为准。
+                # 巡航辅助必须保留避障节点的安全约束。旧实现把角速度完全
+                # 替换成遥控值，并允许遥控前进速度覆盖避障减速，导致按住
+                # 前进键时即使雷达发现障碍，车辆仍直行。
                 blended = Twist()
-                blended.linear.x = (
-                    self.teleop_command.linear.x
-                    if abs(self.teleop_command.linear.x) > 1e-3
-                    else self.navigation_command.linear.x
+                nav_linear = self.navigation_command.linear.x
+                teleop_linear = self.teleop_command.linear.x
+                if nav_linear < -1e-3:
+                    # 避障倒车脱困优先，不能被前进指令抵消。
+                    blended.linear.x = nav_linear
+                elif teleop_linear > 1e-3:
+                    # 前进时只允许比避障节点更慢，不能越过其减速/停车值。
+                    blended.linear.x = min(teleop_linear, max(nav_linear, 0.0))
+                elif teleop_linear < -1e-3:
+                    # 人工倒车仍可用于脱困；前向障碍不会限制后退。
+                    blended.linear.x = teleop_linear
+                else:
+                    blended.linear.x = nav_linear
+
+                nav_angular = self.navigation_command.angular.z
+                blended.angular.z = (
+                    nav_angular
+                    if abs(nav_angular) > 0.05
+                    else self.teleop_command.angular.z
                 )
-                blended.angular.z = self.teleop_command.angular.z
                 self._publish(blended, True, "operator_steering", "cruise_steering_assist")
             elif teleop_fresh:
                 self._publish(self.teleop_command, True, "operator_teleop", "operator_teleop")

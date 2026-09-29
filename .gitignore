@@ -1,0 +1,21 @@
+# colcon build artifacts
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# editor
+.vscode/
+
+# local config
+config/fastdds_udp_only.xml
+config/local-udp.conf
+
+# backups
+*.bak*
+*.before_*
+camera_ui_backups/

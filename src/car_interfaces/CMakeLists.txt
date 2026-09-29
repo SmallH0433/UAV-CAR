@@ -18,7 +18,10 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MotorFeedback.msg"
   "msg/UavStatus.msg"
   "msg/UavCommand.msg"
+  "msg/LeadscrewCommand.msg"
+  "msg/LeadscrewStatus.msg"
   "srv/SetGoal.srv"
+  "srv/LeadscrewControl.srv"
   DEPENDENCIES std_msgs geometry_msgs
 )
 

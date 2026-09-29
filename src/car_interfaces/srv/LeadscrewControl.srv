@@ -1,0 +1,10 @@
+uint8 group
+string action
+uint8 direction
+float64 rpm
+float64 distance_mm
+float64 ramp_seconds
+float64 deadline_unix
+---
+bool accepted
+string message

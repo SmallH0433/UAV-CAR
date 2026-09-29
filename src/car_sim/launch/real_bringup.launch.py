@@ -31,18 +31,27 @@ N10P 电机上电即转，无需开工令；如需停转/恢复：
 GPS（WHEELTEC G60）：默认随车启动（gps_port:=/dev/wheeltec_gps），
 不需要时 gps_port:='' 关闭；定位输出 `ros2 topic echo /fix` 查看。
 
-注意：Nav2 地图自主导航（AMCL + Nav2）因 Pi 4B 同时跑桌面环境性能不足
-（雷达 460800 波特串口丢包、AMCL 无法收敛）已屏蔽——launch 不再提供
-nav_mode 参数，相关文件（config/nav2_params.yaml、launch/nav2_stack.launch.py）
-保留备用。自主巡航/避障仍由 avoidance_node 承担（原有功能不受影响）。
+Nav2 地图自主导航（AMCL + Nav2）：nav_mode:=nav2 map:=<地图yaml完整路径> 启动
+（需先用网页「一键建图」生成地图）。该模式下 avoidance_node 不启动，
+Nav2 经 velocity_smoother 独占 /cmd_vel，自主巡航不可用。
+早期曾因桌面环境抢占算力（雷达串口丢包、AMCL 不收敛）屏蔽；更换轻量
+桌面（XFCE）+ 纯 SSH 运行后实测 /scan 满帧 10Hz，已恢复接入。
+自主避障仍由 avoidance_node 承担（nav_mode:=avoidance 默认模式）。
+
+双向丝杆（树莓派 GPIO 直连双 42 电机，对接锁定机构）：默认关闭，
+enable_leadscrew:=true 启动；需要 ubuntu 用户在 gpio 组且已加载 GPIO udev 规则。
+状态 `ros2 topic echo /leadscrew/status`，指令示例：
+  ros2 topic pub --once /leadscrew/cmd car_interfaces/msg/LeadscrewCommand \
+    "{group: 0, command: 1}"   # command: 0=STOP 1=IN 2=OUT 3=RELAX 4=LOCK
 """
 
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition, UnlessCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
@@ -65,11 +74,15 @@ def generate_launch_description():
     creep_speed = LaunchConfiguration('creep_speed')
     web_bind = LaunchConfiguration('web_bind')
     gps_port = LaunchConfiguration('gps_port')
+    enable_leadscrew = LaunchConfiguration('enable_leadscrew')
+    leadscrew_simulate = LaunchConfiguration('leadscrew_simulate')
     front_camera = LaunchConfiguration('front_camera')
     k210_port = LaunchConfiguration('k210_port')
     lidar_tf_x = LaunchConfiguration('lidar_tf_x')
     lidar_tf_y = LaunchConfiguration('lidar_tf_y')
     lidar_tf_z = LaunchConfiguration('lidar_tf_z')
+    nav_mode = LaunchConfiguration('nav_mode')
+    nav_map = LaunchConfiguration('map')
 
     n10p_params = os.path.join(
         get_package_share_directory('car_nodes'), 'config', 'lslidar_n10p_uart.yaml')
@@ -80,8 +93,14 @@ def generate_launch_description():
     has_rear_camera = IfCondition(
         PythonExpression(["'", rear_camera_device, "' != ''"]))
     has_gps = IfCondition(PythonExpression(["'", gps_port, "' != ''"]))
+    has_leadscrew = IfCondition(
+        PythonExpression(["'", enable_leadscrew, "' == 'true'"]))
     v4l2_front = IfCondition(
         PythonExpression(["'", front_camera, "' == 'v4l2'"]))
+    # nav2 模式：Nav2 栈接管自主导航；avoidance 模式（默认）：自研避障节点
+    nav2_mode = IfCondition(PythonExpression(["'", nav_mode, "' == 'nav2'"]))
+    avoidance_mode = UnlessCondition(
+        PythonExpression(["'", nav_mode, "' == 'nav2'"]))
     k210_front = IfCondition(
         PythonExpression(["'", front_camera, "' == 'k210'"]))
 
@@ -172,6 +191,9 @@ def generate_launch_description():
             'vehicle_half_width': 0.235,
             'footprint_padding': 0.04,
         }],
+        # nav2 模式下不启动：Nav2 的 velocity_smoother 独占 /cmd_vel，
+        # 避免 avoidance 的待命零速与 Nav2 指令混在同一话题上
+        condition=avoidance_mode,
     )
     # teleop 优先：operator heartbeat 新鲜时 /ugv/teleop/cmd_vel 覆盖 /cmd_vel；
     # 无 heartbeat 时放行 avoidance 的 /cmd_vel（navigation_topic 默认值）。
@@ -226,7 +248,9 @@ def generate_launch_description():
         executable='web_gateway',
         name='web_gateway',
         output='screen',
-        parameters=[{'bind_address': web_bind}],
+        parameters=[{'bind_address': web_bind},
+                    {'nav_backend': nav_mode},
+                    {'uav_camera_url': LaunchConfiguration('uav_camera_url')}],
     )
     # WHEELTEC G60 GPS（gps_port 非空时启动；上电即输出，无需启动命令）
     gps = Node(
@@ -236,6 +260,28 @@ def generate_launch_description():
         output='screen',
         parameters=[g60_params, {'port': gps_port}],
         condition=has_gps,
+    )
+    # 树莓派 GPIO 直连双向丝杆锁定机构（enable_leadscrew:=true 时启动；
+    # 指令 /leadscrew/cmd，状态 /leadscrew/status，见头部 docstring）
+    leadscrew = Node(
+        package='car_nodes',
+        executable='leadscrew_driver_node',
+        name='leadscrew_driver_node',
+        output='screen',
+        parameters=[{
+            'simulate': leadscrew_simulate,
+            'step_pin_1': 17,
+            'dir_pin_1': 27,
+            'step_pin_2': 23,
+            'dir_pin_2': 24,
+            'enable_pin_1': 22,
+            'enable_pin_2': 5,
+            # Both motors: inward DIR LOW, outward DIR HIGH.
+            'dir_invert_2': False,
+            'pulses_per_rev': 1600,
+            'leadscrew_pitch_mm': 2.0,
+        }],
+        condition=has_leadscrew,
     )
     # 常驻静态 TF base_footprint→laser_frame（雷达安装位置，建图依赖；
     # 数值需与 web_gateway 建图参数 mapping_lidar_x/y/z 一致）
@@ -247,10 +293,19 @@ def generate_launch_description():
         arguments=[lidar_tf_x, lidar_tf_y, lidar_tf_z,
                    '0', '0', '0', 'base_footprint', 'laser_frame'],
     )
-    # Nav2 地图自主导航已屏蔽（Pi 4B 桌面环境性能不足）：不再 include
-    # nav2_stack.launch.py；文件保留备用，恢复时重新接入并传 nav_mode 参数。
+    # Nav2 地图自主导航（nav_mode:=nav2 时启动）：AMCL 定位 + NavFn 规划 +
+    # RPP 跟踪 + costmap 实时避障，输出经 velocity_smoother → /cmd_vel
+    nav2_stack = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(
+            get_package_share_directory('car_sim'), 'launch',
+            'nav2_stack.launch.py')),
+        launch_arguments={'map': nav_map}.items(),
+        condition=nav2_mode,
+    )
 
     return LaunchDescription([
+        Node(package='car_nodes', executable='uav_bridge_node', output='screen',
+             parameters=[{'uav_ip':'192.168.50.3'}]),
         DeclareLaunchArgument(
             'motor_port', default_value='/dev/ttyACM0',
             description='STM32 控制板串口（串口 3 的 USB 口，CH9102 一般 ttyACM*）'),
@@ -297,11 +352,20 @@ def generate_launch_description():
             'creep_speed', default_value='0.25',
             description='贴障蠕动速度 m/s（实机调优：原 0.15，提速以加快贴障转向）'),
         DeclareLaunchArgument(
+            'uav_camera_url', default_value='http://192.168.50.3:8870',
+            description='UAV A8 camera HTTP service over H100'),
+        DeclareLaunchArgument(
             'web_bind', default_value='0.0.0.0',
             description='网页控制台监听地址；0.0.0.0=允许局域网访问'),
         DeclareLaunchArgument(
             'gps_port', default_value='/dev/wheeltec_gps',
             description="WHEELTEC G60 GPS 串口（udev 规则名）；留空 ''=不启动 GPS"),
+        DeclareLaunchArgument(
+            'enable_leadscrew', default_value='true',
+            description="true=启动树莓派 GPIO 直连双向丝杆节点；false=不启动"),
+        DeclareLaunchArgument(
+            'leadscrew_simulate', default_value='false',
+            description='true=丝杆本地仿真（不操作 GPIO，模拟状态机）'),
         DeclareLaunchArgument(
             'front_camera', default_value='v4l2',
             description="前摄类型：v4l2=camera_device 摄像头；k210=K210 串口推流摄像头；none=不启动前摄"),
@@ -317,6 +381,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'lidar_tf_z', default_value='0.15',
             description='雷达相对 base_footprint 的 Z 偏移 m'),
+        DeclareLaunchArgument(
+            'nav_mode', default_value='avoidance',
+            description="自主导航后端：avoidance=自研避障节点（默认）；nav2=AMCL+Nav2 地图导航"),
+        DeclareLaunchArgument(
+            'map', default_value='',
+            description='nav_mode:=nav2 时加载的地图 yaml 完整路径'),
         lidar_vendor,
         lidar_sim,
         camera,
@@ -331,5 +401,7 @@ def generate_launch_description():
         ultrasonic,
         web_gateway,
         gps,
+        leadscrew,
         lidar_static_tf,
+        nav2_stack,
     ])

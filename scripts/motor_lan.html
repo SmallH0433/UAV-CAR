@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>丝杆电机控制</title>
+  <style>
+    :root {
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+      color: #1d2939;
+      background: #f5f7fa;
+      font-synthesis: none;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    button, input, select { font: inherit; }
+    .page { width: min(100% - 32px, 760px); margin: 0 auto; padding: 44px 0 64px; }
+    .topline { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
+    .eyebrow { color: #4667a1; font-size: 12px; font-weight: 700; letter-spacing: .14em; }
+    .device { color: #667588; font-size: 13px; }
+    h1 { margin: 0; font-size: clamp(27px, 4vw, 36px); letter-spacing: -.03em; }
+    .intro { margin: 9px 0 30px; color: #657386; line-height: 1.6; }
+    .card { background: #fff; border: 1px solid #e3e8ef; border-radius: 18px; box-shadow: 0 12px 38px #172b4d0a; }
+    .control { padding: 28px; }
+    .section-title { margin: 0 0 22px; font-size: 17px; font-weight: 700; }
+    .field { min-width: 0; }
+    label, .field-label { display: block; margin: 0 0 9px; color: #475569; font-size: 14px; font-weight: 600; }
+    input, select { width: 100%; height: 46px; padding: 0 13px; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; color: #1d2939; outline: none; }
+    input:focus, select:focus { border-color: #3974d2; box-shadow: 0 0 0 3px #3974d226; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 21px 20px; }
+    .direction-field { margin: 23px 0; }
+    .direction-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .direction { min-height: 70px; padding: 12px 16px; text-align: left; border: 1px solid #d3dce8; border-radius: 11px; background: #fff; color: #243247; cursor: pointer; transition: border-color .15s, background .15s; }
+    .direction strong { display: block; font-size: 15px; }
+    .direction span { display: block; margin-top: 3px; color: #748198; font-size: 12px; font-weight: 400; }
+    .direction[aria-pressed="true"] { border-color: #3974d2; background: #edf4ff; color: #245fba; box-shadow: inset 0 0 0 1px #3974d2; }
+    .direction[aria-pressed="true"] span { color: #4874ae; }
+    .direction:hover { border-color: #3974d2; }
+    .actions { display: flex; gap: 10px; margin-top: 27px; }
+    .actions button { height: 46px; border-radius: 10px; border: 1px solid transparent; padding: 0 24px; font-weight: 700; cursor: pointer; }
+    .start { flex: 1; background: #276bd1; color: #fff; }
+    .start:hover:not(:disabled) { background: #1e5fbf; }
+    .stop { width: 115px; background: #fff; border-color: #e3a8ac !important; color: #ad3642; }
+    .stop:hover:not(:disabled) { background: #fff5f5; }
+    .reset { background: #fff7e8; color: #875b12; border-color: #e4c687 !important; }
+    .actions { flex-wrap: wrap; }
+    .actions button:disabled { opacity: .48; cursor: not-allowed; }
+    .note { margin: 17px 0 0; color: #788597; font-size: 12px; line-height: 1.6; }
+    .feedback { margin-top: 18px; padding: 23px 28px; }
+    .feedback-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .feedback h2 { margin: 0; font-size: 17px; }
+    .state { display: inline-flex; align-items: center; gap: 8px; color: #526174; font-size: 13px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #27a56b; }
+    .dot.busy { background: #e7a741; }
+    .error { margin-top: 13px; color: #b83542; font-size: 13px; white-space: pre-wrap; }
+    .error:empty { display: none; }
+    pre { margin: 19px 0 0; padding: 15px 17px; min-height: 74px; border-radius: 10px; background: #f5f7fa; color: #536274; font: 13px/1.65 Consolas, "Microsoft YaHei", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    @media (max-width: 560px) {
+      .page { width: min(100% - 24px, 760px); padding-top: 27px; }
+      .device { font-size: 12px; }
+      .control { padding: 21px; }
+      .grid { grid-template-columns: 1fr; gap: 18px; }
+      .direction-field { margin: 21px 0; }
+      .feedback { padding: 21px; }
+      .feedback-head { align-items: flex-start; flex-direction: column; gap: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="topline"><span class="eyebrow">CAR / MOTOR</span><span class="device" id="address"></span></div>
+    <h1>丝杆电机控制</h1>
+    <p class="intro">选择电机和方向，设置转速与行程，即可开始运动。</p>
+
+    <section class="card control">
+      <h2 class="section-title">运动设置</h2>
+      <div class="field">
+        <label for="motor">选择电机</label>
+        <select id="motor"><option value="1">1 号电机</option><option value="2">2 号电机</option></select>
+      </div>
+      <div class="field direction-field">
+        <span class="field-label">运动方向</span>
+        <div class="direction-row">
+          <button type="button" class="direction" id="in" aria-pressed="true"><strong>向内</strong><span>0 = DIR 低</span></button>
+          <button type="button" class="direction" id="out" aria-pressed="false"><strong>向外</strong><span>1 = DIR 高</span></button>
+        </div>
+      </div>
+      <div class="grid">
+        <div class="field"><label for="rpm">转速 · rpm</label><input id="rpm" type="number" min="0.1875" max="1000" step="any" value="6"></div>
+        <div class="field"><label for="distance">本次行程 · mm</label><input id="distance" type="number" min="0.00125" max="62" step="any" value="1"></div>
+        <div class="field"><label for="ramp">加速时间 · 秒</label><input id="ramp" type="number" min="0.05" max="5" step="any" value="0.1"></div>
+      </div>
+      <div class="actions">
+        <button type="button" class="start" id="move">开始运动</button>
+        <button type="button" class="stop" id="stop" disabled>停止</button>
+        <button type="button" class="reset" id="reset" disabled>EN 复位</button>
+      </div>
+      <p class="note" id="resetHint">正在检查复位配置…</p>
+      <p class="note">位置按脉冲估算，无限位反馈。首次操作建议先用 1 mm 行程确认方向；高转速可能达不到设定值。</p>
+    </section>
+
+    <section class="card feedback" aria-live="polite">
+      <div class="feedback-head"><h2>运行反馈</h2><span class="state"><i class="dot" id="dot"></i><span id="status">连接中…</span></span></div>
+      <div class="error" id="error"></div>
+      <pre id="output">暂无运行记录</pre>
+    </section>
+  </main>
+  <script>
+    const $ = id => document.getElementById(id);
+    $('address').textContent = location.host;
+    let action = 'in';
+    function directionValue() {
+      const mirrored = $('motor').value === '2';
+      return action === 'in' ? (mirrored ? 1 : 0) : (mirrored ? 0 : 1);
+    }
+    function renderDirections() {
+      const mirrored = $('motor').value === '2';
+      $('in').querySelector('span').textContent = mirrored ? '1 = DIR 高' : '0 = DIR 低';
+      $('out').querySelector('span').textContent = mirrored ? '0 = DIR 低' : '1 = DIR 高';
+      $('in').setAttribute('aria-pressed', String(action === 'in'));
+      $('out').setAttribute('aria-pressed', String(action === 'out'));
+    }
+    $('motor').addEventListener('change', renderDirections);
+    for (const kind of ['in', 'out']) {
+      $(kind).addEventListener('click', () => { action = kind; renderDirections(); });
+    }
+
+    async function api(path, body) {
+      const response = await fetch(path, {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `请求失败：${response.status}`);
+      return data;
+    }
+    function showError(error) { $('error').textContent = error ? String(error.message || error) : ''; }
+    function render(data) {
+      $('status').textContent = data.message;
+      $('output').textContent = data.output || '暂无运行记录';
+      $('move').disabled = data.moving;
+      $('stop').disabled = !data.moving;
+      $('reset').disabled = data.moving || !data.reset_available;
+      $('reset').textContent = data.resetting ? '正在复位…' : 'EN 复位';
+      $('resetHint').textContent = data.reset_available
+        ? 'EN 高电平保持 1 秒后恢复低电平（1号 GPIO22，2号 GPIO5）。先停止运动；复位不自动启动，报警是否消除需观察指示灯。'
+        : '复位暂不可用：' + data.reset_reason;
+      $('dot').className = `dot ${data.moving ? 'busy' : ''}`;
+    }
+    $('move').addEventListener('click', async () => {
+      showError('');
+      $('move').disabled = true;
+      try {
+        render(await api('/api/move', {
+          motor: $('motor').value, direction: directionValue(), rpm: $('rpm').value,
+          distance_mm: $('distance').value, ramp_seconds: $('ramp').value
+        }));
+      } catch (error) { showError(error); await refresh(); }
+    });
+    $('stop').addEventListener('click', async () => {
+      showError('');
+      try { render(await api('/api/stop', {})); }
+      catch (error) { showError(error); }
+    });
+    $('reset').addEventListener('click', async () => {
+      showError('');
+      $('reset').disabled = true;
+      $('move').disabled = true;
+      try { render(await api('/api/reset', {motor: $('motor').value})); }
+      catch (error) { showError(error); await refresh(); }
+    });
+    async function refresh() {
+      try {
+        const response = await fetch('/api/status');
+        if (response.ok) render(await response.json());
+      } catch (error) { showError(error); }
+    }
+    setInterval(refresh, 700);
+    refresh();
+  </script>
+</body>
+</html>

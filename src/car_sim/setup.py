@@ -12,10 +12,12 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', [
             'launch/real_bringup.launch.py',
+            'launch/control_panel.launch.py',
             'launch/nav2_stack.launch.py',
         ]),
         ('share/' + package_name + '/config', [
             'config/nav2_params.yaml',
+            'config/amcl_localization.yaml',
         ]),
         ('share/' + package_name + '/web', ['car_sim/web/index.html']),
     ],

@@ -14,6 +14,7 @@ default and exposes:
   GET  /api/photo/download  最新前摄帧 JPEG，带 Content-Disposition 供浏览器直接下载
   GET  /api/camera.jpg   latest gz-bridge front camera frame as JPEG (503 if absent)
   GET  /api/camera_rear.jpg  latest gz-bridge rear camera frame as JPEG (503 if absent)
+  POST /api/leadscrew/toggle  停机坪推杆开合：收拢状态→四杆向外，否则四杆向内
 
 Teleop is fail-closed: commands older than ``teleop_watchdog_s`` are replaced
 by a zero command, and the operator heartbeat published alongside teleop is
@@ -36,7 +37,8 @@ from typing import Optional, Tuple
 from urllib.parse import urlparse
 
 import yaml
-from geometry_msgs.msg import Twist, PoseStamped
+from ament_index_python.packages import get_package_share_directory
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from rcl_interfaces.srv import GetParameters, SetParameters
@@ -45,13 +47,18 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy
 from sensor_msgs.msg import Image, LaserScan, NavSatFix, Range
 from std_msgs.msg import Bool, String
+from std_srvs.srv import Empty
+
+from car_interfaces.msg import LeadscrewCommand, LeadscrewStatus
 
 import tf2_ros
 from action_msgs.msg import GoalStatus
 from nav2_msgs.action import NavigateToPose
 from rclpy.action import ActionClient
 
+from .leadscrew_web import LeadscrewWeb
 from .runtime_timing import create_steady_timer
+from .uav_camera_proxy import UavCameraProxy
 
 try:  # Camera JPEG support is optional; the rest of the gateway works without.
     import cv2
@@ -127,6 +134,22 @@ def _index_path() -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "index.html")
 
 
+def _index_sim_path() -> str:
+    """仿真专用控制台（带推杆俯视图），仅用于仿真调机，勿在真机使用。"""
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        candidate = os.path.join(
+            get_package_share_directory("car_sim"), "web", "index_sim.html"
+        )
+        if os.path.isfile(candidate):
+            return candidate
+    except Exception:
+        pass
+    return os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "web", "index_sim.html")
+
+
 class WebGateway(Node):
     """HTTP front-end for UGV teleop and status monitoring."""
 
@@ -134,11 +157,14 @@ class WebGateway(Node):
         super().__init__("web_gateway")
         self.declare_parameter("bind_address", "127.0.0.1")
         self.declare_parameter("port", 8765)
+        self.declare_parameter("uav_camera_url", "http://192.168.50.3:8870")
+        self.uav_camera = UavCameraProxy(str(self.get_parameter("uav_camera_url").value))
         self.declare_parameter("teleop_topic", "/ugv/teleop/cmd_vel")
         self.declare_parameter("heartbeat_topic", "/ugv/operator/heartbeat")
         self.declare_parameter("odom_topic", "/odom")
         self.declare_parameter("camera_topic", "/camera/image_raw")
         self.declare_parameter("rear_camera_topic", "/camera/rear/image_raw")
+        self.declare_parameter("top_camera_topic", "/camera/top/image_raw")
         self.declare_parameter("teleop_watchdog_s", 0.35)
         self.declare_parameter("max_linear_mps", 0.5)
         self.declare_parameter("max_angular_rps", 0.7)
@@ -161,6 +187,9 @@ class WebGateway(Node):
         self.declare_parameter("nav_backend", "avoidance")
         # 网页导航/巡航加载的地图名（~/maps/<name>.pgm/.yaml）
         self.declare_parameter("nav_map_name", "map_20260820_193257")
+        # 停机坪居中机构（ESP8266 丝杆下位机 / Gazebo 仿真共用话题契约）
+        self.declare_parameter("leadscrew_cmd_topic", "/leadscrew/cmd")
+        self.declare_parameter("leadscrew_status_topic", "/leadscrew/status")
 
         self.bind_address = str(self.get_parameter("bind_address").value)
         self.port = int(self.get_parameter("port").value)
@@ -181,6 +210,7 @@ class WebGateway(Node):
         self.nav_map_name = str(self.get_parameter("nav_map_name").value)
 
         self.lock = threading.RLock()
+        self.leadscrew_web = LeadscrewWeb(self)
         self.started_at = time.monotonic()
         self.last_teleop_time = 0.0
         self.latest = {"ugv_control_mux": {}, "ugv_command_gateway": {}}
@@ -191,6 +221,9 @@ class WebGateway(Node):
         self.image_time = 0.0
         self.rear_image_jpeg: Optional[bytes] = None
         self.rear_image_time = 0.0
+        # 俯视相机（停机坪正上方，仿真监控台 /sim 用）
+        self.top_image_jpeg: Optional[bytes] = None
+        self.top_image_time = 0.0
         self.bridge = CvBridge() if _CAMERA_AVAILABLE else None
         # 雷达/GPS 网页展示缓存
         self.scan_points = []          # [[angle_deg, dist_m], ...] 降采样极坐标点
@@ -212,6 +245,25 @@ class WebGateway(Node):
         self.mapping_active = False
         self.mapping_started = 0.0
         self.mapping_procs = []
+        self.mapping_initial_odom = None
+        # 已保存地图上的 AMCL 激光定位。定位进程独立于建图进程，二者互斥，
+        # 避免同时发布 /map 和 map->odom。
+        self.localization_proc = None
+        self.localization_started = 0.0
+        self.localization_state = "inactive"
+        self.localization_error = None
+        self.localization_map_name = None
+        self.localization_pose = None
+        self.localization_pose_time = 0.0
+        self.localization_xy_sigma = None
+        self.localization_yaw_sigma = None
+        self.localization_confidence = "none"
+        self.localization_global_requested = False
+        self.localization_nomotion_requests = 0
+        self.localization_last_nomotion = 0.0
+        self.localization_params_file = os.path.join(
+            get_package_share_directory("car_sim"),
+            "config", "amcl_localization.yaml")
         # 自主导航状态
         self.nav_active = False
         self.nav_path = []             # [(x, y), ...] odom 系路径点
@@ -224,13 +276,20 @@ class WebGateway(Node):
         self.auto_cruise_initial = None  # (x, y) 初始点
         self.auto_cruise_started = 0.0
         self.auto_cruise_returning = False
+        # 停机坪推杆状态缓存（/leadscrew/status）；last_cmd 为状态离线时的切换兜底
+        self.leadscrew_status = None   # {"state": [...], "pos_mm": [...], "enabled": [...]}
+        self.leadscrew_time = 0.0
+        self.leadscrew_last_cmd = None  # "in" / "out"
         # Nav2 导航后端（nav_backend=nav2）：当前 NavigateToPose 目标句柄
         self.nav2_goal_handle = None
         # TF 查询（map→base_footprint，定位模式下网页地图小车位置显示）
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-        # 默认地图：开机自动加载
-        self._load_map(self.nav_map_name)
+        # 默认地图：配置的地图不存在时选最近保存的一张。
+        if not self._load_map(self.nav_map_name):
+            maps = self._saved_map_names()
+            if maps:
+                self._load_map(maps[0])
 
         self.teleop_publisher = self.create_publisher(
             Twist, str(self.get_parameter("teleop_topic").value), 10
@@ -298,6 +357,16 @@ class WebGateway(Node):
         # Nav2 后端：NavigateToPose action 客户端（nav_backend=nav2 时使用）
         self.nav2_client = ActionClient(
             self, NavigateToPose, "navigate_to_pose")
+        # 停机坪推杆：指令发布 + 状态订阅
+        self.leadscrew_publisher = self.create_publisher(
+            LeadscrewCommand,
+            str(self.get_parameter("leadscrew_cmd_topic").value), 10)
+        self.create_subscription(
+            LeadscrewStatus,
+            str(self.get_parameter("leadscrew_status_topic").value),
+            self._on_leadscrew_status,
+            10,
+        )
         # SLAM 地图（slam_toolbox 以 transient_local 发布 /map，订阅需匹配才能
         # 立即收到最近一次地图；未启动 SLAM 时 /api/map.png 返回 503）
         map_qos = QoSProfile(depth=1)
@@ -308,17 +377,29 @@ class WebGateway(Node):
             self._on_map,
             map_qos,
         )
+        self.create_subscription(
+            PoseWithCovarianceStamped,
+            "/amcl_pose",
+            self._on_amcl_pose,
+            10,
+        )
         if _CAMERA_AVAILABLE:
             self.create_subscription(
                 Image,
                 str(self.get_parameter("camera_topic").value),
-                lambda msg: self._on_image(msg, rear=False),
+                lambda msg: self._on_image(msg, "front"),
                 qos_profile_sensor_data,
             )
             self.create_subscription(
                 Image,
                 str(self.get_parameter("rear_camera_topic").value),
-                lambda msg: self._on_image(msg, rear=True),
+                lambda msg: self._on_image(msg, "rear"),
+                qos_profile_sensor_data,
+            )
+            self.create_subscription(
+                Image,
+                str(self.get_parameter("top_camera_topic").value),
+                lambda msg: self._on_image(msg, "top"),
                 qos_profile_sensor_data,
             )
         else:
@@ -338,6 +419,13 @@ class WebGateway(Node):
         self.cruise_poll_timer = create_steady_timer(
             self, 2.0, self._poll_cruise_state)
 
+        self.global_localization_client = self.create_client(
+            Empty, "/reinitialize_global_localization")
+        self.nomotion_update_client = self.create_client(
+            Empty, "/request_nomotion_update")
+        self.localization_timer = create_steady_timer(
+            self, 0.5, self._localization_tick)
+
         # 巡航转向辅助联动：巡航开关状态变化时推送到 mux 的 steering_assist
         mux = str(self.get_parameter("mux_node_name").value)
         self.assist_set_client = self.create_client(
@@ -355,12 +443,39 @@ class WebGateway(Node):
         self.get_logger().info(
             f"Web gateway listening on http://{self.bind_address}:{self.port}"
         )
+        if self.nav_map_data is not None:
+            self.start_localization(self.nav_map_name)
 
     # ---------------- ROS callbacks ----------------
     def _on_status(self, key: str, message: String) -> None:
         with self.lock:
             self.latest[key] = _json_message(message)
             self.topic_times[key] = time.monotonic()
+
+    def _on_amcl_pose(self, message: PoseWithCovarianceStamped) -> None:
+        """保存 AMCL 地图位姿及不确定度，供网页实时显示。"""
+        position = message.pose.pose.position
+        orientation = message.pose.pose.orientation
+        covariance = message.pose.covariance
+        xy_sigma = math.sqrt(max(0.0, covariance[0] + covariance[7]))
+        yaw_sigma = math.sqrt(max(0.0, covariance[35]))
+        if xy_sigma <= 0.35 and yaw_sigma <= 0.35:
+            confidence = "high"
+        elif xy_sigma <= 1.0 and yaw_sigma <= 0.8:
+            confidence = "medium"
+        else:
+            confidence = "low"
+        with self.lock:
+            self.localization_pose = [
+                float(position.x), float(position.y),
+                float(_yaw_from_quaternion(orientation))]
+            self.localization_pose_time = time.monotonic()
+            self.localization_xy_sigma = xy_sigma
+            self.localization_yaw_sigma = yaw_sigma
+            self.localization_confidence = confidence
+            self.localization_state = (
+                "localized" if confidence in ("high", "medium") else "globalizing")
+            self.localization_error = None
 
     def _on_odom(self, message: Odometry) -> None:
         position = message.pose.pose.position
@@ -452,6 +567,12 @@ class WebGateway(Node):
                 "width": width,
                 "height": height,
                 "resolution": round(float(message.info.resolution), 4),
+                "origin": [
+                    round(float(message.info.origin.position.x), 4),
+                    round(float(message.info.origin.position.y), 4),
+                    round(float(_yaw_from_quaternion(
+                        message.info.origin.orientation)), 4),
+                ],
             }
             self.map_time = time.monotonic()
             self.topic_times["map"] = self.map_time
@@ -461,6 +582,51 @@ class WebGateway(Node):
         if not message.data:
             return
         self._advance_nav_queue()
+
+    # ---------------- 停机坪推杆（居中机构） ----------------
+    def _on_leadscrew_status(self, message: LeadscrewStatus) -> None:
+        with self.lock:
+            self.leadscrew_status = {
+                # rosidl 数组元素是 numpy 标量，须转原生类型才能 JSON 序列化
+                "state": [int(s) for s in message.state],
+                "pos_mm": [round(float(p), 1) for p in message.pos_mm],
+                "enabled": [bool(e) for e in message.enabled],
+            }
+            self.leadscrew_time = time.monotonic()
+            self.topic_times["leadscrew"] = self.leadscrew_time
+
+    def leadscrew_is_closed(self) -> bool:
+        """当前是否处于收拢态（任意组在内侧/正在向内/离开外侧即视为收拢）。
+
+        状态离线时按最近一次网页下发的指令兜底，保证按键来回切换。
+        """
+        with self.lock:
+            status = self.leadscrew_status
+            fallback = self.leadscrew_last_cmd == "in"
+        if status is None:
+            return fallback
+        for state, pos in zip(status["state"], status["pos_mm"]):
+            if state in (
+                LeadscrewStatus.STATE_MOVING_IN, LeadscrewStatus.STATE_AT_INNER
+            ) or pos > 1.0:
+                return True
+        return False
+
+    def leadscrew_toggle(self) -> str:
+        """开合切换：收拢态→四杆向外，否则四杆向内。返回下发方向 in/out。"""
+        direction = "out" if self.leadscrew_is_closed() else "in"
+        msg = LeadscrewCommand()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.group = 0  # 两组同时
+        msg.command = (
+            LeadscrewCommand.CMD_OUT
+            if direction == "out" else LeadscrewCommand.CMD_IN
+        )
+        self.leadscrew_publisher.publish(msg)
+        with self.lock:
+            self.leadscrew_last_cmd = direction
+        self.get_logger().info(f"网页推杆指令：{'收拢（向内）' if direction == 'in' else '张开（向外）'}")
+        return direction
 
     def _advance_nav_queue(self) -> None:
         """当前路径点已到达：弹出并发下一个点；全部走完则结束导航。
@@ -541,10 +707,17 @@ class WebGateway(Node):
             self.nav2_goal_handle.cancel_goal_async()
             self.nav2_goal_handle = None
 
-    def _on_image(self, message: Image, rear: bool = False) -> None:
+    # 图像槽位：(jpeg 属性, 时间属性, topic_times 键)
+    _IMAGE_SLOTS = {
+        "front": ("image_jpeg", "image_time", "camera"),
+        "rear": ("rear_image_jpeg", "rear_image_time", "camera_rear"),
+        "top": ("top_image_jpeg", "top_image_time", "camera_top"),
+    }
+
+    def _on_image(self, message: Image, slot: str = "front") -> None:
+        jpeg_attr, time_attr, topic_key = self._IMAGE_SLOTS[slot]
         now = time.monotonic()
-        image_time = self.rear_image_time if rear else self.image_time
-        if now - image_time < self.camera_interval:
+        if now - getattr(self, time_attr) < self.camera_interval:
             return
         try:
             frame = self.bridge.imgmsg_to_cv2(message, desired_encoding="bgr8")
@@ -556,14 +729,9 @@ class WebGateway(Node):
             return
         if success:
             with self.lock:
-                if rear:
-                    self.rear_image_jpeg = encoded.tobytes()
-                    self.rear_image_time = now
-                    self.topic_times["camera_rear"] = now
-                else:
-                    self.image_jpeg = encoded.tobytes()
-                    self.image_time = now
-                    self.topic_times["camera"] = now
+                setattr(self, jpeg_attr, encoded.tobytes())
+                setattr(self, time_attr, now)
+                self.topic_times[topic_key] = now
 
     # ---------------- teleop safety ----------------
     def publish_teleop(self, linear: float, angular: float) -> None:
@@ -678,6 +846,148 @@ class WebGateway(Node):
             return True, ""
         return False, outcome.get("reason") or "set_rejected"
 
+    # ---------------- saved-map laser localization ----------------
+    def _clear_localization_estimate(self) -> None:
+        with self.lock:
+            self.localization_pose = None
+            self.localization_pose_time = 0.0
+            self.localization_xy_sigma = None
+            self.localization_yaw_sigma = None
+            self.localization_confidence = "none"
+
+    def _stop_localization(self, clear_pose: bool = True) -> None:
+        proc = self.localization_proc
+        self.localization_proc = None
+        if proc is not None and proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+                proc.wait(timeout=4.0)
+            except (ProcessLookupError, PermissionError):
+                pass
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+        self.localization_started = 0.0
+        self.localization_state = "inactive"
+        self.localization_global_requested = False
+        self.localization_nomotion_requests = 0
+        self.localization_last_nomotion = 0.0
+        if clear_pose:
+            self._clear_localization_estimate()
+
+    def start_localization(self, map_name: str):
+        """加载保存地图并启动 map_server + AMCL 全局激光定位。"""
+        if self.mapping_active:
+            return False, "mapping_active"
+        if not self._load_map(map_name):
+            return False, "load_failed"
+        yaml_path = os.path.join(self._MAPS_DIR, map_name + ".yaml")
+        if not os.path.isfile(self.localization_params_file):
+            return False, "localization_params_missing"
+        self._stop_localization(clear_pose=True)
+        try:
+            self.localization_proc = subprocess.Popen([
+                "ros2", "launch", "nav2_bringup", "localization_launch.py",
+                f"map:={yaml_path}",
+                "use_sim_time:=false",
+                "autostart:=true",
+                f"params_file:={self.localization_params_file}",
+            ], start_new_session=True, stdout=subprocess.DEVNULL,
+                stderr=subprocess.STDOUT)
+        except (FileNotFoundError, OSError) as error:
+            self.localization_state = "error"
+            self.localization_error = str(error)
+            return False, "localization_start_failed"
+        self.localization_map_name = map_name
+        self.localization_started = time.monotonic()
+        self.localization_state = "starting"
+        self.localization_error = None
+        self.localization_global_requested = False
+        self.localization_nomotion_requests = 0
+        self.localization_last_nomotion = 0.0
+        self.get_logger().info(f"AMCL 激光定位已启动：{map_name}")
+        return True, "started"
+
+    def relocalize(self):
+        """清除旧估计并触发 AMCL 全地图粒子重定位。"""
+        if self.localization_proc is None or self.localization_proc.poll() is not None:
+            return False, "localization_inactive"
+        self._clear_localization_estimate()
+        self.localization_started = time.monotonic()
+        self.localization_state = "globalizing"
+        self.localization_error = None
+        self.localization_global_requested = False
+        self.localization_nomotion_requests = 0
+        self.localization_last_nomotion = 0.0
+        return True, "requested"
+
+    def _localization_tick(self) -> None:
+        """等待 AMCL 激活，触发全局初始化并用静止扫描持续收敛。"""
+        proc = self.localization_proc
+        if proc is None:
+            return
+        return_code = proc.poll()
+        if return_code is not None:
+            self.localization_proc = None
+            self.localization_state = "error"
+            self.localization_error = f"process_exit_{return_code}"
+            return
+        now = time.monotonic()
+        if now - self.localization_started < 2.0:
+            return
+        if not self.localization_global_requested:
+            if not self.global_localization_client.service_is_ready():
+                self.localization_state = "waiting_for_amcl"
+                return
+            future = self.global_localization_client.call_async(Empty.Request())
+
+            def global_done(fut):
+                try:
+                    fut.result()
+                    self.localization_state = "globalizing"
+                except Exception as error:
+                    self.localization_state = "error"
+                    self.localization_error = str(error)
+
+            future.add_done_callback(global_done)
+            self.localization_global_requested = True
+            self.localization_state = "globalizing"
+            self.localization_last_nomotion = now
+            return
+        # 车辆静止时 AMCL 不会因里程计阈值自动更新；主动请求数次无运动更新，
+        # 让同一地点的连续雷达帧也能缩小全局粒子云。
+        if self.localization_nomotion_requests < 600 and \
+                now - self.localization_last_nomotion >= 0.5 and \
+                self.nomotion_update_client.service_is_ready():
+            self.nomotion_update_client.call_async(Empty.Request())
+            self.localization_nomotion_requests += 1
+            self.localization_last_nomotion = now
+
+    def localization_snapshot(self):
+        now = time.monotonic()
+        with self.lock:
+            age = (None if not self.localization_pose_time else
+                   round(now - self.localization_pose_time, 2))
+            pose = (None if self.localization_pose is None else
+                    [round(v, 3) for v in self.localization_pose])
+            return {
+                "active": self.localization_proc is not None,
+                "state": self.localization_state,
+                "map_name": self.localization_map_name,
+                "since_s": (None if not self.localization_started else
+                            round(now - self.localization_started, 1)),
+                "map_pose": pose,
+                "age_s": age,
+                "confidence": self.localization_confidence,
+                "xy_sigma_m": (None if self.localization_xy_sigma is None else
+                               round(self.localization_xy_sigma, 3)),
+                "yaw_sigma_rad": (None if self.localization_yaw_sigma is None else
+                                  round(self.localization_yaw_sigma, 3)),
+                "error": self.localization_error,
+            }
+
     # ---------------- one-click mapping ----------------
     def set_mapping(self, enable: bool, auto_cruise: bool = True):
         """HTTP 线程调用：启动/停止建图流水线。返回 (ok, message)。
@@ -690,6 +1000,14 @@ class WebGateway(Node):
         if enable == self.mapping_active:
             return True, "already_active" if enable else "already_inactive"
         if enable:
+            self._stop_localization(clear_pose=True)
+            with self.lock:
+                self.mapping_initial_odom = (
+                    None if self.pose is None else list(self.pose))
+                # 不让上一张地图在新一次 SLAM 初始化期间被误认为实时帧。
+                self.map_png = None
+                self.map_info = None
+                self.map_time = 0.0
             procs = []
             try:
                 # start_new_session：子进程独立进程组，停止时按组发信号——
@@ -699,7 +1017,13 @@ class WebGateway(Node):
                     "--ros-args",
                     "-p", "base_frame:=base_footprint",
                     "-p", "odom_frame:=odom",
-                    "-p", "scan_topic:=/scan"],
+                    "-p", "scan_topic:=/scan",
+                    # Humble's async mapper defaults to a 5 s map update and
+                    # processes at most one scan every 0.5 s.  That is too
+                    # slow for a live browser preview, so publish the grid at
+                    # 4 Hz and accept the N10P's 10 Hz scan stream.
+                    "-p", "map_update_interval:=0.25",
+                    "-p", "minimum_time_interval:=0.10"],
                     start_new_session=True))
             except FileNotFoundError:
                 for proc in procs:
@@ -735,6 +1059,8 @@ class WebGateway(Node):
         self.mapping_procs = []
         self.mapping_active = False
         self.mapping_started = 0.0
+        if saved:
+            self.start_localization(os.path.basename(saved))
         return True, saved or "stopped"
 
     def _save_map(self):
@@ -794,8 +1120,18 @@ class WebGateway(Node):
 
             def do_GET(self):
                 path = urlparse(self.path).path
+                if path in ("/api/uav/stream", "/api/uav/status", "/api/uav/photo/download"):
+                    gateway.uav_camera.serve(self, path)
+                    return
+                if path == "/api/leadscrew/manual/status":
+                    self._json(200, gateway.leadscrew_web.snapshot())
+                    return
                 if path in ("/", "/index.html"):
                     gateway._serve_index(self)
+                    return
+                if path in ("/sim", "/index_sim.html"):
+                    # 仿真专用控制台（含推杆俯视图）
+                    gateway._serve_index(self, sim=True)
                     return
                 if path == "/api/health":
                     self._json(HTTPStatus.OK, gateway.health_snapshot())
@@ -816,10 +1152,13 @@ class WebGateway(Node):
                     gateway._serve_saved_map(self, path[10:-4])
                     return
                 if path == "/api/camera.jpg":
-                    gateway._serve_camera(self, rear=False)
+                    gateway._serve_camera(self)
                     return
                 if path == "/api/camera_rear.jpg":
-                    gateway._serve_camera(self, rear=True)
+                    gateway._serve_camera(self, slot="rear")
+                    return
+                if path == "/api/camera_top.jpg":
+                    gateway._serve_camera(self, slot="top")
                     return
                 if path == "/api/photo/download":
                     gateway._serve_photo_download(self)
@@ -830,15 +1169,28 @@ class WebGateway(Node):
                 if path == "/api/auto_cruise/status":
                     self._json(HTTPStatus.OK, gateway.auto_cruise_snapshot())
                     return
+                if path == "/api/localization/status":
+                    self._json(HTTPStatus.OK, gateway.localization_snapshot())
+                    return
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
             def do_POST(self):
                 path = urlparse(self.path).path
+                if path in ("/api/leadscrew/manual/move", "/api/leadscrew/manual/stop",
+                            "/api/leadscrew/manual/reset",
+                            "/api/leadscrew/manual/simulation_toggle"):
+                    gateway.leadscrew_web.post(self, path.rsplit("/", 1)[-1])
+                    return
+                if path == "/api/uav/gimbal":
+                    gateway.uav_camera.serve(self, path)
+                    return
                 if path not in (
                     "/api/ugv/teleop", "/api/ugv/cruise", "/api/mapping",
                     "/api/photo", "/api/nav/set_goal", "/api/nav/stop",
                     "/api/nav/load_map", "/api/auto_cruise/start",
-                    "/api/auto_cruise/stop",
+                    "/api/auto_cruise/stop", "/api/leadscrew/toggle",
+                    "/api/localization/start", "/api/localization/relocalize",
+                    "/api/localization/stop",
                 ):
                     self._json(HTTPStatus.NOT_FOUND, {"error": "unknown_command"})
                     return
@@ -879,11 +1231,31 @@ class WebGateway(Node):
                 if path == "/api/nav/load_map":
                     self._handle_nav_load_map(payload)
                     return
+                if path == "/api/localization/start":
+                    self._handle_localization_start(payload)
+                    return
+                if path == "/api/localization/relocalize":
+                    self._handle_localization_relocalize()
+                    return
+                if path == "/api/localization/stop":
+                    gateway._stop_localization(clear_pose=True)
+                    self._json(HTTPStatus.ACCEPTED, {"accepted": True})
+                    return
                 if path == "/api/auto_cruise/start":
                     self._handle_auto_cruise_start()
                     return
                 if path == "/api/auto_cruise/stop":
                     self._handle_auto_cruise_stop()
+                    return
+                if path == "/api/leadscrew/toggle":
+                    direction = "out" if gateway.leadscrew_is_closed() else "in"
+                    try:
+                        result = gateway.leadscrew_web.command(direction, {"motor": 0})
+                        gateway.leadscrew_last_cmd = direction
+                        result['direction'] = direction
+                        self._json(200, result)
+                    except (ValueError, RuntimeError) as exc:
+                        self._json(503, {"accepted": False, "error": str(exc)})
                     return
                 try:
                     linear, angular = clamped_teleop(
@@ -999,11 +1371,34 @@ class WebGateway(Node):
                 if not map_name:
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "name_required"})
                     return
-                ok = gateway._load_map(str(map_name))
+                ok, error = gateway.start_localization(str(map_name))
                 if not ok:
-                    self._json(HTTPStatus.BAD_GATEWAY, {"error": "load_failed"})
+                    self._json(HTTPStatus.BAD_GATEWAY, {"error": error})
                     return
                 self._json(HTTPStatus.ACCEPTED, {"accepted": True, "map": map_name})
+
+            def _handle_localization_start(self, payload: dict):
+                if not isinstance(payload, dict):
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "json_object_required"})
+                    return
+                map_name = payload.get("name")
+                if not map_name:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "name_required"})
+                    return
+                ok, message = gateway.start_localization(str(map_name))
+                if not ok:
+                    self._json(HTTPStatus.BAD_GATEWAY, {"error": message})
+                    return
+                self._json(HTTPStatus.ACCEPTED, {
+                    "accepted": True, "map": map_name, "state": message})
+
+            def _handle_localization_relocalize(self):
+                ok, message = gateway.relocalize()
+                if not ok:
+                    self._json(HTTPStatus.BAD_GATEWAY, {"error": message})
+                    return
+                self._json(HTTPStatus.ACCEPTED, {
+                    "accepted": True, "state": message})
 
             def _handle_auto_cruise_start(self):
                 ok, message = gateway.auto_cruise_start()
@@ -1018,9 +1413,9 @@ class WebGateway(Node):
 
         return Handler
 
-    def _serve_index(self, handler) -> None:
+    def _serve_index(self, handler, sim: bool = False) -> None:
         try:
-            with open(_index_path(), "rb") as stream:
+            with open(_index_sim_path() if sim else _index_path(), "rb") as stream:
                 body = stream.read()
         except OSError:
             handler._json(
@@ -1063,14 +1458,18 @@ class WebGateway(Node):
 
     def maps_snapshot(self) -> dict:
         """~/maps 下已保存的地图列表（新的在前）。"""
+        return {"maps": self._saved_map_names()}
+
+    def _saved_map_names(self):
         entries = []
         try:
             for fname in sorted(os.listdir(self._MAPS_DIR), reverse=True):
-                if fname.endswith(".pgm"):
+                if fname.endswith(".pgm") and os.path.isfile(
+                        os.path.join(self._MAPS_DIR, fname[:-4] + ".yaml")):
                     entries.append(fname[:-4])
         except OSError:
             pass
-        return {"maps": entries}
+        return entries
 
     def _serve_saved_map(self, handler, name: str) -> None:
         """把 ~/maps/<name>.pgm 转 PNG 输出（只接受安全文件名，防目录穿越）。"""
@@ -1097,14 +1496,14 @@ class WebGateway(Node):
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             pass
 
-    def _serve_camera(self, handler, rear: bool = False) -> None:
+    def _serve_camera(self, handler, slot: str = "front") -> None:
         if not _CAMERA_AVAILABLE:
             handler._json(
                 HTTPStatus.SERVICE_UNAVAILABLE, {"error": "camera_backend_unavailable"}
             )
             return
         with self.lock:
-            image = self.rear_image_jpeg if rear else self.image_jpeg
+            image = getattr(self, self._IMAGE_SLOTS[slot][0])
         if image is None:
             handler._json(
                 HTTPStatus.SERVICE_UNAVAILABLE, {"error": "camera_not_ready"}
@@ -1172,6 +1571,7 @@ class WebGateway(Node):
             data[img == 254] = 0    # 空闲
             data[img == 0] = 100    # 占据
             data[img == 205] = -1   # 未知
+            self.nav_map_name = map_name
             self.nav_map_data = data
             self.nav_map_resolution = float(meta.get("resolution", 0.05))
             origin = meta.get("origin", [0.0, 0.0, 0.0])
@@ -1499,8 +1899,10 @@ class WebGateway(Node):
         }
 
     def _lookup_map_pose(self):
-        """查询 map→base_footprint 变换（AMCL 定位），返回 [x, y, yaw]；
-        无定位输出（avoidance 模式或未收敛）时为 None。"""
+        """查询 map→base_footprint 变换，返回 [x, y, yaw]。
+
+        该变换可由建图时的 slam_toolbox 或加载地图后的 AMCL 提供。
+        """
         try:
             transform = self.tf_buffer.lookup_transform(
                 "map", "base_footprint", rclpy.time.Time())
@@ -1512,9 +1914,48 @@ class WebGateway(Node):
         yaw = _yaw_from_quaternion(transform.transform.rotation)
         return [round(translation.x, 3), round(translation.y, 3), round(yaw, 3)]
 
+    def _odom_pose_in_map(self, odom_pose):
+        """把记录的 odom 位姿转换到当前 SLAM map 坐标系。
+
+        SLAM 回环优化可能持续调整 map→odom，因此初始点每次状态查询都重新
+        变换，保证红点不会因地图坐标修正而漂离真实起点。
+        """
+        if odom_pose is None:
+            return None
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                "map", "odom", rclpy.time.Time())
+        except (tf2_ros.LookupException,
+                tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException):
+            return None
+        translation = transform.transform.translation
+        transform_yaw = _yaw_from_quaternion(transform.transform.rotation)
+        c, s = math.cos(transform_yaw), math.sin(transform_yaw)
+        x = translation.x + c * odom_pose[0] - s * odom_pose[1]
+        y = translation.y + s * odom_pose[0] + c * odom_pose[1]
+        yaw = math.atan2(
+            math.sin(transform_yaw + odom_pose[2]),
+            math.cos(transform_yaw + odom_pose[2]))
+        return [round(x, 3), round(y, 3), round(yaw, 3)]
+
     def status_snapshot(self) -> dict:
         now = time.monotonic()
-        map_pose = self._lookup_map_pose()
+        localization = self.localization_snapshot()
+        map_pose = localization["map_pose"]
+        if localization["active"] and map_pose is None:
+            map_pose = self._lookup_map_pose()
+            localization["map_pose"] = map_pose
+        localization["backend"] = (
+            "amcl" if localization["active"] else self.nav_backend)
+        with self.lock:
+            mapping_initial_odom = (
+                None if self.mapping_initial_odom is None else
+                list(self.mapping_initial_odom))
+        mapping_pose = self._lookup_map_pose() if self.mapping_active else None
+        mapping_initial_pose = (
+            self._odom_pose_in_map(mapping_initial_odom)
+            if self.mapping_active else None)
         with self.lock:
             mux = dict(self.latest["ugv_control_mux"])
             gateway_status = dict(self.latest["ugv_command_gateway"])
@@ -1538,6 +1979,14 @@ class WebGateway(Node):
             )
             map_info = dict(self.map_info) if self.map_info is not None else None
             map_age = None if not self.map_time else round(now - self.map_time, 2)
+            leadscrew = (
+                dict(self.leadscrew_status)
+                if self.leadscrew_status is not None else None
+            )
+            leadscrew_age = (
+                None if not self.leadscrew_time
+                else round(now - self.leadscrew_time, 2)
+            )
         return {
             "gateway": self.health_snapshot(),
             "server_time_ms": int(time.time() * 1000),
@@ -1548,13 +1997,15 @@ class WebGateway(Node):
                 "cruise_enabled": cruise_state,
             },
             "odom": {"pose": pose, "speed_mps": speed},
-            "localization": {
-                "backend": self.nav_backend,
-                "map_pose": map_pose,
-            },
+            "localization": localization,
             "battery_voltage": None,  # reserved for the real motor driver
             "gps": {"fix": fix, "age_s": fix_age},
             "ultrasonic": {"range": ultrasonic, "age_s": ultrasonic_age},
+            "leadscrew": {
+                "status": leadscrew,
+                "age_s": leadscrew_age,
+                "closed": self.leadscrew_is_closed(),
+            },
             "map": {"info": map_info, "age_s": map_age},
             "mapping": {
                 "active": self.mapping_active,
@@ -1562,6 +2013,8 @@ class WebGateway(Node):
                     None if not self.mapping_started
                     else round(now - self.mapping_started, 1)
                 ),
+                "initial_pose": mapping_initial_pose,
+                "current_pose": mapping_pose,
             },
             "camera": {
                 "ready": bool(
@@ -1580,6 +2033,7 @@ class WebGateway(Node):
         }
 
     def destroy_node(self):
+        self._stop_localization(clear_pose=True)
         for proc in getattr(self, "mapping_procs", []):
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGTERM)

@@ -12,7 +12,7 @@
 服务：
   /uav_bridge/set_mode (std_srvs/SetBool)  true=协同模式(2) false=自主模式(1)
 参数：
-  uav_ip           (str,   '192.168.1.100')
+  uav_ip           (str,   '192.168.50.3')
   uav_port         (int,   8888)
   listen_port      (int,   8889)
   enable           (bool,  True)   False 时不开 socket，只做内部桥接
@@ -20,24 +20,25 @@
   allow_direct_vel (bool,  False)  True 时 cmd_type=2 的 velocity 直发 /cmd_vel（绕过避障）
 """
 
+from .landing_receiver import LandingReceiver
 import json
 import math
 import socket
 
 import rclpy
 from rclpy.node import Node
+from rclpy.clock import Clock, ClockType
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry
 from std_srvs.srv import SetBool
 
 from car_interfaces.msg import ObstacleArray, UavCommand, UavStatus
 
-
 class UavBridgeNode(Node):
     def __init__(self):
         super().__init__('uav_bridge_node')
         # 声明参数
-        self.declare_parameter('uav_ip', '192.168.1.100')
+        self.declare_parameter('uav_ip', '192.168.50.3')
         self.declare_parameter('uav_port', 8888)
         self.declare_parameter('listen_port', 8889)
         self.declare_parameter('enable', True)
@@ -52,6 +53,7 @@ class UavBridgeNode(Node):
         self.allow_direct_vel = self.get_parameter('allow_direct_vel').value
 
         # 内部状态
+        self.landing_receiver = LandingReceiver(self)
         self.mode = 0               # 0=待机 1=自主避障 2=无人机协同
         self.odom = None
         self.obstacles = []
@@ -81,8 +83,9 @@ class UavBridgeNode(Node):
         else:
             self.get_logger().info('enable=False，仅做内部话题桥接，不开 socket')
 
-        self.recv_timer = self.create_timer(0.02, self.recv_timer_cb)
-        self.status_timer = self.create_timer(1.0 / status_rate, self.status_timer_cb)
+        self.steady_clock = Clock(clock_type=ClockType.STEADY_TIME)
+        self.recv_timer = self.create_timer(0.02, self.recv_timer_cb, clock=self.steady_clock)
+        self.status_timer = self.create_timer(1.0 / status_rate, self.status_timer_cb, clock=self.steady_clock)
 
     # ---------- 对内订阅 ----------
     def odom_cb(self, msg):
@@ -110,13 +113,19 @@ class UavBridgeNode(Node):
             except OSError as e:
                 self.get_logger().warn(f'UDP 接收异常：{e}', throttle_duration_sec=2.0)
                 break
+            if self.landing_receiver.handle(data, _addr, self.sock, self.uav_ip):
+                continue
             try:
                 cmd = json.loads(data.decode('utf-8'))
             except (ValueError, UnicodeDecodeError):
                 self.get_logger().warn('收到非法 JSON 指令，已丢弃',
                                        throttle_duration_sec=2.0)
                 continue
-            self._handle_uav_command(cmd)
+            if isinstance(cmd, dict):
+                try:
+                    self._handle_uav_command(cmd)
+                except (ValueError, TypeError, OverflowError):
+                    self.get_logger().warning("Invalid UAV command")
 
     def _handle_uav_command(self, cmd):
         cmd_type = int(cmd.get('cmd_type', 0))
@@ -186,7 +195,6 @@ class UavBridgeNode(Node):
             except OSError as e:
                 self.get_logger().warn(f'UDP 发送失败：{e}', throttle_duration_sec=2.0)
 
-
 def main(args=None):
     rclpy.init(args=args)
     node = UavBridgeNode()
@@ -199,7 +207,6 @@ def main(args=None):
             node.sock.close()
         node.destroy_node()
         rclpy.shutdown()
-
 
 if __name__ == '__main__':
     main()

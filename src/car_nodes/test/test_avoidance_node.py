@@ -49,6 +49,16 @@ def test_distant_obstacle_does_not_block(node):
     assert node._select_sector(0.0) == 0.0
 
 
+def test_front_obstacle_in_slow_down_range_triggers_early_detour(node):
+    # 阿克曼底盘必须在 1.8m 减速区内开始绕行，不能等到 1.0m 安全线。
+    node.detour_side = 0
+    node.blocked_directions = []
+    node.obstacles = [FakeObstacle(0.0, 1.5, 0.15)]
+    best = node._select_sector(0.0)
+    assert best is not None
+    assert abs(best) > math.radians(5.0)
+
+
 def test_front_side_obstacle_blocks_straight_and_detours_left(node):
     # 前侧方小障碍：-25°/0.7m/r=0.15——未膨胀时角半宽 12° 盖不住 0°，
     # 中心线判可通行直行撞前角；膨胀后（r+0.20）角半宽 26.6° 必须封堵
@@ -310,6 +320,111 @@ def _reset_escape_state(node):
     node.operator_active = False
     node.detour_side = 0
     node.escape_retrying = False
+    node.stuck_recovery_active = False
+    node.stuck_recovery_phase = 'idle'
+    node.stuck_recovery_start_pose = None
+    node.stuck_recovery_side = 0
+    node.stuck_failure_pose = None
+    node.stuck_failure_time = 0.0
+    node.stuck_failure_side = 0
+    node.stuck_failure_count = 0
+    node.ultrasonic_range = None
+    node.ultrasonic_time = 0.0
+
+
+# ---------- 同一位置连续两次失败：回正—直退 1m—原方向转向 ----------
+
+def _run_at_pose(node, pose, obstacles):
+    """保留指定 odom 位姿运行一次控制循环。"""
+    node.pose = pose
+    node.obstacles = obstacles
+    node.goal = None
+    node.enable_cruise = True
+    recorder = CmdRecorder()
+    real_pub = node.pub_cmd
+    node.pub_cmd = recorder
+    try:
+        node.control_loop()
+    finally:
+        node.pub_cmd = real_pub
+        node.enable_cruise = False
+    return recorder.last
+
+
+def test_same_position_second_failure_uses_previous_detour_side(node):
+    _reset_escape_state(node)
+    now = node.get_clock().now().nanoseconds * 1e-9
+    node.pose = (2.0, 3.0, 0.0)
+    repeated, side = node._register_avoidance_failure(now, -1)
+    assert repeated is False
+    assert side == -1
+    # 二次仅偏移 0.22m，即使瞬时净空评估变成左侧，仍保留
+    # 上一次已承诺的右侧绕行方向。
+    node.pose = (2.2, 3.1, 0.0)
+    repeated, side = node._register_avoidance_failure(now + 2.0, 1)
+    assert repeated is True
+    assert side == -1
+    assert node.stuck_failure_count == 0
+    _reset_escape_state(node)
+
+
+def test_failure_far_away_restarts_counter(node):
+    _reset_escape_state(node)
+    now = node.get_clock().now().nanoseconds * 1e-9
+    node.pose = (0.0, 0.0, 0.0)
+    assert node._register_avoidance_failure(now, 1)[0] is False
+    node.pose = (1.0, 0.0, 0.0)  # 超过 0.35m，不属于同一位置
+    assert node._register_avoidance_failure(now + 1.0, 1)[0] is False
+    assert node.stuck_failure_count == 1
+    _reset_escape_state(node)
+
+
+def test_stuck_recovery_straightens_reverses_one_metre_then_turns(node):
+    _reset_escape_state(node)
+    node.obstacles = []
+    node.pose = (0.0, 0.0, 0.0)
+    now = node.get_clock().now().nanoseconds * 1e-9
+    assert node._start_stuck_recovery(now, -1)
+    assert node.stuck_recovery_phase == 'straighten'
+
+    # 摆正期间必须零速、零角速度。
+    cmd = _run_at_pose(node, (0.0, 0.0, 0.0), [])
+    assert cmd.linear.x == 0.0 and cmd.angular.z == 0.0
+
+    # 模拟摆正等待完成，首周期记录后退起点并保持停车。
+    node.stuck_recovery_phase_start = now - node.stuck_straighten_time - 0.1
+    cmd = _run_at_pose(node, (0.0, 0.0, 0.0), [])
+    assert node.stuck_recovery_phase == 'reverse'
+    assert cmd.linear.x == 0.0 and cmd.angular.z == 0.0
+
+    # 后退阶段只允许直线负速度。
+    cmd = _run_at_pose(node, (-0.4, 0.0, 0.0), [])
+    assert cmd.linear.x == pytest.approx(-node.reverse_speed)
+    assert cmd.angular.z == 0.0
+
+    # odom 达到 1m 后停车换到转向阶段；随后向原右侧绕行。
+    cmd = _run_at_pose(node, (-1.0, 0.0, 0.0), [])
+    assert node.stuck_recovery_phase == 'turn'
+    assert cmd.linear.x == 0.0 and cmd.angular.z == 0.0
+    cmd = _run_at_pose(node, (-1.0, 0.0, 0.0), [])
+    assert cmd.linear.x == pytest.approx(node.creep_speed)
+    assert cmd.angular.z == pytest.approx(-node.max_angular)
+    _reset_escape_state(node)
+
+
+def test_stuck_recovery_waits_if_one_metre_rear_path_is_not_clear(node):
+    _reset_escape_state(node)
+    node.pose = (0.0, 0.0, 0.0)
+    # 后方 0.8m 障碍经车体外廓膨胀后，不足以安全直退 1m。
+    obstacles = [FakeObstacle(180.0, 0.8, 0.1)]
+    node.obstacles = obstacles
+    now = node.get_clock().now().nanoseconds * 1e-9
+    assert node._start_stuck_recovery(now, 1)
+    assert node.stuck_recovery_phase == 'wait_clearance'
+    cmd = _run_at_pose(node, (0.0, 0.0, 0.0), obstacles)
+    assert cmd.linear.x == 0.0 and cmd.angular.z == 0.0
+    assert node.stuck_recovery_active
+    _reset_escape_state(node)
 
 
 def test_repeated_identical_scan_triggers_escape_path(node):

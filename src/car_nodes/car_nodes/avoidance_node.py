@@ -59,6 +59,11 @@
   ultrasonic_stop_distance (float, 0.25) 车尾超声波急停阈值 m：脱困
       倒车中后方距离小于该值立即停止并规划脱困路径（雷达 <0.15m
       盲区补充；无数据或过期不启用）
+  stuck_position_radius (float, 0.35) 两次避障失败视为同一位置的半径 m
+  stuck_repeat_window  (float, 20.0) 连续失败计数的有效时间 s
+  stuck_reverse_distance(float, 1.0) 重复卡住后直线后退距离 m
+  stuck_straighten_time(float, 0.6) 倒车前停车回正方向的等待时间 s
+  stuck_turn_time      (float, 1.0) 倒车后朝上次绕行方向带速转向时间 s
 
 绕行策略（阿克曼不能原地自旋，全程保持 |v| > 0 或停车）：
   1. 正常：前方 180° 扇区选代价最低的可通行方向，速度随净空缩放；
@@ -96,6 +101,10 @@
      完全结束或网页遥控接管。
   10. 网页遥控最高优先：/ugv/operator/heartbeat 活跃时立即取消包括
      自主脱困在内的全部自主状态并停车，底盘输出由 mux 切到遥控链路。
+  11. 同一位置连续两次触发脱困时：先停车摆正方向，确认后方
+      至少有 stuck_reverse_distance 净空后直线后退 1m，然后沿上一次
+      选定的绕行侧带低速转向，再交回常规避障。后退期间后方
+      雷达或超声波触发安全阈值时立即停车。
 """
 
 import math
@@ -147,9 +156,9 @@ class AvoidanceNode(Node):
         self.declare_parameter('blocked_direction_penalty', 1.0)
         self.declare_parameter('blocked_direction_tolerance', 0.50)
         self.declare_parameter('lateral_response_enable', True)
-        self.declare_parameter('lateral_bias_max', 0.20)
-        self.declare_parameter('lateral_clearance_margin', 0.50)
-        self.declare_parameter('side_obstacle_penalty', 0.20)
+        self.declare_parameter('lateral_bias_max', 0.35)
+        self.declare_parameter('lateral_clearance_margin', 0.30)
+        self.declare_parameter('side_obstacle_penalty', 0.40)
         self.declare_parameter('sector_lock_enable', True)
         self.declare_parameter('loop_detect_tolerance', 0.12)
         self.declare_parameter('escape_stop_time', 1.0)
@@ -164,6 +173,12 @@ class AvoidanceNode(Node):
         self.declare_parameter('escape_reverse_overrun', 1.1)
         # 车尾超声波：脱困倒车中距离小于该值立即停止并规划脱困路径 m
         self.declare_parameter('ultrasonic_stop_distance', 0.25)
+        # 同一位置连续避障失败的定距离恢复动作
+        self.declare_parameter('stuck_position_radius', 0.35)
+        self.declare_parameter('stuck_repeat_window', 20.0)
+        self.declare_parameter('stuck_reverse_distance', 1.0)
+        self.declare_parameter('stuck_straighten_time', 0.6)
+        self.declare_parameter('stuck_turn_time', 1.0)
 
         self.safety_distance = self.get_parameter('safety_distance').value
         self.hard_stop_distance = self.get_parameter('hard_stop_distance').value
@@ -224,6 +239,16 @@ class AvoidanceNode(Node):
             self.get_parameter('escape_reverse_overrun').value
         self.ultrasonic_stop_distance = \
             self.get_parameter('ultrasonic_stop_distance').value
+        self.stuck_position_radius = \
+            self.get_parameter('stuck_position_radius').value
+        self.stuck_repeat_window = \
+            self.get_parameter('stuck_repeat_window').value
+        self.stuck_reverse_distance = \
+            self.get_parameter('stuck_reverse_distance').value
+        self.stuck_straighten_time = \
+            self.get_parameter('stuck_straighten_time').value
+        self.stuck_turn_time = \
+            self.get_parameter('stuck_turn_time').value
 
         self.obstacles = []
         self.pose = None          # odom 系下 (x, y, yaw)
@@ -255,6 +280,17 @@ class AvoidanceNode(Node):
         self.escape_retry_until = 0.0
         self.escape_retry_target_dist = 0.0   # 需后退的距离（含冗余）m
         self.escape_retry_start_pose = None   # 开始后退时的 odom 位姿
+        # 同一位置连续两次失败：回正 -> 直退 1m -> 向原绕行侧转向
+        self.stuck_failure_pose = None
+        self.stuck_failure_time = 0.0
+        self.stuck_failure_side = 0
+        self.stuck_failure_count = 0
+        self.stuck_recovery_active = False
+        self.stuck_recovery_phase = 'idle'
+        self.stuck_recovery_phase_start = 0.0
+        self.stuck_recovery_start_pose = None
+        self.stuck_recovery_side = 0
+        self.stuck_recovery_until = 0.0
         # 车尾超声波（/ultrasonic/range）：脱困倒车急停用
         self.ultrasonic_range = None   # 最近一次有效测距 m
         self.ultrasonic_time = 0.0
@@ -313,7 +349,8 @@ class AvoidanceNode(Node):
             return
         had_goal = (self.goal is not None or self.nav_active or
                     self.recovering or self.escaping or
-                    self.escape_pathing or self.escape_retrying)
+                    self.escape_pathing or self.escape_retrying or
+                    self.stuck_recovery_active)
         self.goal = None
         self.nav_active = False
         self.nav_path = []
@@ -323,6 +360,10 @@ class AvoidanceNode(Node):
         self.escape_pathing = False
         self.escape_path = []
         self.escape_retrying = False
+        self.stuck_recovery_active = False
+        self.stuck_recovery_phase = 'idle'
+        self.stuck_failure_pose = None
+        self.stuck_failure_count = 0
         self.detour_side = 0
         # 立即发一次零速，不等下一个控制周期
         self.pub_cmd.publish(Twist())
@@ -361,12 +402,14 @@ class AvoidanceNode(Node):
     def goal_cb(self, msg):
         self.goal = msg
         self.recover_snapshots = []  # 新目标=新场景，清空往复检测记忆
+        self._clear_stuck_failure_memory()
         self.get_logger().info(
             f'收到新目标：x={msg.pose.position.x:.2f} y={msg.pose.position.y:.2f}')
 
     def set_goal_cb(self, request, response):
         self.goal = request.goal
         self.recover_snapshots = []
+        self._clear_stuck_failure_memory()
         response.accepted = True
         response.message = '已接受目标点'
         self.get_logger().info('通过服务设置目标点')
@@ -389,14 +432,25 @@ class AvoidanceNode(Node):
         # operator_timeout 一致）时立即取消包括自主脱困在内的全部自主状态
         # 并停车；底盘输出由 mux 切到遥控链路
         if self.operator_active and now - self.operator_time < 0.6:
-            if self.recovering or self.escaping or self.escape_pathing:
+            if (self.recovering or self.escaping or self.escape_pathing or
+                    self.escape_retrying or self.stuck_recovery_active):
                 self.get_logger().info('网页遥控接管，取消全部自主脱困动作')
             self.recovering = False
             self.escaping = False
             self.escape_pathing = False
             self.escape_path = []
+            self.escape_retrying = False
+            self.stuck_recovery_active = False
+            self.stuck_recovery_phase = 'idle'
             self.pub_cmd.publish(cmd)
             return
+
+        # 同一位置连续两次避障失败的恢复动作优先级最高：
+        # 回正并停稳 -> 按里程计直线后退 1m -> 沿上次绕行侧带速转向。
+        # 每个周期仍检查后方雷达和超声波，安全急停优先。
+        if self.stuck_recovery_active:
+            if self._run_stuck_recovery(now, cmd, fwd_dist):
+                return
 
         # 脱困路径无法规划时的后退重试：按 _compute_escape_reverse_distance
         # 算出的距离（含冗余）直线后退，到位后重新规划。后方贴障时立即
@@ -554,7 +608,8 @@ class AvoidanceNode(Node):
         # 脱困状态（recovering / escaping / escape_pathing / escape_retrying）
         # 激活时禁用常规巡航与目标跟随，直到脱困完全结束或人工介入
         escape_active = (self.recovering or self.escaping or
-                         self.escape_pathing or self.escape_retrying)
+                         self.escape_pathing or self.escape_retrying or
+                         self.stuck_recovery_active)
         if desired_angle is None:
             if escape_active:
                 self.pub_cmd.publish(cmd)
@@ -636,13 +691,22 @@ class AvoidanceNode(Node):
             # 防止在狭长死胡同里前后反复震荡
             self._record_blocked_direction()
             if self._rear_clearance() > self.recover_exit_distance:
-                self.recovering = True
-                self.recover_start = now
-                self.detour_side = self._freer_side()
-                self.detour_time = now
-                self.get_logger().info(
-                    f'前方受阻，倒车脱困（绕行侧：{"左" if self.detour_side > 0 else "右"}）')
-                self._publish_recovery()
+                next_side = self._freer_side()
+                repeated, recovery_side = \
+                    self._register_avoidance_failure(now, next_side)
+                if repeated and self._start_stuck_recovery(
+                        now, recovery_side):
+                    # 启动周期立即发零速，开始摆正等待。
+                    self.pub_cmd.publish(cmd)
+                else:
+                    self.recovering = True
+                    self.recover_start = now
+                    self.detour_side = next_side
+                    self.detour_time = now
+                    self.get_logger().info(
+                        f'前方受阻，倒车脱困（绕行侧：'
+                        f'{"左" if self.detour_side > 0 else "右"}）')
+                    self._publish_recovery()
             else:
                 angle, clearance = self._clearest_direction()
                 if clearance <= self.hard_stop_distance + 0.05:
@@ -699,6 +763,191 @@ class AvoidanceNode(Node):
         cmd.linear.x = linear
         cmd.angular.z = angular
         self.pub_cmd.publish(cmd)
+
+    # ---------- 同一位置重复卡住恢复 ----------
+    def _clear_stuck_failure_memory(self):
+        """清除“同一位置连续失败”计数，不中断已在执行的动作。"""
+        self.stuck_failure_pose = None
+        self.stuck_failure_time = 0.0
+        self.stuck_failure_side = 0
+        self.stuck_failure_count = 0
+
+    def _register_avoidance_failure(self, now, side):
+        """记录一次贴障脱困触发。
+
+        在 stuck_repeat_window 内，与上一次触发点距离不超过
+        stuck_position_radius 时视为同一位置的连续失败。第二次
+        返回 (True, 上一次已选定的绕行方向)。
+        """
+        if self.pose is None:
+            return False, side
+        current = (self.pose[0], self.pose[1])
+        nearby = False
+        if self.stuck_failure_pose is not None:
+            nearby = (
+                now - self.stuck_failure_time <= self.stuck_repeat_window and
+                math.hypot(current[0] - self.stuck_failure_pose[0],
+                           current[1] - self.stuck_failure_pose[1]) <=
+                self.stuck_position_radius)
+        if nearby:
+            self.stuck_failure_count += 1
+            recovery_side = self.stuck_failure_side or side
+            distance = math.hypot(
+                current[0] - self.stuck_failure_pose[0],
+                current[1] - self.stuck_failure_pose[1])
+            if self.stuck_failure_count >= 2:
+                self.get_logger().warn(
+                    f'连续两次在同一位置附近避障失败'
+                    f'（位移 {distance:.2f}m <= '
+                    f'{self.stuck_position_radius:.2f}m），启动定距离恢复')
+                self._clear_stuck_failure_memory()
+                return True, recovery_side
+        else:
+            self.stuck_failure_count = 1
+        self.stuck_failure_pose = current
+        self.stuck_failure_time = now
+        self.stuck_failure_side = side
+        return False, side
+
+    def _stuck_reverse_has_clearance(self):
+        """剩余倒车走廊是否安全；保留 5cm 几何余量。"""
+        if self.pose is None or self._ultrasonic_rear_blocked():
+            return False
+        traveled = 0.0
+        if self.stuck_recovery_start_pose is not None:
+            traveled = math.hypot(
+                self.pose[0] - self.stuck_recovery_start_pose[0],
+                self.pose[1] - self.stuck_recovery_start_pose[1])
+        remaining = max(0.0, self.stuck_reverse_distance - traveled)
+        return self._max_safe_reverse_distance() >= \
+            remaining + 0.05
+
+    def _start_stuck_recovery(self, now, side):
+        """启动“回正—直退 1m—朝原绕行侧转向”动作。"""
+        self.recovering = False
+        self.escaping = False
+        self.escape_pathing = False
+        self.escape_path = []
+        self.escape_retrying = False
+        self.stuck_recovery_active = True
+        self.stuck_recovery_side = 1 if side >= 0 else -1
+        self.stuck_recovery_phase_start = now
+        self.stuck_recovery_start_pose = None
+        if self._stuck_reverse_has_clearance():
+            self.stuck_recovery_phase = 'straighten'
+            self.get_logger().warn(
+                f'定距离恢复：先停车摆正 '
+                f'{self.stuck_straighten_time:.1f}s，再直线后退 '
+                f'{self.stuck_reverse_distance:.2f}m')
+        else:
+            # 看不到完整的 1m 安全后退走廊时保持停车，不降级为盲退。
+            self.stuck_recovery_phase = 'wait_clearance'
+            self.get_logger().error(
+                f'定距离恢复需后退 {self.stuck_reverse_distance:.2f}m，'
+                f'但后方安全净空不足，已停车等待')
+        return True
+
+    def _run_stuck_recovery(self, now, cmd, fwd_dist):
+        """执行定距离恢复状态机；返回 True 表示本周期已处理。"""
+        if self.stuck_recovery_phase == 'wait_clearance':
+            if self._stuck_reverse_has_clearance():
+                self.stuck_recovery_phase = 'straighten'
+                self.stuck_recovery_phase_start = now
+                self.get_logger().info('后方净空已满足 1m 倒车要求，开始摆正')
+            self.pub_cmd.publish(cmd)
+            return True
+
+        if self.stuck_recovery_phase == 'straighten':
+            if now - self.stuck_recovery_phase_start < \
+                    self.stuck_straighten_time:
+                # 零速+零角速度使底盘转向回中并等待机械稳定。
+                self.pub_cmd.publish(cmd)
+                return True
+            if not self._stuck_reverse_has_clearance():
+                self.stuck_recovery_phase = 'wait_clearance'
+                self.get_logger().error('摆正后检测到后方净空不足，保持停车')
+                self.pub_cmd.publish(cmd)
+                return True
+            self.stuck_recovery_phase = 'reverse'
+            self.stuck_recovery_phase_start = now
+            if self.stuck_recovery_start_pose is None:
+                self.stuck_recovery_start_pose = self.pose
+            traveled = math.hypot(
+                self.pose[0] - self.stuck_recovery_start_pose[0],
+                self.pose[1] - self.stuck_recovery_start_pose[1])
+            remaining = max(0.0, self.stuck_reverse_distance - traveled)
+            self.stuck_recovery_until = now + \
+                2.0 * remaining / \
+                max(self.reverse_speed, 0.05) + 2.0
+            self.get_logger().info('方向已摆正，开始按里程计直线后退')
+            self.pub_cmd.publish(cmd)
+            return True
+
+        if self.stuck_recovery_phase == 'reverse':
+            traveled = 0.0
+            if self.pose is not None and \
+                    self.stuck_recovery_start_pose is not None:
+                traveled = math.hypot(
+                    self.pose[0] - self.stuck_recovery_start_pose[0],
+                    self.pose[1] - self.stuck_recovery_start_pose[1])
+            if (not self._stuck_reverse_has_clearance() or
+                    self._rear_clearance() < self.hard_stop_distance):
+                self.stuck_recovery_phase = 'wait_clearance'
+                self.get_logger().error(
+                    f'直线后退至 {traveled:.2f}m 时后方触发急停，'
+                    f'未达 1m，保持停车')
+                self.pub_cmd.publish(cmd)
+                return True
+            if traveled >= self.stuck_reverse_distance:
+                self.stuck_recovery_phase = 'turn'
+                self.stuck_recovery_phase_start = now
+                self.detour_side = self.stuck_recovery_side
+                self.detour_time = now
+                self.get_logger().info(
+                    f'已直线后退 {traveled:.2f}m，开始向'
+                    f'{"左" if self.stuck_recovery_side > 0 else "右"}'
+                    f'侧绕行方向转向')
+                self.pub_cmd.publish(cmd)
+                return True
+            if now >= self.stuck_recovery_until:
+                self.stuck_recovery_phase = 'wait_clearance'
+                self.get_logger().error(
+                    f'直线后退超时（仅 {traveled:.2f}m），已停车')
+                self.pub_cmd.publish(cmd)
+                return True
+            cmd.linear.x = -self.reverse_speed
+            cmd.angular.z = 0.0
+            self.pub_cmd.publish(cmd)
+            return True
+
+        if self.stuck_recovery_phase == 'turn':
+            turn_angle = self.stuck_recovery_side * math.pi / 4.0
+            if (fwd_dist < self.hard_stop_distance or
+                    self._direction_distance(turn_angle) <
+                    self.hard_stop_distance):
+                # 只累计连续可安全转向的时间，障碍消失后重新计时。
+                self.stuck_recovery_phase_start = now
+                self.pub_cmd.publish(cmd)
+                return True
+            if now - self.stuck_recovery_phase_start < self.stuck_turn_time:
+                # 阿克曼底盘需要带速才能改变航向，以螺动速度完成转向。
+                cmd.linear.x = self.creep_speed
+                cmd.angular.z = \
+                    self.stuck_recovery_side * self.max_angular
+                self.pub_cmd.publish(cmd)
+                return True
+            side = self.stuck_recovery_side
+            self.stuck_recovery_active = False
+            self.stuck_recovery_phase = 'idle'
+            self.stuck_recovery_start_pose = None
+            self.detour_side = side
+            self.detour_time = now
+            self.get_logger().info('定距离恢复完成，继续常规避障')
+            return False
+
+        # 未知状态保守停车，避免落入常规巡航。
+        self.pub_cmd.publish(cmd)
+        return True
 
     def _publish_recovery(self):
         """倒车-转向脱困：倒弧线把车头甩向较空一侧。
@@ -971,12 +1220,14 @@ class AvoidanceNode(Node):
     def _bias_desired_angle(self, desired_angle):
         """根据侧前方障碍分布把期望方向向空旷侧偏移。
 
-        只在 0.8m 范围内的侧前方（±15° ~ ±90°）障碍参与计算；
+        在减速距离内的侧前方（±15° ~ ±90°）障碍参与计算；
         左右净空差超过 lateral_clearance_margin 才触发偏移，最大偏移
         lateral_bias_max。让小车在正前方还没被堵死时就提前向空旷侧转向，
         提升对侧前方/斜前方障碍物的响应能力。
         """
-        response_range = 0.8  # 只响应 0.8m 内的侧前方障碍，避免过于灵敏
+        # 与 slow_down_distance 使用同一前瞻距离。旧实现固定为 0.8m，
+        # 比实机 1.0m 的安全距离还短，阿克曼底盘来不及完成转向。
+        response_range = self.slow_down_distance
         left_clearance = right_clearance = float('inf')
         for o in self.obstacles:
             a = self._normalize_angle(o.angle)
@@ -1107,7 +1358,10 @@ class AvoidanceNode(Node):
             half_width = self._inflated_half_width(o, desired_angle)
             if abs(self._normalize_angle(o.angle - desired_angle)) <= half_width:
                 nearest_desired = min(nearest_desired, o.distance)
-        if nearest_desired >= self.safety_distance:
+        # 只有在减速距离内也没有障碍时才快速返回。旧实现用
+        # safety_distance（实机为 1.0m），导致 1.0~1.8m 内的正前障碍
+        # 被直接判为可直行，绕行直到很近才开始。
+        if nearest_desired >= self.slow_down_distance:
             # 期望方向畅通且未被标记为"已碰壁"时直接采用；否则继续
             # 走扇区评估，让死胡同记忆有机会把车辆推离反复震荡的方向
             if self._blocked_direction_cost(desired_angle) < 0.05:

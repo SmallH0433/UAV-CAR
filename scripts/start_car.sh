@@ -1,4 +1,11 @@
 #!/bin/bash
+
+# The integrated panel owns the same GPIOs and HTTP port as full bringup.
+if systemctl is-active --quiet car-rpi-motor-web.service; then
+    echo "Stop the panel first: sudo systemctl stop car-rpi-motor-web.service" >&2
+    exit 1
+fi
+
 # R680 小车实机链路启动脚本（由 systemd car-bringup.service 调用，也可手动执行）
 #
 # 要点：开机后 USB 串口设备枚举可能晚于启动（实测曾晚约 1 分钟），
@@ -29,7 +36,7 @@ else
 fi
 
 source /opt/ros/humble/setup.bash
-source /home/yahboom/CAR_ws/install/setup.bash
+source /home/ubuntu/CAR_ws/install/setup.bash
 
 # UVC 免驱摄像头（仅画面采集显示，无视觉处理）：by-id 路径重启不变
 CAMERA_DEVICE=/dev/v4l/by-id/usb-Generic_HD_camera_20201212000000-video-index0

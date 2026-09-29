@@ -1,0 +1,21 @@
+[Unit]
+Description=CAR_ws integrated ROS web panel and CL42 drivers
+Wants=network-online.target
+After=network-online.target
+Conflicts=car-bringup.service
+
+[Service]
+Environment=ROS_LOCALHOST_ONLY=1
+Type=simple
+User=ubuntu
+Group=ubuntu
+SupplementaryGroups=gpio
+WorkingDirectory=/home/ubuntu/CAR_ws
+ExecStart=/bin/bash -c 'source /opt/ros/humble/setup.bash; source /home/ubuntu/CAR_ws/install/setup.bash; exec ros2 launch car_sim control_panel.launch.py'
+KillSignal=SIGINT
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
