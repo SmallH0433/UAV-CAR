@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 import urllib.request
+from dataclasses import replace
 from pathlib import Path
 
 import rclpy
@@ -14,6 +15,7 @@ from std_msgs.msg import String
 
 from air_ground_landing.hybrid_guidance import IbvsConfig, IbvsFeatureController
 from air_ground_landing.landing_target_bridge import BridgeConfig, LandingTargetBridge
+from air_ground_landing.landing_alignment import alignment_payload
 
 
 class IbvsAdapter(Node):
@@ -33,6 +35,11 @@ class IbvsAdapter(Node):
         config = json.loads(config_path.read_text(encoding="utf-8"))
         self.bridge = LandingTargetBridge(BridgeConfig.from_mapping(config))
         self.controller = IbvsFeatureController(IbvsConfig.from_mapping(config))
+        # Landing targets the visible image centre, not the calibrated optical
+        # principal point. Keep ordinary FOLLOW candidates unchanged.
+        camera = self.controller.config
+        self.landing_controller = IbvsFeatureController(replace(
+            camera, cx_px=camera.image_width / 2.0, cy_px=camera.image_height / 2.0))
         self.status_url = str(self.get_parameter("status_url").value)
         self.http_timeout_s = float(self.get_parameter("http_timeout_s").value)
         rate_hz = float(self.get_parameter("poll_rate_hz").value)
@@ -95,12 +102,15 @@ class IbvsAdapter(Node):
         target.velocity.y = float(-body_frd[1])
         target.velocity.z = 0.0
         self.publisher.publish(target)
+        landing_features = self.landing_controller.process_status(
+            status, bridge_result.observation, now_s=received_time_s, final_approach=True)
         self._status(
             True,
             features.reason,
             tag_id=features.tag_id,
             aligned=features.aligned,
             centroid_error_px=features.centroid_error_px,
+            landing_alignment=alignment_payload(landing_features, bridge_result.observation, time.monotonic()),
         )
 
     def _status(self, healthy: bool, reason: str, **extra) -> None:

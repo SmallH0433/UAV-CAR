@@ -8,8 +8,7 @@ from unittest.mock import patch
 from types import SimpleNamespace as NS
 
 from air_ground_landing.guided_execution import (
-    RcLandingRequestGate, LandingSwitchConfig, LandingSwitchResult,
-    LandingSwitchState,
+    RcLandingRequestGate, LandingSwitchConfig, LandingSwitchState,
     RcAuthorizationGate, RcGateConfig,
 )
 import test_pilot_session as session_fixtures
@@ -127,38 +126,6 @@ class AdapterLandingLevelTests(unittest.TestCase):
         self.assertTrue(self.sample(2.04,1900))
         self.assertFalse(self.sample(2.05,1100))
         self.assertFalse(self.sample(2.06,1900))
-
-    def test_ch8_low_overrides_terminal_land_latch(self):
-        self.n.manager.update(now_s=2.0, current_mode="GUIDED", desired_mode="LAND")
-        self.n.manager.update(now_s=2.1, current_mode="LAND", desired_mode="LAND")
-        self.n.vehicle_state.mode = "LAND"
-        low = LandingSwitchResult(
-            LandingSwitchState.FOLLOW_INACTIVE,
-            1100,
-            0.0,
-            explicit_low=True,
-        )
-        resume = scope["_desired_mode"](
-            self.n,
-            now_s=2.2,
-            rc=NS(authorized=True),
-            landing=low,
-            guided_candidate=None,
-            continuity=NS(keep_guided=True),
-            terminal_land_latched=True,
-        )
-        self.assertEqual(resume, ("GUIDED", "CH8_EXPLICIT_LOW_RESUME_GUIDED"))
-
-        rollback = scope["_desired_mode"](
-            self.n,
-            now_s=2.3,
-            rc=NS(authorized=True),
-            landing=low,
-            guided_candidate=None,
-            continuity=NS(keep_guided=False),
-            terminal_land_latched=True,
-        )
-        self.assertEqual(rollback, (None, "CH8_EXPLICIT_LOW_EXIT_LAND"))
 
     def test_actual_guided_descent_output_uses_ch8_level(self):
         n=self.n

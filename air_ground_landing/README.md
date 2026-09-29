@@ -1,5 +1,7 @@
 # OV9281 移动平台降落集成包
 
+[唯一动作执行节点](ACTION_EXECUTOR.md) 使用独立的 `action_executor.launch.py`，不会启动旧 `guided_executor` 或 `simple_landing_coordinator`；默认配置仅观察，不向 MAVROS 写入。
+
 本目录补齐工作区原先只在文档中定义的三个模块，并增加 Elastic/IBVS/AC_PrecLand 的单写入者组合层：
 
 - `landing_target_bridge`：读取 OV9281 `http://127.0.0.1:8765/api/status`，检查标签、时间戳和质量，将相机光学坐标转换为 `MAV_FRAME_BODY_FRD`，生成三维 `LANDING_TARGET`；

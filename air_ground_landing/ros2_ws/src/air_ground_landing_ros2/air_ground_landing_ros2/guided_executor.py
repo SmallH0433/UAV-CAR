@@ -744,20 +744,9 @@ class GuidedExecutor(Node):
             return None, self.pilot_session.reason
         if not follow_mode_allowed(self.vehicle_state.mode, self.guided_mode, self.land_mode):
             return None, "PILOT_MODE_NOT_FOLLOW_ELIGIBLE"
-        transition = self.manager.status()
-        current_mode = (self.vehicle_state.mode or "UNKNOWN").upper()
-        if (
-            landing.explicit_low
-            and (
-                current_mode == self.land_mode
-                or transition.target_mode == self.land_mode
-            )
-        ):
-            if continuity.keep_guided:
-                return self.guided_mode, "CH8_EXPLICIT_LOW_RESUME_GUIDED"
-            return None, "CH8_EXPLICIT_LOW_EXIT_LAND"
         if terminal_land_latched:
             return self.land_mode, "TERMINAL_LAND_LATCHED"
+        transition = self.manager.status()
         connected_age_s = (
             None
             if self.connected_since_s is None
@@ -788,6 +777,7 @@ class GuidedExecutor(Node):
             if continuity.keep_guided:
                 return self.guided_mode, f"SWD_{landing.state.value}_RESUME_GUIDED"
             return None, f"SWD_{landing.state.value}_{continuity.state.value}"
+        current_mode = (self.vehicle_state.mode or "UNKNOWN").upper()
         if (
             landing.requested
             and continuity.keep_guided
@@ -849,7 +839,6 @@ class GuidedExecutor(Node):
             rangefinder_median_m=rangefinder.median_m,
             inner_tag_vertical_m=self.inner_tag_vertical_m,
             inner_tag_age_s=inner_tag_age_s,
-            swd_explicit_low=landing.explicit_low,
         )
 
     def _session_rc(self, now_s: float) -> RcGateResult:

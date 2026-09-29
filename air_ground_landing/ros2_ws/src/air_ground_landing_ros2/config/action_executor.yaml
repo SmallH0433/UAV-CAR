@@ -1,0 +1,92 @@
+action_executor:
+  ros__parameters:
+    # Safe default: requests and telemetry can be inspected, but no MAVROS write
+    # is possible until the deployment profile explicitly enables each output.
+    environment: offline
+    flight_use_approved: false
+    allow_mode_change: false
+    allow_setpoint_output: false
+    allow_landing_disarm_output: false
+    allow_disarm_output: false
+    allow_emergency_stop_output: false
+
+    require_rc_authorization: true
+    rc_flight_flow_enabled: true
+    rc_channel: 6
+    rc_abort_below_pwm: 1300
+    rc_authorize_above_pwm: 1800
+    rc_maximum_age_s: 0.5
+    rc_rearm_dwell_s: 0.4
+    landing_switch_channel: 8
+    landing_switch_off_below_pwm: 1200
+    landing_switch_on_above_pwm: 1800
+    landing_switch_maximum_age_s: 0.5
+
+    guided_mode: GUIDED
+    land_mode: LAND
+    fallback_mode: LOITER
+    entry_modes: [ALT_HOLD, LOITER]
+    # Authoritative hardware values copied from D:/Codex/UAV/config.
+    land_guided_descent_mps: 0.10
+    # Simultaneous descent + geometric image centering + calibrated tag yaw.
+    land_yaw_tolerance_deg: 4.0
+    land_yaw_gain_per_s: 0.8
+    land_maximum_yaw_rate_deg_s: 15.0
+    landing_alignment_maximum_age_s: 0.3
+    land_recovery_height_m: 0.10
+    land_recovery_timeout_s: 1.0
+    land_reacquire_dwell_s: 0.0
+    position_tolerance_m: 0.08
+    speed_tolerance_mps: 0.08
+    yaw_tolerance_deg: 4.0
+    completion_dwell_s: 0.3
+    follow_loss_grace_s: 0.5
+    maximum_horizontal_speed_mps: 0.5
+    maximum_vertical_speed_mps: 0.2
+    maximum_yaw_rate_deg_s: 45.0
+    maximum_horizontal_acceleration_mps2: 0.5
+    maximum_vertical_acceleration_mps2: 0.3
+    state_maximum_age_s: 0.5
+    pose_maximum_age_s: 0.3
+    velocity_maximum_age_s: 0.3
+    candidate_maximum_age_s: 0.5
+    range_maximum_age_s: 0.5
+    landing_target_maximum_age_s: 0.5
+    mode_retry_s: 1.0
+    mode_heartbeat_ack_timeout_s: 2.0
+    command_retry_s: 1.0
+    output_rate_hz: 20.0
+    single_writer_lock_path: /tmp/uav_action_executor.lock
+
+    request_topic: /landing/action/request
+    cancel_topic: /landing/action/cancel
+    status_topic: /landing/action/status
+    preview_topic: /landing/action/preview
+    mavros_output_topic: /mavros/setpoint_raw/local
+    mavros_state_topic: /mavros/state
+    mavros_rc_topic: /mavros/rc/in
+    mavros_set_mode_service: /mavros/set_mode
+    mavros_command_service: /mavros/cmd/command
+    pose_topic: /mavros/local_position/pose
+    velocity_topic: /mavros/local_position/velocity_local
+    extended_state_topic: /mavros/extended_state
+    estimator_status_topic: /mavros/estimator_status
+    home_position_topic: /mavros/home_position/home
+    ibvs_candidate_topic: /landing/ibvs/candidate
+    ibvs_status_topic: /landing/ibvs/status
+    landing_target_status_topic: /landing/landing_target/status
+    rangefinder_topic: /mavros/distance_sensor/rangefinder_pub
+
+landing_target_adapter:
+  ros__parameters:
+    # This node is launched with the executor so LAND can verify that the
+    # precision-landing observation stream is actually reaching MAVROS.
+    environment: offline
+    flight_use_approved: false
+    allow_landing_target_output: false
+    status_url: http://127.0.0.1:8765/api/status
+    http_timeout_s: 0.15
+    poll_rate_hz: 10.0
+    preview_topic: /landing/landing_target/preview
+    status_topic: /landing/landing_target/status
+    mavros_output_topic: /mavros/landing_target/raw

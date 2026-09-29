@@ -37,7 +37,8 @@ class GuidedDescent:
     """Fail closed on stale evidence; never infer touchdown from distance alone."""
 
     def __init__(self, descent_mps=.10, terminal_mps=.05,
-                 near_m=.10, dwell_s=.4, terminal_timeout_s=8.0):
+                 near_m=.10, dwell_s=.4, terminal_timeout_s=8.0,
+                 adjust_while_descending=False):
         values=(descent_mps, terminal_mps, near_m, dwell_s, terminal_timeout_s)
         if not all(math.isfinite(v) and v > 0 for v in values):
             raise ValueError('descent parameters must be finite and positive')
@@ -46,6 +47,7 @@ class GuidedDescent:
         self.descent_mps, self.terminal_mps = descent_mps, terminal_mps
         self.near_m, self.dwell_s = near_m, dwell_s
         self.terminal_timeout_s = terminal_timeout_s
+        self.adjust_while_descending = adjust_while_descending
         self.reset()
 
     def reset(self):
@@ -80,15 +82,18 @@ class GuidedDescent:
             if self.terminal_since is not None:
                 self.fault = True
             return DescentOutput('UNSAFE_EVIDENCE_HOLD')
+        if self.adjust_while_descending and not x.tag_fresh:
+            self.near_since = None
+            return DescentOutput('TAG_LOST_HOLD')
         if self.terminal_since is not None:
             if x.range_m > self.near_m + .05:
                 self.fault = True
                 return DescentOutput('HEIGHT_INCREASE_HOLD')
-            return DescentOutput('TERMINAL_DESCENT', -self.terminal_mps, False, True)
+            return DescentOutput('TERMINAL_DESCENT', -self.terminal_mps, self.adjust_while_descending, True)
         if not x.tag_fresh:
             self.aligned_since = self.near_since = None
             return DescentOutput('TAG_LOST_HOLD')
-        if not x.aligned:
+        if not x.aligned and not self.adjust_while_descending:
             self.aligned_since = self.near_since = None
             return DescentOutput('ALIGN', track_tag=True)
         if self.aligned_since is None:
@@ -98,9 +103,9 @@ class GuidedDescent:
                 self.near_since = x.now
             if x.now-self.near_since >= self.dwell_s:
                 self.terminal_since = x.now
-                return DescentOutput('TERMINAL_DESCENT', -self.terminal_mps, False, True)
-            return DescentOutput('VERIFY_NEAR', track_tag=True)
+                return DescentOutput('TERMINAL_DESCENT', -self.terminal_mps, self.adjust_while_descending, True)
+            return DescentOutput('VERIFY_NEAR', -self.terminal_mps if self.adjust_while_descending else 0.0, track_tag=True)
         self.near_since = None
-        if x.now-self.aligned_since < self.dwell_s:
+        if not self.adjust_while_descending and x.now-self.aligned_since < self.dwell_s:
             return DescentOutput('VERIFY_ALIGNMENT', track_tag=True)
         return DescentOutput('TRACK_DESCENT', -self.descent_mps, True)

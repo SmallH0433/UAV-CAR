@@ -569,10 +569,9 @@ class TerminalLandLatch:
 
     Entry is deliberately stricter than continuation: the vehicle must already
     be armed in heartbeat-confirmed LAND with fresh RC6 authorization and a
-    fresh, high SwD request.  Once latched, vision/landing-target loss does not
-    return the vehicle to GUIDED or LOITER.  Disarm, an explicit CH8 low, an
-    explicit RC6 low, a link loss, or a pilot-selected non-LAND mode clears the
-    latch.
+    fresh, high SwD request.  Once latched, vision/landing-target loss and SwD
+    changes cannot return the vehicle to GUIDED or LOITER.  Disarm, an explicit
+    RC6 low, a link loss, or a pilot-selected non-LAND mode clears the latch.
     """
 
     def __init__(self, config: TerminalLandConfig) -> None:
@@ -605,7 +604,6 @@ class TerminalLandLatch:
         rangefinder_median_m: Optional[float],
         inner_tag_vertical_m: Optional[float],
         inner_tag_age_s: Optional[float],
-        swd_explicit_low: bool = False,
     ) -> TerminalLandResult:
         now_s = float(now_s)
         mode = str(current_mode).strip().upper()
@@ -617,8 +615,6 @@ class TerminalLandLatch:
                 return self.reset("DISARMED_LATCH_COMPLETE")
             if rc_explicit_low:
                 return self.reset("RC6_EXPLICIT_LOW_OVERRIDE")
-            if swd_explicit_low:
-                return self.reset("CH8_EXPLICIT_LOW_OVERRIDE")
             if mode != "LAND":
                 return self.reset("PILOT_MODE_OVERRIDE")
             self._last_reason = "TERMINAL_LAND_LATCHED"
@@ -737,7 +733,6 @@ class LandingSwitchResult:
     state: LandingSwitchState
     pwm: Optional[int]
     age_s: Optional[float]
-    explicit_low: bool = False
 
     @property
     def requested(self) -> bool:
@@ -795,18 +790,12 @@ class RcLandingRequestGate:
                 LandingSwitchState.FOLLOW_INACTIVE,
                 pwm,
                 age_s,
-                pwm <= self.config.off_below_pwm,
             )
         self._last_received_s = received_time_s
         self._last_now_s = now_s
         if pwm <= self.config.off_below_pwm:
             self._requested = False
-            return LandingSwitchResult(
-                LandingSwitchState.READY,
-                pwm,
-                age_s,
-                True,
-            )
+            return LandingSwitchResult(LandingSwitchState.READY, pwm, age_s)
         if pwm >= self.config.on_above_pwm:
             self._requested = True
             return LandingSwitchResult(LandingSwitchState.REQUESTED, pwm, age_s)

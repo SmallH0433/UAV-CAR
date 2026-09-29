@@ -1,0 +1,15 @@
+[Unit]
+Description=Receive-only downward range bridge for MAVLink sensor 200/88
+Requires=ov9281-mavros.service
+After=ov9281-mavros.service
+
+[Service]
+ExecStartPre=-/usr/bin/podman rm -f ov9281-range-bridge
+ExecStart=/usr/bin/podman run --rm --name ov9281-range-bridge --network host --ipc=host -v /home/pi/air_ground_landing/tools:/tools:ro localhost/air-ground-landing-ros2:humble /bin/bash -lc 'source /opt/ros/humble/setup.bash && exec python3 /tools/sensor_range_bridge.py'
+ExecStop=/usr/bin/podman stop -t 5 ov9281-range-bridge
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target
