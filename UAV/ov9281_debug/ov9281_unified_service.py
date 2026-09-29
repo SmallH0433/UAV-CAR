@@ -53,7 +53,7 @@ aside{display:flex;flex-direction:column;gap:12px}.card{padding:14px}.tabs{displ
 <section class="card tabs"><button id="tagBtn" onclick="setMode('apriltag')">APRILTAG</button><button id="calBtn" onclick="setMode('calibration')">CALIBRATION</button></section>
 <section class="card"><div class="label">Vision state</div><div class="value wait" id="state">STARTING</div><div class="bar"><div class="fill" id="fill"></div></div></section>
 <section class="card"><div class="label">Flight controller</div><div class="value wait" id="flightMode">DISCONNECTED</div><div class="grid" style="margin-top:13px"><div><div class="label">Link / Armed</div><div class="notice" id="flightLink">—</div></div><div><div class="label">Landed state</div><div class="notice" id="landedState">—</div></div><div><div class="label">Forward / Back</div><div class="value" id="horizontalDirection">—</div></div><div><div class="label">Up / Down</div><div class="value" id="verticalDirection">—</div></div><div><div class="label">Left / Right</div><div class="value" id="lateralDirection">—</div></div><div><div class="label">Control state</div><div class="notice" id="controlState">—</div></div><div><div class="label">Body velocity X/Y/Z</div><div class="notice" id="bodyVelocity">—</div></div><div><div class="label">Last command X/Y/Z</div><div class="notice" id="lastCommand">—</div></div></div><div class="notice" style="margin-top:10px">Actual body-frame velocity: X forward, Y left, Z up; ±0.05 m/s is shown as HOLD.</div></section>
-<section class="card"><div class="label">准备运动 / Sent command</div><div class="direction-key" style="color:#ff1528"><b>➜</b><span>鲜红箭头＝树莓派已发出的水平速度方向</span></div><div class="notice" id="motionState">等待新指令</div><div class="notice" style="margin-top:8px">红色与粉色箭头统一按机体系显示：上＝机体前，右＝机体右。红色箭头从画面中心出发；升降单独标注。表示准备运动的指令方向，不是实际运动；指令过期自动隐藏。</div></section>
+<section class="card"><div class="label">准备运动 / Sent command</div><div class="direction-key" style="color:#ff1528"><b>➜</b><span>鲜红箭头＝树莓派已发出的水平速度方向</span></div><div class="direction-key" style="color:#8df3b4"><b>↶</b><span>浅绿弧形箭头＝树莓派已发出的水平旋转方向</span></div><div class="notice" id="motionState">等待新指令</div><div class="notice" id="yawState">等待旋转指令</div><div class="notice" style="margin-top:8px">红色、浅绿色与粉色箭头统一按机体系显示：上＝机体前，右＝机体右。红色箭头从画面中心出发；浅绿色弧线表示预备左旋或右旋，升降单独标注。这些是指令方向，不是实际运动；指令过期自动隐藏。</div></section>
 <section class="card"><div class="label">Candidate quality</div><div class="notice" id="rejectReason">No candidate</div></section>
 <section class="card"><div class="label">方向参照 / Direction</div><div class="direction-key" style="color:#00d9ff"><b>↑</b><span>画面正上方（相机 −Y）</span></div><div class="direction-key" style="color:#ffb020"><b>↑</b><span>大 Tag 自身上方 · ID 0</span></div><div class="direction-key" style="color:#ff54d9"><b>↑</b><span>小 Tag 校准方向 · 无人机坐标系 · ID 1</span></div><div class="notice" style="margin-top:10px">青色固定指向画面上方；橙色沿大 Tag 在图像中的上方。粉色使用树莓派识别并补偿 45° 布局后的小 Tag 方向，通过控制外参转换到机体系，按前＝上、右＝右绘制。方向角 0°＝机头、+90°＝机体右侧。仅显示质量通过的新鲜姿态；不自动控制偏航。</div><div class="notice" id="directionState" style="margin-top:8px">等待标签</div></section>
 <section class="card grid"><div><div class="label">Capture</div><div class="value"><span id="capture">0</span> fps</div></div><div><div class="label">Analysis</div><div class="value"><span id="analysis">0</span> fps</div></div><div><div class="label">Encoded</div><div class="value"><span id="encoded">0</span> fps</div></div><div><div class="label">Frame age</div><div class="value"><span id="age">0</span> ms</div></div></section>
@@ -106,6 +106,27 @@ function motionDirection(f,elapsedMs){
   const x=-v.y,y=-v.x,speed=Math.hypot(x,y);
   return {unit:speed>1e-4?[x/speed,y/speed]:null,speed,up:v.z};
 }
+function yawDirection(f,elapsedMs){
+  const c=f.motion_command,rate=c&&c.yaw_rate_rad_s;
+  if(!f.flight_controller_connected||f.mode!=='GUIDED'||!c||c.source!=='/mavros/setpoint_raw/local'||!Number.isFinite(c.age_s)||c.age_s<0||!Number.isFinite(elapsedMs)||elapsedMs<0||c.age_s+elapsedMs/1000>=.7||!Number.isFinite(rate))return null;
+  return rate;
+}
+function drawYaw(f){
+  const rate=yawDirection(f,Date.now()-directionReceivedAt);
+  if(rate===null){$('yawState').textContent='无新鲜旋转指令，浅绿箭头已隐藏';return;}
+  if(Math.abs(rate)<.001){$('yawState').textContent='水平旋转保持';return;}
+  const cx=640,cy=400,r=150,start=-Math.PI/2,turn=rate>0?-1:1,end=start+turn*.95,color='#8df3b4';
+  ctx.save();ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=9;ctx.lineCap='round';ctx.shadowColor='#000';ctx.shadowBlur=5;
+  ctx.beginPath();ctx.arc(cx,cy,r,start,end,turn<0);ctx.stroke();
+  const tip=[cx+r*Math.cos(end),cy+r*Math.sin(end)],tangent=[-Math.sin(end)*turn,Math.cos(end)*turn];
+  const normal=[-tangent[1],tangent[0]],base=[tip[0]-tangent[0]*27,tip[1]-tangent[1]*27];
+  ctx.beginPath();ctx.moveTo(...tip);ctx.lineTo(base[0]+normal[0]*13,base[1]+normal[1]*13);ctx.lineTo(base[0]-normal[0]*13,base[1]-normal[1]*13);ctx.closePath();ctx.fill();
+  const label='预备'+(rate>0?'左旋 ':'右旋 ')+(Math.abs(rate)*180/Math.PI).toFixed(1)+'°/s';
+  ctx.font='bold 22px "Segoe UI",sans-serif';ctx.lineWidth=5;ctx.strokeStyle='#071019';
+  const x=Math.max(8,Math.min(1280-ctx.measureText(label).width-8,tip[0]+(rate>0?-235:20))),y=Math.max(28,Math.min(788,tip[1]+35));
+  ctx.strokeText(label,x,y);ctx.fillText(label,x,y);ctx.restore();
+  $('yawState').textContent=label;
+}
 function drawMotion(f){
   const m=motionDirection(f,Date.now()-directionReceivedAt);
   if(!m){$('motionState').textContent=f.mode==='LAND'?'飞控自主 LAND：无新鲜树莓派速度指令':'无新鲜运动指令，红色箭头已隐藏';return;}
@@ -134,6 +155,7 @@ function draw(s){
   }
   $('directionState').textContent=shown.join(' · ')||(fresh?'未识别到标签方向':'图像或数据已过期，标签箭头已隐藏');
   drawMotion(s.flight||{});
+  drawYaw(s.flight||{});
 }
 setInterval(()=>draw(last),200);
 async function update(){try{const s=await(await fetch('/api/status',{cache:'no-store'})).json();last=s;directionReceivedAt=Date.now();tagBtn.classList.toggle('active',s.mode==='apriltag');calBtn.classList.toggle('active',s.mode==='calibration');tagStats.style.display=s.mode==='apriltag'?'grid':'none';calStats.style.display=s.mode==='calibration'?'block':'none';state.textContent=s.state;state.className='value '+(s.found?'ok':'wait');const rejected=(s.detections||[]).filter(d=>!d.quality_passed);rejectReason.textContent=s.found?'Accepted: ID '+s.tag_id:(rejected.length?rejected.map(d=>'ID '+d.tag_id+': '+(d.quality_rejection_reasons||[]).join(', ')).join(' | '):'No candidate');capture.textContent=val(s.capture_fps);analysis.textContent=val(s.analysis_fps);encoded.textContent=val(s.encoded_fps);age.textContent=Math.round(s.frame_age_ms);tagId.textContent=s.tag_id??'—';margin.textContent=val(s.decision_margin);distance.textContent=s.distance_m==null?'—':val(s.distance_m,3)+' m';rawDistance.textContent=s.raw_distance_m==null?'—':val(s.raw_distance_m,3)+' m';reproj.textContent=s.reprojection_error_px==null?'—':val(s.reprojection_error_px,2)+' px';xm.textContent=s.x_m==null?'—':val(s.x_m,3)+' m';ym.textContent=s.y_m==null?'—':val(s.y_m,3)+' m';zm.textContent=s.z_m==null?'—':val(s.z_m,3)+' m';cx.textContent=val(s.center_x_px);cy.textContent=val(s.center_y_px);saved.textContent=s.saved;target.textContent=s.target;fill.style.width=(100*s.saved/s.target)+'%';draw(s);updateFlight(s.flight||{})}catch(e){state.textContent='RECONNECTING';state.className='value wait';updateFlight({})}}setInterval(update,350);reconnectStream();update();
