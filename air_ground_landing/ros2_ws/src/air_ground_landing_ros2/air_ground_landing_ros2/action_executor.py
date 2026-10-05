@@ -187,6 +187,8 @@ class ActionExecutorNode(ActionPeripherals, Node):
             land_yaw_tolerance_rad=math.radians(float(self.get_parameter("land_yaw_tolerance_deg").value)),
             land_yaw_gain_per_s=float(self.get_parameter("land_yaw_gain_per_s").value),
             land_maximum_yaw_rate_rad_s=math.radians(float(self.get_parameter("land_maximum_yaw_rate_deg_s").value)),
+            land_center_tolerance_px=float(self.get_parameter("land_center_tolerance_px").value),
+            land_alignment_dwell_s=float(self.get_parameter("land_alignment_dwell_s").value),
         )
         self.rc_gate = RcAuthorizationGate(RcGateConfig(
             channel=int(self.get_parameter("rc_channel").value),
@@ -325,6 +327,8 @@ class ActionExecutorNode(ActionPeripherals, Node):
             "rc_channel": 6,
             "land_guided_descent_mps": 0.10,
             "land_yaw_tolerance_deg": 4.0,
+            "land_center_tolerance_px": 20.0,
+            "land_alignment_dwell_s": 0.4,
             "land_yaw_gain_per_s": 0.8,
             "land_maximum_yaw_rate_deg_s": 15.0,
             "landing_alignment_maximum_age_s": 0.3,
@@ -685,6 +689,16 @@ class ActionExecutorNode(ActionPeripherals, Node):
             params={"maximum_speed_mps": self.lifecycle.maximum_horizontal_speed_mps},
         )
         status = self.lifecycle.start(request, snapshot)
+        if (
+            self.lifecycle.active
+            and snapshot.landing_requested
+            and self.auto_land_inhibited
+        ):
+            # LAND may exit while CH8 is still held high.  A subsequently
+            # accepted FOLLOW proves that the Tag has been reacquired, so
+            # re-arm CH8 without requiring a physical low -> high reset.  The
+            # next GUIDED-confirmed tick will let LAND preempt FOLLOW again.
+            self.auto_land_inhibited = False
         self._publish_status(status, now, event="RC_CH6_AUTO_GUIDED")
 
     def _snapshot(self, now: float) -> VehicleSnapshot:
@@ -962,6 +976,9 @@ class ActionExecutorNode(ActionPeripherals, Node):
             "landing_heading_error_deg": math.degrees(self.landing_alignment.heading_error_rad) if self.landing_alignment else None,
             "landing_center_error_px": self.landing_alignment.center_error_px if self.landing_alignment else None,
             "landing_adjust_while_descending": True,
+            "landing_alignment_required_before_descent": True,
+            "land_center_tolerance_px": self.lifecycle.land_center_tolerance_px,
+            "land_alignment_dwell_s": self.lifecycle.land_alignment_dwell_s,
             "rc_flight_flow_enabled": self.rc_flight_flow_enabled,
             "landing_switch_state": self.landing_switch_state,
             "landing_switch_pwm": self.landing_switch_pwm,

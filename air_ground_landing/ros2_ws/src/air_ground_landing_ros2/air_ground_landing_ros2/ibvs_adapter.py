@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 import urllib.request
 from dataclasses import replace
@@ -40,6 +41,7 @@ class IbvsAdapter(Node):
         camera = self.controller.config
         self.landing_controller = IbvsFeatureController(replace(
             camera, cx_px=camera.image_width / 2.0, cy_px=camera.image_height / 2.0))
+        self.last_valid_capture_s = None
         self.status_url = str(self.get_parameter("status_url").value)
         self.http_timeout_s = float(self.get_parameter("http_timeout_s").value)
         rate_hz = float(self.get_parameter("poll_rate_hz").value)
@@ -71,6 +73,20 @@ class IbvsAdapter(Node):
             wall_time_usec=time.time_ns() // 1000,
         )
         if not bridge_result.accepted:
+            if bridge_result.reason == "DUPLICATE_FRAME":
+                if status.get("found") is not True:
+                    self._status(False, "BRIDGE_REJECTED:TARGET_NOT_FOUND")
+                    return
+                if self.last_valid_capture_s is not None:
+                    age_s = time.monotonic() - self.last_valid_capture_s
+                    maximum_age_s = min(self.bridge.config.max_message_age_s,
+                                        self.controller.config.maximum_feature_age_s)
+                    if math.isfinite(age_s) and 0.0 <= age_s <= maximum_age_s:
+                        # No new observation: retain the previously published
+                        # sample without renewing its status, candidate or age.
+                        return
+                    self._status(False, "BRIDGE_REJECTED:STALE_FRAME")
+                    return
             self._status(False, f"BRIDGE_REJECTED:{bridge_result.reason}")
             return
         features = self.controller.process_status(
@@ -104,6 +120,7 @@ class IbvsAdapter(Node):
         self.publisher.publish(target)
         landing_features = self.landing_controller.process_status(
             status, bridge_result.observation, now_s=received_time_s, final_approach=True)
+        self.last_valid_capture_s = bridge_result.observation.capture_time_s
         self._status(
             True,
             features.reason,
@@ -114,6 +131,8 @@ class IbvsAdapter(Node):
         )
 
     def _status(self, healthy: bool, reason: str, **extra) -> None:
+        if not healthy:
+            self.last_valid_capture_s = None
         message = String()
         message.data = json.dumps(
             {"source": "IBVS_ROS2_ADAPTER", "healthy": healthy, "reason": reason, **extra},

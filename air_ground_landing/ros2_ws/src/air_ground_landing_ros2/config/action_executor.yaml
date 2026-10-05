@@ -26,10 +26,12 @@ action_executor:
     land_mode: LAND
     fallback_mode: LOITER
     entry_modes: [ALT_HOLD, LOITER]
-    # Authoritative hardware values copied from D:/Codex/UAV/config.
+    # Authoritative hardware deployment values.
     land_guided_descent_mps: 0.10
-    # Simultaneous descent + geometric image centering + calibrated tag yaw.
+    # Centre and align heading continuously before allowing descent.
     land_yaw_tolerance_deg: 4.0
+    land_center_tolerance_px: 20.0
+    land_alignment_dwell_s: 0.4
     land_yaw_gain_per_s: 0.8
     land_maximum_yaw_rate_deg_s: 15.0
     landing_alignment_maximum_age_s: 0.3

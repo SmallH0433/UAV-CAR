@@ -38,6 +38,8 @@ class ModeFlowHarness(Node):
         self.ch6_pwm = 1000
         self.ch8_pwm = 1000
         self.tag_visible = True
+        self.tag_heading_error_rad = -.4
+        self.tag_center_error_px = 70.0
         self.range_m = 0.8
         self.mode_requests = []
         self.statuses = []
@@ -154,7 +156,8 @@ class ModeFlowHarness(Node):
             "aligned": self.tag_visible,
             "landing_alignment": {
                 "frame": "BODY_FLU", "velocity_flu": [.08, -.04],
-                "heading_error_rad": -.4, "center_error_px": 70.0,
+                "heading_error_rad": self.tag_heading_error_rad,
+                "center_error_px": self.tag_center_error_px,
                 "source_age_s": 0.0,
             } if self.tag_visible else None,
         })
@@ -230,6 +233,15 @@ def main() -> int:
         )
 
         node.ch8_pwm = 2000
+        wait_for(node, lambda: status_seen(node, action="LAND", detail="GUIDED_ALIGN"),
+                 5.0, "CH8 alignment before descent")
+        spin_for(node, .6)
+        if node.last_setpoint is None or node.last_setpoint.velocity.z != 0:
+            raise AssertionError("descent emitted before centering and heading alignment")
+        if node.last_setpoint.yaw_rate >= 0:
+            raise AssertionError("alignment did not turn toward the tag heading")
+        node.tag_heading_error_rad = 0.0
+        node.tag_center_error_px = 10.0
         wait_for(node, lambda: status_seen(node, action="LAND", detail="GUIDED_TRACK_DESCENT"),
                  5.0, "CH8 GUIDED descent")
         if "LAND" in node.mode_requests:
@@ -237,9 +249,18 @@ def main() -> int:
         wait_for(node, lambda: node.last_setpoint is not None
                  and node.last_setpoint.velocity.z < 0
                  and node.last_setpoint.velocity.x > 0
-                 and node.last_setpoint.yaw_rate < 0
+                 and node.last_setpoint.yaw_rate == 0
                  and not (node.last_setpoint.type_mask & PositionTarget.IGNORE_YAW_RATE),
-                 3.0, "simultaneous descent, centering and yaw correction")
+                 3.0, "descent after centering and heading alignment")
+        node.statuses.clear()
+        node.tag_heading_error_rad = -.4
+        wait_for(node, lambda: status_seen(node, detail="GUIDED_ALIGN")
+                 and node.last_setpoint.velocity.z == 0,
+                 3.0, "misalignment stops descent")
+        node.tag_heading_error_rad = 0.0
+        node.statuses.clear()
+        wait_for(node, lambda: status_seen(node, detail="GUIDED_TRACK_DESCENT"),
+                 3.0, "realignment resumes descent")
         node.statuses.clear()
         node.tag_visible = False
         wait_for(node, lambda: status_seen(node, detail="TAG_LOST_GUIDED_HOLD"),

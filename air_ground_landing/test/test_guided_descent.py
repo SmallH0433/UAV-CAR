@@ -77,6 +77,24 @@ class DescentTests(unittest.TestCase):
         self.step(2)
         self.assertEqual(self.step(1).phase, 'FAULT_HOLD')
 
+    def test_tracking_backend_waits_for_alignment_and_stops_on_misalignment(self):
+        self.p = GuidedDescent(adjust_while_descending=True)
+        self.assertEqual(self.step(0, aligned=False).up_mps, 0)
+        self.assertEqual(self.step(.5, aligned=False).up_mps, 0)
+        self.assertEqual(self.step(.6).up_mps, 0)
+        self.assertLess(self.step(1.01).up_mps, 0)
+        self.assertEqual(self.step(1.02, aligned=False).up_mps, 0)
+        self.assertEqual(self.step(1.03).up_mps, 0)
+        self.assertLess(self.step(1.44).up_mps, 0)
+
+    def test_tracking_backend_tag_loss_restarts_alignment_dwell(self):
+        self.p = GuidedDescent(adjust_while_descending=True)
+        self.step(0)
+        self.assertLess(self.step(.41).up_mps, 0)
+        self.assertEqual(self.step(.42, tag_fresh=False).up_mps, 0)
+        self.assertEqual(self.step(.5).up_mps, 0)
+        self.assertLess(self.step(.91).up_mps, 0)
+
 
 if __name__ == '__main__':
     unittest.main()

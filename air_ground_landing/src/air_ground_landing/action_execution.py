@@ -164,6 +164,8 @@ class ActionExecutor:
         land_yaw_tolerance_rad: float = math.radians(4.0),
         land_yaw_gain_per_s: float = 0.8,
         land_maximum_yaw_rate_rad_s: float = math.radians(15.0),
+        land_center_tolerance_px: float = 20.0,
+        land_alignment_dwell_s: float = 0.4,
     ) -> None:
         values = (
             position_tolerance_m,
@@ -211,7 +213,9 @@ class ActionExecutor:
         self.land_guided_descent_mps = land_guided_descent_mps
         alignment_limits = (land_yaw_tolerance_rad,
                             land_yaw_gain_per_s,
-                            land_maximum_yaw_rate_rad_s)
+                            land_maximum_yaw_rate_rad_s,
+                            land_center_tolerance_px,
+                            land_alignment_dwell_s)
         if not all(math.isfinite(v) and v > 0 for v in alignment_limits):
             raise ValueError("landing alignment limits must be finite and positive")
         if land_yaw_tolerance_rad >= math.pi / 2:
@@ -219,7 +223,10 @@ class ActionExecutor:
         self.land_yaw_tolerance_rad = land_yaw_tolerance_rad
         self.land_yaw_gain_per_s = land_yaw_gain_per_s
         self.land_maximum_yaw_rate_rad_s = min(land_maximum_yaw_rate_rad_s, maximum_yaw_rate_rad_s)
-        self._descent = GuidedDescent(adjust_while_descending=True)
+        self.land_center_tolerance_px = land_center_tolerance_px
+        self.land_alignment_dwell_s = land_alignment_dwell_s
+        self._descent = GuidedDescent(dwell_s=land_alignment_dwell_s,
+                                     adjust_while_descending=True)
         self._seen_action_ids: set[str] = set()
         self.reset()
 
@@ -238,6 +245,7 @@ class ActionExecutor:
         self.land_hold_started_s: Optional[float] = None
         self.land_reacquired_since_s: Optional[float] = None
         self.land_telemetry_loss_started_s: Optional[float] = None
+        self.land_alignment_since_s: Optional[float] = None
         self.land_exit_mode: Optional[str] = None
         self.land_exit_reason = ""
         self._land_expected_mode = self.land_mode
@@ -454,6 +462,7 @@ class ActionExecutor:
             if snapshot.telemetry_fresh:
                 self.land_telemetry_loss_started_s = None
             elif snapshot.connected and snapshot.authorized:
+                self.land_alignment_since_s = None
                 if self.land_telemetry_loss_started_s is None:
                     self.land_telemetry_loss_started_s = snapshot.now_s
                 if snapshot.now_s - self.land_telemetry_loss_started_s < 1.0:
@@ -476,6 +485,8 @@ class ActionExecutor:
             and snapshot.mode.strip().upper() != self._desired_mode(self.request.kind)
         ):
             desired_mode = self._desired_mode(self.request.kind)
+            self.land_alignment_since_s = None
+            self._descent.aligned_since = None
             self.detail = f"WAITING_{desired_mode}_HEARTBEAT"
             return self._status(snapshot.now_s), ActionCommand(desired_mode=desired_mode)
         handler = {
@@ -642,6 +653,10 @@ class ActionExecutor:
     def _tick_follow(self, snapshot: VehicleSnapshot) -> ActionCommand:
         assert self.request is not None
         if not snapshot.candidate_fresh or snapshot.candidate_velocity_flu is None:
+            # Recovery must accelerate from the zero command actually emitted,
+            # not from a nonzero velocity retained before candidate loss.
+            self.last_velocity_command = (0.0, 0.0, 0.0)
+            self.last_velocity_command_s = snapshot.now_s
             if self.candidate_missing_since is None:
                 self.candidate_missing_since = snapshot.now_s
             if snapshot.now_s - self.candidate_missing_since > self.follow_loss_grace_s:
@@ -704,7 +719,7 @@ class ActionExecutor:
             range_m=snapshot.range_m,
             range_fresh=snapshot.range_fresh,
             tag_fresh=self._landing_observation_valid(snapshot),
-            aligned=snapshot.target_aligned,
+            aligned=self._landing_aligned(snapshot),
             horizontal_speed=horizontal_speed,
             tilt_deg=snapshot.tilt_deg,
         ))
@@ -908,6 +923,7 @@ class ActionExecutor:
 
     def _guided_land_hold(self, snapshot: VehicleSnapshot, detail: str) -> ActionCommand:
         # Reset limiter memory as well as output: recovery must not reuse descent.
+        self.land_alignment_since_s = None
         self.last_velocity_command = (0.0, 0.0, 0.0)
         self.last_velocity_command_s = snapshot.now_s
         self.detail = detail
@@ -924,8 +940,14 @@ class ActionExecutor:
                     and math.isfinite(snapshot.landing_center_error_px)
                     and snapshot.landing_center_error_px >= 0)
 
+    def _landing_aligned(self, snapshot: VehicleSnapshot) -> bool:
+        """Require centre and forward heading from the same fresh tag pose."""
+        return bool(self._landing_observation_valid(snapshot)
+                    and snapshot.landing_center_error_px <= self.land_center_tolerance_px
+                    and abs(_wrap_angle(snapshot.landing_heading_error_rad)) <= self.land_yaw_tolerance_rad + 1e-12)
+
     def _landing_tracking_command(self, snapshot: VehicleSnapshot, up_mps: float) -> ActionCommand:
-        """Simultaneously centre, turn toward tag top, and descend (ROS ENU)."""
+        """Centre and turn in ROS ENU; callers gate descent on alignment."""
         vx, vy = snapshot.landing_velocity_flu
         east = math.cos(snapshot.yaw_rad) * vx - math.sin(snapshot.yaw_rad) * vy
         north = math.sin(snapshot.yaw_rad) * vx + math.cos(snapshot.yaw_rad) * vy
@@ -936,8 +958,8 @@ class ActionExecutor:
         error = _wrap_angle(snapshot.landing_heading_error_rad)
         rate_limit = self.land_maximum_yaw_rate_rad_s
         yaw_rate = max(-rate_limit, min(rate_limit, self.land_yaw_gain_per_s * error))
-        # Small yaw deadband prevents chatter; neither tolerance gates descent.
-        if abs(error) <= self.land_yaw_tolerance_rad:
+        # Use the same heading tolerance for the yaw deadband and descent gate.
+        if abs(error) <= self.land_yaw_tolerance_rad + 1e-12:
             yaw_rate = 0.0
         if up_mps == 0.0:
             self.last_velocity_command = (*self.last_velocity_command[:2], 0.0)
@@ -1025,8 +1047,17 @@ class ActionExecutor:
             return self._guided_land_hold(snapshot, "TAG_LOST_GUIDED_HOLD")
         if mode != self.guided_mode:
             return self._guided_land_hold(snapshot, "WAITING_GUIDED_HEARTBEAT")
-        self.detail = "GUIDED_TRACK_DESCENT"
         self._land_expected_mode = self.guided_mode
+        if not self._landing_aligned(snapshot):
+            self.land_alignment_since_s = None
+            self.land_phase = self.detail = "GUIDED_ALIGN"
+            return self._landing_tracking_command(snapshot, 0.0)
+        if self.land_alignment_since_s is None:
+            self.land_alignment_since_s = snapshot.now_s
+        if snapshot.now_s - self.land_alignment_since_s < self.land_alignment_dwell_s:
+            self.land_phase = self.detail = "GUIDED_VERIFY_ALIGNMENT"
+            return self._landing_tracking_command(snapshot, 0.0)
+        self.land_phase = self.detail = "GUIDED_TRACK_DESCENT"
         return self._landing_tracking_command(snapshot, -self.land_guided_descent_mps)
 
     def _tick_disarm(self, snapshot: VehicleSnapshot) -> ActionCommand:

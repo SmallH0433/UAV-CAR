@@ -21,7 +21,7 @@ def flight(now=0.0, **changes):
     values = dict(mode="GUIDED", candidate_fresh=True,
                   candidate_velocity_flu=(.1, .0), range_fresh=True, range_m=.8,
                   landing_alignment_fresh=True, landing_velocity_flu=(.1, .0),
-                  landing_center_error_px=40.0, landing_heading_error_rad=0.0,
+                  landing_center_error_px=10.0, landing_heading_error_rad=0.0,
                   landing_target_fresh=True, landing_target_output_enabled=True)
     values.update(changes)
     return snapshot(now, **values)
@@ -33,13 +33,14 @@ class GuidedLandTests(unittest.TestCase):
         status = self.executor.start(request("LAND", guided_descent=True,
                                              rc_managed=True), flight())
         self.assertEqual(status.state, ActionState.RUNNING)
+        self.executor.tick(flight(0.0))
 
     def test_ch8_descends_in_guided_then_hands_off_at_threshold(self):
-        status, command = self.executor.tick(flight(.2))
+        status, command = self.executor.tick(flight(.41))
         self.assertEqual(command.desired_mode, "GUIDED")
         self.assertGreater(command.velocity_enu[0], 0)
         self.assertLess(command.velocity_enu[2], 0)
-        status, command = self.executor.tick(flight(.4, range_m=.10))
+        status, command = self.executor.tick(flight(.5, range_m=.10))
         self.assertEqual(command.desired_mode, "LAND")
         self.assertIsNone(command.velocity_enu)
 
@@ -62,6 +63,9 @@ class GuidedLandTests(unittest.TestCase):
         self.assertEqual(status.state, ActionState.RUNNING)
         self.assertIsNone(command)
         status, command = self.executor.tick(flight(.6))
+        self.assertEqual(status.detail, "GUIDED_VERIFY_ALIGNMENT")
+        self.assertEqual(command.velocity_enu[2], 0)
+        status, command = self.executor.tick(flight(1.01))
         self.assertEqual(status.detail, "GUIDED_TRACK_DESCENT")
         self.assertLess(command.velocity_enu[2], 0)
 
@@ -80,11 +84,14 @@ class GuidedLandTests(unittest.TestCase):
         self.assertEqual(command.desired_mode, "LAND")
         self.assertIsNone(command.velocity_enu)
 
-    def test_loss_immediately_stops_all_velocity_then_resumes_guided_descent(self):
-        self.executor.tick(flight(.2))
-        status, command = self.executor.tick(flight(.3, candidate_fresh=False))
+    def test_loss_stops_velocity_then_rechecks_alignment_before_descent(self):
+        self.executor.tick(flight(.41))
+        status, command = self.executor.tick(flight(.45, candidate_fresh=False))
         self.assertEqual(command.velocity_enu, (0, 0, 0))
         status, command = self.executor.tick(flight(.5))
+        self.assertEqual(status.detail, "GUIDED_VERIFY_ALIGNMENT")
+        self.assertEqual(command.velocity_enu[2], 0)
+        status, command = self.executor.tick(flight(.91))
         self.assertEqual(status.detail, "GUIDED_TRACK_DESCENT")
         self.assertEqual(command.desired_mode, "GUIDED")
         self.assertLess(command.velocity_enu[2], 0)
@@ -253,7 +260,7 @@ class RcFlowTests(unittest.TestCase):
         self.assertEqual(len(sent), 1)
         self.assertEqual((sent[0].command, sent[0].param1, sent[0].param2), (400, 0, 0))
 
-    def test_actual_rc_driver_selects_hybrid_and_requires_ch8_reset_after_exit(self):
+    def test_follow_reacquisition_rearms_held_ch8_after_land_exit(self):
         # Compile the real orchestration method in isolation, without ROS stubs.
         path = executor_source()
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -285,10 +292,8 @@ class RcFlowTests(unittest.TestCase):
         driver.lifecycle.tick(flight(1.3))
         drive(flight(1.4))
         self.assertEqual(driver.lifecycle.request.kind, ActionKind.FOLLOW)
+        self.assertFalse(driver.auto_land_inhibited)
         drive(flight(1.5))
-        self.assertEqual(driver.lifecycle.request.kind, ActionKind.FOLLOW)
-        drive(flight(1.6, landing_requested=False, landing_explicit_low=True))
-        drive(flight(1.7))
         self.assertEqual(driver.lifecycle.request.kind, ActionKind.LAND)
 
     def test_ch6_failed_follow_retries_at_most_once_per_second(self):
