@@ -93,8 +93,8 @@ IDLE → RUNNING → DONE | FAILED | TIMEOUT | CANCELLED
 - `MOVE` 使用 ROS `LOCAL_ENU`，斜向动作通过方向向量表达，不建立额外动作类型。
 - `ROTATE` 支持相对 `angle_deg`、绝对 `heading_deg`，或持续 `yaw_rate_deg_s`。
 - `FOLLOW` 使用 IBVS 的机体 FLU 水平速度候选，在执行节点内转换为本地 ENU。
-- `PRECISION_LAND` 同时输出 GUIDED 垂直速度、图像居中水平速度和 Tag 朝向偏航角速度，终端低速下降阶段仍持续修正；对任务层仍只有一个 `RUNNING` 状态。
-- `LAND` 只允许从已确认的 GUIDED 会话开始。`precision` 默认为 `true`，`guided_descent` 默认跟随 `precision`，默认采用边下降边调整的 GUIDED 路径，到 0.10 m 交接原生 LAND。开始前必须确认 LandingTarget 流新鲜且正在输出；`rc_managed=true` 时由 CH8 电平管理进入和退出。显式 `guided_descent=false` 仍可选择原生 LAND 兼容路径，该路径不提供动作层偏航闭环。
+- `PRECISION_LAND` 先以水平速度和偏航角速度将飞机居中、机头朝向对齐 Tag；连续对准后才输出 GUIDED 下降速度。终端低速下降阶段仍持续检查对准并修正；对任务层仍只有一个 `RUNNING` 状态。
+- `LAND` 只允许从已确认的 GUIDED 会话开始。`precision` 默认为 `true`，`guided_descent` 默认跟随 `precision`，默认采用先居中和对齐机头、再下降的 GUIDED 路径，到 0.10 m 交接原生 LAND。开始前必须确认 LandingTarget 流新鲜且正在输出；`rc_managed=true` 时由 CH8 电平管理进入和退出。显式 `guided_descent=false` 仍可选择原生 LAND 兼容路径，该路径不提供动作层偏航闭环。
 - `DISARM` 仅在飞控 `ON_GROUND` 证据新鲜时允许开始，并以之后的 `armed=false` 心跳作为完成证据。
 - `EMERGENCY_STOP` 使用 `MAV_CMD_DO_AUX_FUNCTION` 的 AUX 31。当前系统没有可信的电机转速反馈，所以 ACK 不会被报告为“电机已经停转”；动作会保持 `RUNNING` 并最终 `TIMEOUT`，同时飞控侧急停保持锁存。
 
@@ -105,12 +105,12 @@ IDLE → RUNNING → DONE | FAILED | TIMEOUT | CANCELLED
 CH5 由飞手切到 LOITER；CH6 低位驻留后拨高建立 GUIDED 跟飞会话。
 CH8 高位发起一个 `LAND` 动作，带 `guided_descent: true`，其内部流程为：
 
-- 高于 0.10 m：保持 GUIDED，以默认 0.10 m/s 下降，同时修正 AprilTag 到画面中心，并转动机头对齐校准后的 Tag 正上方（同向，反向 180° 不算对齐）。有正常观测时，无论是否已居中/对齐都继续下降；速度和角速度受限。
+- 高于 0.10 m：先保持 GUIDED 定高，将 AprilTag 修正到画面中心，机头朝向对齐校准后的 Tag 方向（同向，反向 180° 不算对齐）。同帧新鲜观测的中心误差不超过 20 px、朝向误差不超过 4°，连续满足 0.4 s 后，才以默认 0.10 m/s 下降。下降期间任一误差超限，垂向指令立即归零并重新对准、计时。
 - 降落居中使用画面几何中心：1280×800 图像的目标为 (640, 400)，不使用相机标定主点。普通 FOLLOW 候选不变。大小 Tag 共用已完成布局补偿的 pad 姿态，避免小 Tag 切换时额外旋转 45°。
 - 偏航误差来自桥接器校验过的 BODY_FRD 姿态，转换为 ROS 左转为正的角速度；默认比例增益 0.8/s、最大 15°/s、4°死区。水平居中、转向、下降在同一条本地 ENU setpoint 中发送。
-- GUIDED 修正阶段，Tag 仍可见但校准姿态缺失/无效、观测总年龄超过 0.3 s：立即清零平移和偏航角速度，进入同样的 1 秒 GUIDED 恢复悬停；不把姿态失效当成低空丢标上锁依据。截止时间前正常观测恢复则继续边下降边调整；超时且 Tag 仍可见则退出到纯跟飞。
+- GUIDED 修正阶段，Tag 仍可见但校准姿态缺失/无效、观测总年龄超过 0.3 s：立即清零平移和偏航角速度，进入同样的 1 秒 GUIDED 恢复悬停；不把姿态失效当成低空丢标上锁依据。截止时间前正常观测恢复则重新对准并完成驻留后下降；超时且 Tag 仍可见则退出到纯跟飞。
 - 丢标且高于阈值：立即输出三轴零速度，进入恢复锁存；等待 1.0 秒，期间 CH8 退出暂缓，CH6 撤权/飞手接管仍优先。
-- 截止时间前重捕获：恢复 GUIDED 跟踪下降；若 CH8 已拨低，则解除恢复锁存并退出到纯跟飞。
+- 截止时间前重捕获：恢复 GUIDED 对准，重新满足 0.4 s 驻留后下降；若 CH8 已拨低，则解除恢复锁存并退出到纯跟飞。
 - 到达恢复截止时间：先退出降落，不再因该帧重捕获继续下降；有 Tag 回 GUIDED 纯跟飞，无 Tag 到 LOITER。
 - 退出后、等待飞控确认 LOITER 的期间，只要飞控仍处于 GUIDED 且授权有效，就持续发送三轴零速度及零偏航角速度，避免保留上一个下降/转向指令。
 - 未锁存时 CH8 退出：有 Tag 回 GUIDED 纯跟飞（垂直速度为零），无 Tag 到 LOITER。
@@ -118,7 +118,7 @@ CH8 高位发起一个 `LAND` 动作，带 `guided_descent: true`，其内部流
 - 测距严格小于 0.10 m 且丢标：立即请求普通 DISARM，同时保持/请求 LAND。该分支持续到 `armed=false`；不使用强制上锁或 AUX 急停。请求被拒绝或通信失败时保留 LAND 并限频重试，ACK 不算完成。
 - 测距过期或无效：GUIDED 零速度保持，不用旧高度判定低空停桨。
 
-超时退出后 CH8 必须先拨低再拨高才能重启下降，避免仍在高位时自动重入。
+超时退出后，CH6 仍授权且 Tag 重新有效时，可以自动恢复 FOLLOW。CH8 若仍保持高位，成功恢复 FOLLOW 会重新允许降落请求，随后在 GUIDED 心跳确认后再次发起 LAND 动作；CH8 已拨低则保持跟飞。
 正常 LAND 阶段以 ON_GROUND 表示已落地，动作继续等待 `armed=false` 确认上锁完成。
 
 JSON 的默认精准 `LAND` 使用该流程；任务层也可显式传入：
@@ -130,8 +130,9 @@ JSON 的默认精准 `LAND` 使用该流程；任务层也可显式传入：
 配置参数：`land_recovery_height_m: 0.10`、`land_guided_descent_mps: 0.10`、
 `land_recovery_timeout_s: 1.0`、`land_reacquire_dwell_s: 0.0`、
 `land_yaw_tolerance_deg: 4.0`、`land_yaw_gain_per_s: 0.8`、
-`land_maximum_yaw_rate_deg_s: 15.0`、`landing_alignment_maximum_age_s: 0.3`。
-这些朝向参数不构成下降许可门槛。0.10 m 交接后继续由飞控原生 LAND 执行末端落地，动作层不向 LAND 发送偏航/速度指令；本次不改变既有末端锁存与低空丢标处理。
+`land_maximum_yaw_rate_deg_s: 15.0`、`landing_alignment_maximum_age_s: 0.3`、
+`land_center_tolerance_px: 20.0`、`land_alignment_dwell_s: 0.4`。
+中心和朝向误差共同构成下降许可门槛，执行层使用同一份观测，不依赖任务层的 `target_aligned` 标记。状态 `GUIDED_ALIGN` 表示对准中，`GUIDED_VERIFY_ALIGNMENT` 表示驻留确认，`GUIDED_TRACK_DESCENT` 表示允许下降。0.10 m 交接后继续由飞控原生 LAND 执行末端落地，动作层不向 LAND 发送偏航/速度指令；既有末端锁存与低空丢标处理保持原有行为。
 普通独立 DISARM 的许可不变；低空丢标上锁由 `allow_landing_disarm_output` 单独控制。
 仅 hardware 和 sitl 配置打开此开关，offline/preview 保持关闭。
 
@@ -164,13 +165,41 @@ bash test/smoke_action_executor_ros2.sh
 bash test/smoke_action_executor_mode_flow_ros2.sh
 ```
 
-第二个测试会启动 ROS 2 执行器，模拟 CH6/CH8、Tag 丢失重捕获和测距，验证 GUIDED 下降、恢复悬停、退出与 0.10 米 LAND 交接。
+第二个测试会启动 ROS 2 执行器，模拟 CH6/CH8、Tag 丢失重捕获和测距，验证对准后 GUIDED 下降、偏离停止下降、恢复悬停、退出与 0.10 米 LAND 交接。
+
+## 2026-10-05 重复帧与恢复限速修复
+
+IBVS 轮询遇到 `DUPLICATE_FRAME` 时，如果上一份有效观测仍在 bridge 和 IBVS 特征有效期内，保留已经发布的证据，不发布新的候选或状态。原拍摄时间、候选时间戳和 landing_alignment 的接收时间均不刷新，画面冻结不能无限保持健康。有效期取 `max_message_age_ms` 与 `maximum_feature_age_s` 中更严格的一项。
+
+超过有效期、真正丢标、HTTP 失败或质量校验失败仍发布不健康状态，并清除重复帧保留资格。无效帧之后的重复轮询不能恢复旧观测，必须等下一份通过校验的新帧。执行器自己的时效门也继续生效。
+
+FOLLOW 丢标或候选速度缺失时，在立即输出零速度的同一周期同步清零限速器记忆和更新时间。恢复时从最近实际发送的零速度起步，遵守向量加速度上限。
+
+验证命令：
+
+```bash
+PYTHONPATH=src:test python3 -m unittest test_ibvs_duplicate_frames test_action_execution test_guided_land_action test_landing_alignment test_guided_descent test_landing_disarm test_action_peripherals
+```
+
+本地 122 项离线测试通过，包含真实适配器方法、帧去重与时效门、观测接收方法和降落状态机的联合验证。该记录不代表树莓派部署或 ROS/SITL 飞控验证；光流/EKF 估计异常仍需要独立传感器证据。
 
 ## 2026-09-29 并行下降修正验证
 
-现场目标回归的 65 项单元测试通过；发布分支的完整纯 Python 控制回归为 189 项通过、1 项因当前环境缺少 OpenCV 跳过。修改后的 Python 模块语法检查通过。覆盖同时下降/居中/转向、FRD→FLU 符号、180°反向、大小 Tag 公共 pad 姿态、观测过期、无效姿态恢复、重捕获、超时退出和等待 LOITER 心跳时的零速度/零转向。
+以下是旧行为的历史验证记录。2026-10-05 起执行层改为先对准再下降，当前行为和参数以上文为准。
 
-2026-09-29 已在目标树莓派切换到 `action_executor.launch.py`。未解锁无桨检查确认 CH6 和新鲜位置/速度遥测到达；GPS 无定位时 EKF 门正确拒绝 FOLLOW。持续 CH6 高位下的自动 FOLLOW 重试已限频为 1 秒，避免以控制循环频率重复创建拒绝请求。CH6 真正进入 GUIDED、实际方向修正和完整起降仍需监护下实飞验收。部署边界见 [`docs/ACTION_DIRECTION_DEPLOYMENT_20260929.md`](docs/ACTION_DIRECTION_DEPLOYMENT_20260929.md)。
+本次本地验证：`test_action_execution`、`test_guided_land_action`、`test_guided_descent`、
+`test_landing_alignment`、`test_action_peripherals` 和 `test_moving_landing_stack.HybridGuidanceTests`
+合计 83 项通过，修改后的 Python 模块语法检查通过。覆盖同时下降/居中/转向、FRD→FLU 符号、180°反向、
+大小 Tag 公共 pad 姿态使用、源数据与接收时间累积过期、无效姿态恢复、重捕获、超时退出及等待 LOITER 心跳时的零速度/零转向，以及 setpoint 的 yaw-rate 掩码。
+
+扩大回归时，`test_moving_landing_stack` 中两个原有用例失败：
+`test_quality_gate_and_body_frd_packet` 与 `test_fuses_body_observation_and_aligned_ugv_odometry`。
+两者预期使用旧外参 diag(-1,-1,1)，而当前配置是 [[0,-1,0],[1,0,0],[0,0,1]]。
+仅在测试进程内恢复旧外参后两者通过；未修改实际外参或这些测试的预期。
+
+ROS 模拟流程脚本已增加同时下降、居中和转向的消息断言，但本次未运行 ROS/SITL 或实飞验证。
+2026-09-29 已在目标树莓派切换到 `action_executor.launch.py`；
+部署记录见项目 `docs/ACTION_DIRECTION_DEPLOYMENT_20260929.md`。
 
 用户描述的「高于最低高度丢 Tag 后的锁存」在本实现中叫 `GUIDED_REACQUIRE_HOLD`：
 在 0.10 m 以上保持 CH8 降落动作、飞控 GUIDED 和零速度最多 1 秒；新鲜且质量通过的 Tag

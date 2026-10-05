@@ -1,4 +1,4 @@
-"""Offline landing direction, simultaneous motion and observation freshness."""
+"""Offline alignment before descent, landing direction and freshness."""
 import ast
 from dataclasses import replace
 import json
@@ -19,14 +19,14 @@ class LandingCorrectionTests(unittest.TestCase):
         self.assertEqual(executor.start(ActionRequest("landing", ActionKind(kind), 10, {}), flight()).state.value, "RUNNING")
         return executor
 
-    def test_default_precision_land_descends_while_turning_and_centering(self):
+    def test_default_land_holds_height_while_turning_and_centering(self):
         for yaw, heading in ((0, .7), (math.pi / 2, -.7), (-math.pi / 2, math.pi)):
             executor = self.start()
             _, command = executor.tick(flight(.2, yaw_rad=yaw,
                 landing_heading_error_rad=heading, landing_center_error_px=180,
                 target_aligned=False, landing_velocity_flu=(.1, .05)))
             self.assertEqual(command.desired_mode, "GUIDED")
-            self.assertLess(command.velocity_enu[2], 0)
+            self.assertEqual(command.velocity_enu[2], 0)
             self.assertGreater(math.hypot(*command.velocity_enu[:2]), 0)
             self.assertGreater(abs(command.yaw_rate_rad_s), 0)
             self.assertLessEqual(abs(command.yaw_rate_rad_s), math.radians(15))
@@ -36,12 +36,14 @@ class LandingCorrectionTests(unittest.TestCase):
             expected = (math.cos(yaw)*.1-math.sin(yaw)*.05, math.sin(yaw)*.1+math.cos(yaw)*.05)
             self.assertAlmostEqual(command.velocity_enu[0]*expected[1] - command.velocity_enu[1]*expected[0], 0)
 
-    def test_later_misalignment_does_not_pause_descent(self):
+    def test_later_misalignment_stops_descent_immediately(self):
         executor = self.start()
-        executor.tick(flight(.2))
-        _, command = executor.tick(flight(.4, target_aligned=False,
-            landing_heading_error_rad=-1.0, landing_center_error_px=200))
+        executor.tick(flight(0))
+        _, command = executor.tick(flight(.41))
         self.assertLess(command.velocity_enu[2], 0)
+        _, command = executor.tick(flight(.42, target_aligned=False,
+            landing_heading_error_rad=-1.0, landing_center_error_px=200))
+        self.assertEqual(command.velocity_enu[2], 0)
         self.assertLess(command.yaw_rate_rad_s, 0)
 
     def test_stale_or_malformed_pose_clears_descent_and_yaw_immediately(self):
@@ -60,7 +62,7 @@ class LandingCorrectionTests(unittest.TestCase):
         executor = self.start()
         _, command = executor.tick(flight(.2, landing_heading_error_rad=math.pi))
         self.assertNotEqual(command.yaw_rate_rad_s, 0)
-        self.assertLess(command.velocity_enu[2], 0)
+        self.assertEqual(command.velocity_enu[2], 0)
 
     def test_pose_loss_near_ground_hands_off_to_native_land_without_disarm(self):
         executor = self.start()
@@ -77,18 +79,82 @@ class LandingCorrectionTests(unittest.TestCase):
         _, command = executor.tick(flight(.2, landing_heading_error_rad=math.radians(2)))
         self.assertEqual(command.yaw_rate_rad_s, 0)
         self.assertGreater(command.velocity_enu[0], 0)
+        self.assertEqual(command.velocity_enu[2], 0)
+
+    def test_same_pose_center_and_heading_must_both_be_within_tolerance(self):
+        for changes in ({"landing_center_error_px": 20.01},
+                        {"landing_heading_error_rad": math.radians(4.01)},
+                        {"landing_heading_error_rad": math.pi}):
+            with self.subTest(changes=changes):
+                executor = self.start()
+                executor.tick(flight(0, target_aligned=True, **changes))
+                status, command = executor.tick(flight(.6, target_aligned=True, **changes))
+                self.assertEqual(status.detail, "GUIDED_ALIGN")
+                self.assertEqual(command.velocity_enu[2], 0)
+
+    def test_tolerance_boundaries_and_continuous_dwell(self):
+        executor = self.start()
+        at_limit = dict(landing_center_error_px=20,
+                        landing_heading_error_rad=math.radians(4))
+        for t in (0, .2, .399):
+            status, command = executor.tick(flight(t, **at_limit))
+            self.assertEqual(status.detail, "GUIDED_VERIFY_ALIGNMENT")
+            self.assertEqual(command.velocity_enu[2], 0)
+        status, command = executor.tick(flight(.4, **at_limit))
+        self.assertEqual(status.detail, "GUIDED_TRACK_DESCENT")
         self.assertLess(command.velocity_enu[2], 0)
 
-    def test_precision_land_action_also_adjusts_through_terminal_phase(self):
+    def test_misalignment_resets_dwell_and_restarts_from_zero_vertical_velocity(self):
+        executor = self.start()
+        executor.tick(flight(0))
+        executor.tick(flight(.3, landing_center_error_px=21))
+        executor.tick(flight(.31))
+        _, command = executor.tick(flight(.6))
+        self.assertEqual(command.velocity_enu[2], 0)
+        _, command = executor.tick(flight(.72))
+        self.assertLess(command.velocity_enu[2], 0)
+        executor.tick(flight(.73, landing_heading_error_rad=.5))
+        executor.tick(flight(.74))
+        _, command = executor.tick(flight(1.0))
+        self.assertEqual(command.velocity_enu[2], 0)
+        _, command = executor.tick(flight(1.15))
+        self.assertLess(command.velocity_enu[2], 0)
+
+    def test_range_loss_requires_new_alignment_dwell(self):
+        executor = self.start()
+        executor.tick(flight(0))
+        executor.tick(flight(.41))
+        _, command = executor.tick(flight(.42, range_fresh=False))
+        self.assertEqual(command.velocity_enu, (0, 0, 0))
+        executor.tick(flight(.5))
+        _, command = executor.tick(flight(.7))
+        self.assertEqual(command.velocity_enu[2], 0)
+        _, command = executor.tick(flight(.91))
+        self.assertLess(command.velocity_enu[2], 0)
+
+    def test_alignment_parameters_are_validated(self):
+        for name in ("land_center_tolerance_px", "land_alignment_dwell_s"):
+            for value in (0, -1, math.nan, math.inf):
+                with self.subTest(name=name, value=value), self.assertRaises(ValueError):
+                    ActionExecutor(**{name: value})
+
+    def test_precision_land_requires_alignment_even_in_terminal_phase(self):
         executor = self.start("PRECISION_LAND")
         for t, height in ((.2, .8), (.4, .09), (.9, .09), (1.0, .08)):
             _, command = executor.tick(flight(t, range_m=height, target_aligned=False,
                 landing_heading_error_rad=.5))
-            self.assertLess(command.velocity_enu[2], 0)
+            self.assertEqual(command.velocity_enu[2], 0)
             self.assertGreater(command.velocity_enu[0], 0)
             self.assertGreater(command.yaw_rate_rad_s, 0)
         _, command = executor.tick(flight(1.1, range_m=.08, landing_alignment_fresh=False))
         self.assertEqual(command.velocity_enu, (0, 0, 0))
+        executor.tick(flight(1.2, range_m=.08))
+        executor.tick(flight(1.61, range_m=.08))
+        _, command = executor.tick(flight(2.02, range_m=.08))
+        self.assertLess(command.velocity_enu[2], 0)
+        self.assertIsNotNone(executor._descent.terminal_since)
+        _, command = executor.tick(flight(2.03, range_m=.08, landing_heading_error_rad=.5))
+        self.assertEqual(command.velocity_enu[2], 0)
 
     def test_yaw_rate_respects_general_executor_limit(self):
         executor = ActionExecutor(maximum_yaw_rate_rad_s=.1)
@@ -124,7 +190,7 @@ class LandingCorrectionTests(unittest.TestCase):
         self.assertEqual(status.state.value, "DONE")
         self.assertEqual(status.reason, "LAND_EXIT_TAG_REACQUIRE_TIMEOUT")
 
-    def test_recovery_reacquires_and_resumes_simultaneous_descent(self):
+    def test_recovery_reacquires_and_aligns_before_resuming_descent(self):
         executor = self.start()
         executor.tick(flight(.2, landing_heading_error_rad=.5))
         _, command = executor.tick(flight(.3, candidate_fresh=False))
@@ -132,7 +198,7 @@ class LandingCorrectionTests(unittest.TestCase):
         _, command = executor.tick(flight(.6, candidate_fresh=True,
             landing_heading_error_rad=-.5, landing_center_error_px=90))
         self.assertEqual(command.desired_mode, "GUIDED")
-        self.assertLess(command.velocity_enu[2], 0)
+        self.assertEqual(command.velocity_enu[2], 0)
         self.assertGreater(command.velocity_enu[0], 0)
         self.assertLess(command.yaw_rate_rad_s, 0)
 

@@ -31,7 +31,7 @@ def snapshot(now=0.0, **changes):
 
 def request(kind, *, action_id="a1", timeout=5.0, **params):
     # These legacy LAND tests explicitly exercise the native FCU backend.
-    # New precision LAND requests default to concurrent GUIDED correction.
+    # New precision LAND requests align before GUIDED descent.
     if kind == "LAND":
         params.setdefault("guided_descent", False)
     return ActionRequest(action_id, ActionKind(kind), timeout, params)
@@ -183,6 +183,33 @@ class ActionExecutorTests(unittest.TestCase):
         ))
         self.assertAlmostEqual(command.velocity_enu[0], 0.0, places=6)
         self.assertAlmostEqual(command.velocity_enu[1], .05, places=6)
+
+    def test_follow_recovery_accelerates_from_last_zero_output(self):
+        executor = ActionExecutor(maximum_horizontal_acceleration_mps2=.4)
+        executor.start(request("FOLLOW"), snapshot(mode="GUIDED"))
+        def tick(t, fresh):
+            return executor.tick(snapshot(t, mode="GUIDED", candidate_fresh=fresh,
+                candidate_velocity_flu=(.2, .2)))[1].velocity_enu
+        self.assertGreater(math.hypot(*tick(.2, True)[:2]), .07)
+        for t in (.21, .22, .4):
+            self.assertEqual(tick(t, False), (0, 0, 0))
+            self.assertEqual(executor.last_velocity_command, (0, 0, 0))
+            self.assertEqual(executor.last_velocity_command_s, t)
+        resumed = tick(.41, True)
+        self.assertGreater(math.hypot(*resumed[:2]), 0)
+        self.assertLessEqual(math.hypot(*resumed[:2]), .004 + 1e-12)
+        next_velocity = tick(.42, True)
+        self.assertLessEqual(math.hypot(next_velocity[0]-resumed[0],
+                                       next_velocity[1]-resumed[1]), .004 + 1e-12)
+
+    def test_follow_missing_velocity_also_resets_limiter(self):
+        self.executor.start(request("FOLLOW"), snapshot(mode="GUIDED"))
+        self.executor.tick(snapshot(.2, mode="GUIDED", candidate_fresh=True,
+            candidate_velocity_flu=(.2, 0)))
+        _, command = self.executor.tick(snapshot(.21, mode="GUIDED", candidate_fresh=True,
+            candidate_velocity_flu=None))
+        self.assertEqual(command.velocity_enu, (0, 0, 0))
+        self.assertEqual(self.executor.last_velocity_command, (0, 0, 0))
 
     def test_disarm_rejects_airborne_and_completes_on_heartbeat(self):
         status = self.executor.start(request("DISARM"), snapshot())

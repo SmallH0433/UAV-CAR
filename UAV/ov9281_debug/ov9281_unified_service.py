@@ -47,11 +47,18 @@ HTML = r"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta n
 h1{margin:0;font-size:18px}.sensor{font:600 12px Consolas,monospace;color:var(--green)}.layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px;padding:14px}.viewer,.card{background:var(--panel);border:1px solid var(--line);border-radius:12px}.viewer{position:relative;overflow:hidden;display:grid;place-items:center;min-height:400px}.viewer img{display:block;width:100%;height:auto}.viewer canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 aside{display:flex;flex-direction:column;gap:12px}.card{padding:14px}.tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px}.tabs button{border:1px solid var(--line);border-radius:8px;padding:10px;background:#172233;color:#b9c6d8;font-weight:700;cursor:pointer}.tabs button.active{background:#184d3a;border-color:#2dbe82;color:#dfffee}.label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}.value{font:600 19px Consolas,monospace;margin-top:5px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:13px}.ok{color:var(--green)}.wait{color:var(--amber)}.notice{font-size:13px;line-height:1.55;color:#becadd}.notice strong{color:var(--amber)}.bar{height:8px;background:#26364d;border-radius:8px;overflow:hidden;margin-top:9px}.fill{height:100%;background:var(--green);width:0;transition:width .2s}
 .viewer{min-height:0;aspect-ratio:8/5;align-self:start}.direction-key{display:flex;gap:9px;align-items:center;margin-top:8px}.direction-key b{font-size:22px}.direction-key span{font-size:13px}
-@media(max-width:880px){.layout{grid-template-columns:1fr}}</style></head><body>
+.executor{border-top:3px solid var(--blue)}.executor .grid{margin-top:13px}.executor .notice,.executor .value{overflow-wrap:anywhere}.executor .wide{grid-column:1/-1}.bad{color:#ff7c86}.execution-note{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+@media(max-width:880px){.layout{grid-template-columns:1fr}header{height:auto;min-height:58px;gap:8px;flex-wrap:wrap;padding:12px 18px}.sensor{font-size:10px}}</style></head><body>
 <header><h1>OV9281 Vision Console</h1><div class="sensor">MONO · GLOBAL SHUTTER · MAIN 1280×800 · PREVIEW 640×400</div></header>
 <main class="layout"><section class="viewer"><img id="stream" alt="OV9281 live preview"><canvas id="overlay" width="1280" height="800"></canvas></section><aside>
 <section class="card tabs"><button id="tagBtn" onclick="setMode('apriltag')">APRILTAG</button><button id="calBtn" onclick="setMode('calibration')">CALIBRATION</button></section>
 <section class="card"><div class="label">Vision state</div><div class="value wait" id="state">STARTING</div><div class="bar"><div class="fill" id="fill"></div></div></section>
+<section class="card executor" aria-label="执行层状态"><div class="label">执行层 / Executor</div><div class="value wait" id="executorState" role="status">等待状态</div><div class="notice" id="executorFreshness">尚未收到执行器数据</div><div class="grid">
+<div><div class="label">当前动作</div><div class="notice" id="executorAction">—</div></div><div><div class="label">执行器版本</div><div class="notice" id="executorVersion">—</div></div>
+<div><div class="label">控制权</div><div class="notice" id="executorOwner">—</div></div><div><div class="label">跟随 / 降落</div><div class="notice" id="executorActivity">—</div></div>
+<div class="wide"><div class="label">执行详情 / 拒绝原因</div><div class="notice" id="executorDetail">—</div></div>
+<div class="wide"><div class="label">模式门控</div><div class="notice" id="executorGate">—</div></div>
+</div><div class="notice execution-note">显示执行器上报状态；已发送指令与飞控实际运动见下方。超过 2 秒未更新时标记过期。</div></section>
 <section class="card"><div class="label">Flight controller</div><div class="value wait" id="flightMode">DISCONNECTED</div><div class="grid" style="margin-top:13px"><div><div class="label">Link / Armed</div><div class="notice" id="flightLink">—</div></div><div><div class="label">Landed state</div><div class="notice" id="landedState">—</div></div><div><div class="label">Forward / Back</div><div class="value" id="horizontalDirection">—</div></div><div><div class="label">Up / Down</div><div class="value" id="verticalDirection">—</div></div><div><div class="label">Left / Right</div><div class="value" id="lateralDirection">—</div></div><div><div class="label">Control state</div><div class="notice" id="controlState">—</div></div><div><div class="label">Body velocity X/Y/Z</div><div class="notice" id="bodyVelocity">—</div></div><div><div class="label">Last command X/Y/Z</div><div class="notice" id="lastCommand">—</div></div></div><div class="notice" style="margin-top:10px">Actual body-frame velocity: X forward, Y left, Z up; ±0.05 m/s is shown as HOLD.</div></section>
 <section class="card"><div class="label">准备运动 / Sent command</div><div class="direction-key" style="color:#ff1528"><b>➜</b><span>鲜红箭头＝树莓派已发出的水平速度方向</span></div><div class="direction-key" style="color:#8df3b4"><b>↶</b><span>浅绿弧形箭头＝树莓派已发出的水平旋转方向</span></div><div class="notice" id="motionState">等待新指令</div><div class="notice" id="yawState">等待旋转指令</div><div class="notice" style="margin-top:8px">红色、浅绿色与粉色箭头统一按机体系显示：上＝机体前，右＝机体右。红色箭头从画面中心出发；浅绿色弧线表示预备左旋或右旋，升降单独标注。这些是指令方向，不是实际运动；指令过期自动隐藏。</div></section>
 <section class="card"><div class="label">Candidate quality</div><div class="notice" id="rejectReason">No candidate</div></section>
@@ -71,7 +78,28 @@ async function setMode(mode){await fetch('/api/mode',{method:'POST',headers:{'Co
 function val(v,d=1){return v==null?'—':Number(v).toFixed(d)}
 function direction(v){return ({FORWARD:'前进',BACKWARD:'后退',LEFT:'左移',RIGHT:'右移',UP:'上升',DOWN:'下降',HOLD:'保持',UNKNOWN:'未知'})[v]||v||'未知'}
 function vector(v){return !v||v.x==null?'—':[v.x,v.y,v.z].map(n=>Number(n).toFixed(2)).join(' / ')+' m/s'}
-function updateFlight(f){flightMode.textContent=f.mode||'DISCONNECTED';flightMode.className='value '+(f.flight_controller_connected?'ok':'wait');flightLink.textContent=(f.flight_controller_connected?'CONNECTED':'DISCONNECTED')+' / '+(f.armed?'ARMED':'DISARMED');landedState.textContent=f.landed_state||'UNKNOWN';horizontalDirection.textContent=direction(f.horizontal_direction);verticalDirection.textContent=direction(f.vertical_direction);lateralDirection.textContent=direction(f.lateral_direction);controlState.textContent=f.landing_active?'LAND ACTIVE':(f.follow_active?'GUIDED FOLLOW':(f.control_owner||'IDLE'));bodyVelocity.textContent=vector(f.body_velocity_mps);lastCommand.textContent=vector(f.latest_sent_velocity_mps)}
+let executorFlight={},executorReceivedAt=null;
+function updateExecutor(f,receivedAt=Date.now()){
+  executorFlight=f;executorReceivedAt=receivedAt;renderExecutor();
+}
+function renderExecutor(){
+  const f=executorFlight,elapsed=executorReceivedAt===null?0:Math.max(0,(Date.now()-executorReceivedAt)/1000);
+  const age=Number.isFinite(f.guided_executor_age_s)&&f.guided_executor_age_s>=0?f.guided_executor_age_s+elapsed:null;
+  const fresh=age!==null&&age<=2,raw=f.action_state;
+  const labels={RUNNING:'执行中',IDLE:'空闲',SUCCEEDED:'已完成',FAILED:'执行失败',CANCELLED:'已取消',REJECTED:'已拒绝',ACCEPTED:'已接受'};
+  const failed=/FAIL|REJECT|ABORT|ERROR/.test(raw||'');
+  $('executorState').textContent=!fresh?(age===null?'等待状态':'状态已过期'):(labels[raw]||raw||'状态已接收');
+  $('executorState').className='value '+(!fresh?'wait':failed?'bad':raw==='RUNNING'?'ok':'');
+  $('executorFreshness').textContent=age===null?'尚未收到执行器数据':(fresh?'更新于 ':'最后更新于 ')+age.toFixed(1)+' 秒前';
+  const show=(id,value)=>$(id).textContent=fresh?(value??'—'):'—';
+  show('executorAction',f.action);show('executorVersion',f.executor_version);
+  show('executorOwner',f.control_owner);show('executorGate',f.mode_gate);
+  show('executorDetail',f.action_detail??f.mode_gate);
+  const flag=v=>v===true?'活动':v===false?'未活动':'未知';
+  show('executorActivity',flag(f.follow_active)+' / '+flag(f.landing_active));
+}
+setInterval(renderExecutor,250);
+function updateFlight(f){updateExecutor(f);flightMode.textContent=f.mode||'DISCONNECTED';flightMode.className='value '+(f.flight_controller_connected?'ok':'wait');flightLink.textContent=(f.flight_controller_connected?'CONNECTED':'DISCONNECTED')+' / '+(f.armed?'ARMED':'DISARMED');landedState.textContent=f.landed_state||'UNKNOWN';horizontalDirection.textContent=direction(f.horizontal_direction);verticalDirection.textContent=direction(f.vertical_direction);lateralDirection.textContent=direction(f.lateral_direction);controlState.textContent=f.landing_active?'LAND ACTIVE':(f.follow_active?'GUIDED FOLLOW':(f.control_owner||'IDLE'));bodyVelocity.textContent=vector(f.body_velocity_mps);lastCommand.textContent=vector(f.latest_sent_velocity_mps)}
 function polygon(pts,color,width){if(!pts||!pts.length)return;ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=width;ctx.beginPath();ctx.moveTo(pts[0][0],pts[0][1]);for(let i=1;i<pts.length;i++)ctx.lineTo(pts[i][0],pts[i][1]);ctx.closePath();ctx.stroke()}
 function tagDirection(d){
   const o=d.orientation;
