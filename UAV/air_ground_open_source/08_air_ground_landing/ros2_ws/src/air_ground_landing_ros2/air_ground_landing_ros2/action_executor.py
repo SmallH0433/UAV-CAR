@@ -50,8 +50,9 @@ from air_ground_landing.guided_execution import (
     RcAuthorizationGate,
     RcGateConfig,
 )
-from air_ground_landing.mavlink_ekf import report_health
+from air_ground_landing.mavlink_ekf import decode_report
 from air_ground_landing_ros2.action_peripherals import ActionPeripherals, PERIPHERAL_DEFAULTS
+from air_ground_landing_ros2.vertical_guard import VerticalGuard, VERTICAL_DEFAULTS
 from air_ground_landing.landing_alignment import LandingAlignment
 
 
@@ -60,7 +61,7 @@ MAV_CMD_DO_AUX_FUNCTION = 218
 MOTOR_EMERGENCY_STOP_AUX_FUNCTION = 31
 
 
-class ActionExecutorNode(ActionPeripherals, Node):
+class ActionExecutorNode(VerticalGuard, ActionPeripherals, Node):
     def __init__(self) -> None:
         super().__init__("action_executor")
         self._declare_parameters()
@@ -184,11 +185,19 @@ class ActionExecutorNode(ActionPeripherals, Node):
                 self.get_parameter("land_reacquire_dwell_s").value
             ),
             land_guided_descent_mps=float(self.get_parameter("land_guided_descent_mps").value),
+            land_search_radius_m=float(self.get_parameter("land_search_radius_m").value),
+            land_search_speed_mps=float(self.get_parameter("land_search_speed_mps").value),
+            land_search_wait_s=float(self.get_parameter("land_search_wait_s").value),
+            land_reacquire_maximum_gap_s=float(self.get_parameter("land_reacquire_maximum_gap_s").value),
             land_yaw_tolerance_rad=math.radians(float(self.get_parameter("land_yaw_tolerance_deg").value)),
             land_yaw_gain_per_s=float(self.get_parameter("land_yaw_gain_per_s").value),
             land_maximum_yaw_rate_rad_s=math.radians(float(self.get_parameter("land_maximum_yaw_rate_deg_s").value)),
-            land_center_tolerance_px=float(self.get_parameter("land_center_tolerance_px").value),
-            land_alignment_dwell_s=float(self.get_parameter("land_alignment_dwell_s").value),
+            land_yaw_alignment_dwell_s=float(self.get_parameter("land_yaw_alignment_dwell_s").value),
+            land_yaw_alignment_maximum_gap_s=self.landing_alignment_maximum_age_s,
+            land_yaw_alignment_rate_tolerance_rad_s=math.radians(float(
+                self.get_parameter("land_yaw_alignment_rate_tolerance_deg_s").value)),
+            land_center_tolerance_px=float(
+                self.get_parameter("land_center_tolerance_px").value),
         )
         self.rc_gate = RcAuthorizationGate(RcGateConfig(
             channel=int(self.get_parameter("rc_channel").value),
@@ -222,6 +231,8 @@ class ActionExecutorNode(ActionPeripherals, Node):
         self.target_healthy = False
         self.target_aligned = False
         self.target_status_received_s = None
+        self.target_status_reason = "NO_TARGET_STATUS"
+        self.target_loss_sequence = 0
         self.landing_alignment = None
         self.range_m = math.nan
         self.range_received_s: Optional[float] = None
@@ -259,6 +270,7 @@ class ActionExecutorNode(ActionPeripherals, Node):
             CommandLong, str(self.get_parameter("mavros_command_service").value)
         )
         self._init_peripherals(approved)
+        self._init_vertical_guard()
         reliable_latched = QoSProfile(
             depth=1,
             reliability=QoSReliabilityPolicy.RELIABLE,
@@ -299,6 +311,8 @@ class ActionExecutorNode(ActionPeripherals, Node):
                 10,
             ),
             (Range, "rangefinder_topic", self._range, qos_profile_sensor_data),
+            (String, "range_status_topic", self._vertical_range_status, 10),
+            (String, "vertical_guard_reset_topic", self._vertical_reset, 10),
         )
         for message_type, parameter, callback, qos in subscriptions:
             self.create_subscription(
@@ -315,6 +329,7 @@ class ActionExecutorNode(ActionPeripherals, Node):
     def _declare_parameters(self) -> None:
         defaults = {
             **PERIPHERAL_DEFAULTS,
+            **VERTICAL_DEFAULTS,
             "environment": "offline",
             "flight_use_approved": False,
             "allow_mode_change": False,
@@ -325,11 +340,16 @@ class ActionExecutorNode(ActionPeripherals, Node):
             "require_rc_authorization": True,
             "rc_flight_flow_enabled": True,
             "rc_channel": 6,
-            "land_guided_descent_mps": 0.10,
+            "land_guided_descent_mps": 0.05,
+            "land_search_radius_m": 0.5,
+            "land_search_speed_mps": 0.05,
+            "land_search_wait_s": 0.5,
+            "land_reacquire_maximum_gap_s": 0.3,
             "land_yaw_tolerance_deg": 4.0,
-            "land_center_tolerance_px": 20.0,
-            "land_alignment_dwell_s": 0.4,
             "land_yaw_gain_per_s": 0.8,
+            "land_yaw_alignment_dwell_s": 0.5,
+            "land_yaw_alignment_rate_tolerance_deg_s": 3.0,
+            "land_center_tolerance_px": 20.0,
             "land_maximum_yaw_rate_deg_s": 15.0,
             "landing_alignment_maximum_age_s": 0.3,
             "rc_abort_below_pwm": 1300,
@@ -400,6 +420,13 @@ class ActionExecutorNode(ActionPeripherals, Node):
 
     def _request(self, message: String) -> None:
         now = self._now_s()
+        if getattr(self, "vertical_inhibited", False):
+            self._publish_event(dict(event="REQUEST", state="FAILED",
+                reason="VERTICAL_GUARD_INHIBITED", **self._vertical_status_payload(now)))
+            return
+        if not self._vertical_ready_for_new_action(now):
+            self._publish_event(dict(event="REQUEST", state="FAILED", reason="VERTICAL_HEALTH_NOT_READY"))
+            return
         try:
             payload = json.loads(message.data)
             request = ActionRequest.from_mapping(payload)
@@ -436,6 +463,7 @@ class ActionExecutorNode(ActionPeripherals, Node):
 
     def _state(self, message: State) -> None:
         now = self._now_s()
+        source_time = self._vertical_source_stamp("state", message, now)
         expected_mode = self._expected_mode()
         self.owned_mode_deadlines = {
             mode: deadline
@@ -457,6 +485,9 @@ class ActionExecutorNode(ActionPeripherals, Node):
         )
         self.vehicle_state = message
         self.state_received_s = now
+        if source_time is not None:
+            self.vertical_vehicle_state = message
+        self._vertical_observe_state(message)
         if override and (self.lifecycle.active or self.lifecycle.retaining_control):
             self.lifecycle.cancel(
                 self.lifecycle.request.action_id,
@@ -467,24 +498,40 @@ class ActionExecutorNode(ActionPeripherals, Node):
             self.pilot_session.invalidate("DISCONNECTED_OR_DISARMED", now)
 
     def _rc(self, message: RCIn) -> None:
+        source_time = self._vertical_source_stamp("rc", message, self._now_s())
         self.rc_channels = tuple(int(value) for value in message.channels)
         self.rc_received_s = self._now_s()
+        if source_time is not None:
+            self.vertical_rc_channels = self.rc_channels
 
     def _pose(self, message: PoseStamped) -> None:
+        source_time = self._vertical_source_stamp("pose", message, self._now_s())
         self.pose = message
         self.pose_received_s = self._now_s()
+        if source_time is not None:
+            self.vertical_pose = message
+            self._vertical_record_pose(message, source_time)
 
     def _velocity(self, message: TwistStamped) -> None:
+        source_time = self._vertical_source_stamp("velocity", message, self._now_s())
         self.velocity = message
         self.velocity_received_s = self._now_s()
+        if source_time is not None:
+            self.vertical_velocity = message
 
     def _extended(self, message: ExtendedState) -> None:
+        source_time = self._vertical_source_stamp("extended", message, self._now_s())
         self.extended = message
         self.extended_received_s = self._now_s()
+        if source_time is not None:
+            self.vertical_extended = message
 
     def _estimator(self, message: EstimatorStatus) -> None:
         if self._fresh(self.ekf_report_received_s, self.ekf_maximum_age_s, self._now_s()):
             return
+        source_time = self._vertical_source_stamp("estimator", message, self._now_s())
+        if source_time is not None:
+            self._vertical_estimator(message, source_time)
         self.estimator_healthy = bool(
             message.attitude_status_flag
             and message.velocity_horiz_status_flag
@@ -493,7 +540,7 @@ class ActionExecutorNode(ActionPeripherals, Node):
         self.estimator_received_s = self._now_s()
 
     def _ekf_report(self, message: Mavlink) -> None:
-        healthy = report_health(
+        report = decode_report(
             framing_status=int(message.framing_status),
             system_id=int(message.sysid),
             component_id=int(message.compid),
@@ -501,10 +548,18 @@ class ActionExecutorNode(ActionPeripherals, Node):
             length=int(message.len),
             payload64=message.payload64,
         )
-        if healthy is None:
+        if report is None:
             return
         now = self._now_s()
-        self.estimator_healthy = healthy
+        # EKF_STATUS_REPORT lacks its own sample clock. Retain MAVROS ingress
+        # stamp and reject a repeated transport sequence, including re-publishers.
+        sequence = int(message.seq)
+        source_time = self._vertical_source_stamp("ekf_report", message, now)
+        if source_time is not None and sequence != self.vertical_ekf_seq:
+            self.vertical_ekf_seq = sequence
+            self.vertical_status = dict(vars(report), source="EKF_STATUS_REPORT")
+            self.vertical_status_time_s = source_time
+        self.estimator_healthy = report.horizontal_healthy
         self.estimator_received_s = now
         self.ekf_report_received_s = now
         self.ekf_report_count += 1
@@ -521,36 +576,85 @@ class ActionExecutorNode(ActionPeripherals, Node):
 
     def _target_status(self, message: String) -> None:
         now = self._now_s()
-        self.target_status_received_s = now
-        self.landing_alignment = None
         try:
             payload = json.loads(message.data)
             if not isinstance(payload, dict):
                 raise ValueError("IBVS status must be an object")
         except (TypeError, ValueError, json.JSONDecodeError):
+            self.target_status_received_s = now
+            self.target_status_reason = "MALFORMED_TARGET_STATUS"
+            self.target_loss_sequence = getattr(self, "target_loss_sequence", 0) + 1
+            self.landing_alignment = None
             self.target_healthy = False
             self.target_aligned = False
             return
+        raw_reason = payload.get("reason")
+        reason = raw_reason if isinstance(raw_reason, str) else "INVALID_TARGET_STATUS"
+        if (payload.get("healthy") is False
+                and reason in {
+                    "BRIDGE_REJECTED:DUPLICATE_FRAME",
+                    "VISION_STATUS_UNAVAILABLE:TimeoutError",
+                }
+                and self.lifecycle.active
+                and self.lifecycle.request.kind in {ActionKind.LAND, ActionKind.PRECISION_LAND}
+                and (self.lifecycle.guided_landing
+                     or self.lifecycle.request.kind == ActionKind.PRECISION_LAND)
+                and (not self.lifecycle.land_yaw_alignment_complete
+                     or self.lifecycle.request.kind == ActionKind.LAND)
+                and self.lifecycle.land_phase in {
+                    "GUIDED_ALIGN_YAW", "GUIDED_TRACK_DESCENT", "GUIDED_REACQUIRE_HOLD",
+                }
+                and self.target_healthy
+                and self.candidate is not None
+                and self._fresh(self.target_status_received_s, self.candidate_maximum_age_s, now)
+                and self._fresh(self.candidate_received_s, self.candidate_maximum_age_s, now)
+                and self.landing_alignment is not None
+                and self.landing_alignment.fresh(now, self.landing_alignment_maximum_age_s)):
+            # Polling without a new frame does not revoke still-fresh evidence.
+            # Keep the ORIGINAL pose and times: no extension of its lifetime,
+            # and no new evidence for the final yaw-stability dwell.
+            self.target_status_reason = reason
+            return
+        self.target_status_received_s = now
+        self.landing_alignment = None
         self.target_healthy = payload.get("healthy") is True
         self.target_aligned = payload.get("aligned") is True
         if self.target_healthy:
             self.landing_alignment = LandingAlignment.from_payload(payload.get("landing_alignment"), now)
+            self.target_status_reason = "VALID_TARGET" if self.landing_alignment else "INVALID_LANDING_POSE"
+            if self.landing_alignment is None:
+                self.target_loss_sequence = getattr(self, "target_loss_sequence", 0) + 1
+        else:
+            self.target_status_reason = reason
+            if not (payload.get("healthy") is False and reason in {
+                    "BRIDGE_REJECTED:DUPLICATE_FRAME",
+                    "VISION_STATUS_UNAVAILABLE:TimeoutError",
+                    "BRIDGE_REJECTED:STALE_FRAME",
+            }):
+                self.target_loss_sequence = getattr(self, "target_loss_sequence", 0) + 1
 
     def _landing_target_status(self, message: String) -> None:
         now = self._now_s()
         try:
             payload = json.loads(message.data)
+            if not isinstance(payload, dict):
+                raise ValueError("landing target status must be an object")
         except (TypeError, ValueError, json.JSONDecodeError):
             self.landing_target_stream_healthy = False
             self.landing_target_output_enabled = False
             self.landing_target_status_received_s = now
+            self.vertical_pnp = {}
             return
+        self._vertical_accept_pnp(payload, now)
         self.landing_target_stream_healthy = payload.get("stream_healthy") is True
         self.landing_target_output_enabled = payload.get("output_enabled") is True
         self.landing_target_status_received_s = now
 
     def _range(self, message: Range) -> None:
+        source_time = self._vertical_source_stamp("range", message, self._now_s())
         value = float(message.range)
+        self.vertical_range_min_m = float(message.min_range)
+        self.vertical_range_max_m = float(message.max_range)
         if (math.isfinite(value) and math.isfinite(message.min_range)
                 and math.isfinite(message.max_range)
                 and message.min_range <= value <= message.max_range):
@@ -558,6 +662,8 @@ class ActionExecutorNode(ActionPeripherals, Node):
             self.range_received_s = self._now_s()
 
     def _rc_authorized(self, now: float) -> bool:
+        if getattr(self, "vertical_inhibited", False):
+            return False
         if not self.require_rc:
             return True
         result = self.rc_gate.evaluate(
@@ -615,6 +721,10 @@ class ActionExecutorNode(ActionPeripherals, Node):
         snapshot: VehicleSnapshot,
         now: float,
     ) -> None:
+        if getattr(self, "vertical_inhibited", False):
+            return
+        if hasattr(self, "_vertical_ready_for_new_action") and not self._vertical_ready_for_new_action(now):
+            return
         if not self.rc_flight_flow_enabled:
             return
         active = self.lifecycle.request if self.lifecycle.active else None
@@ -702,6 +812,7 @@ class ActionExecutorNode(ActionPeripherals, Node):
         self._publish_status(status, now, event="RC_CH6_AUTO_GUIDED")
 
     def _snapshot(self, now: float) -> VehicleSnapshot:
+        vertical_health = getattr(self, "vertical_health", None)
         state_fresh = self._fresh(self.state_received_s, self.state_maximum_age_s, now)
         pose_fresh = self._fresh(self.pose_received_s, self.pose_maximum_age_s, now)
         velocity_fresh = self._fresh(self.velocity_received_s, self.velocity_maximum_age_s, now)
@@ -735,6 +846,16 @@ class ActionExecutorNode(ActionPeripherals, Node):
         candidate = None
         if candidate_fresh and self.candidate is not None:
             candidate = (float(self.candidate.velocity.x), float(self.candidate.velocity.y))
+        alignment_fresh = bool(candidate_fresh and self.landing_alignment
+            and self.landing_alignment.fresh(now, self.landing_alignment_maximum_age_s))
+        observation_failure_reason = getattr(self, "target_status_reason", "NO_TARGET_STATUS")
+        if alignment_fresh:
+            observation_failure_reason = ""
+        elif self.target_healthy and self.landing_alignment is not None:
+            observation_failure_reason = (
+                "OBSERVATION_EXPIRED" if not self.landing_alignment.fresh(now, self.landing_alignment_maximum_age_s)
+                else "CANDIDATE_NOT_FRESH"
+            )
         landing_target_status_fresh = self._fresh(
             self.landing_target_status_received_s,
             self.landing_target_maximum_age_s,
@@ -776,35 +897,50 @@ class ActionExecutorNode(ActionPeripherals, Node):
             landing_explicit_low=landing_explicit_low,
             range_m=self.range_m,
             range_fresh=self._fresh(self.range_received_s, self.range_maximum_age_s, now),
-            landing_alignment_fresh=bool(candidate_fresh and self.landing_alignment
-                and self.landing_alignment.fresh(now, self.landing_alignment_maximum_age_s)),
+            landing_alignment_fresh=alignment_fresh,
             landing_velocity_flu=self.landing_alignment.velocity_flu if self.landing_alignment else None,
             landing_heading_error_rad=self.landing_alignment.heading_error_rad if self.landing_alignment else math.nan,
             landing_center_error_px=self.landing_alignment.center_error_px if self.landing_alignment else math.nan,
+            landing_observation_s=(self.landing_alignment.received_s - self.landing_alignment.source_age_s
+                if self.landing_alignment else None),
+            landing_observation_failure_reason=observation_failure_reason,
+            landing_observation_loss_sequence=getattr(self, "target_loss_sequence", 0),
+            vertical_state=str(vertical_health.state.value) if vertical_health else "UNKNOWN",
+            vertical_reason=vertical_health.reason if vertical_health else "NOT_OBSERVED",
+            vertical_observed_s=vertical_health.time_s if vertical_health else None,
+            vertical_trusted_height_m=vertical_health.trusted_height_m if vertical_health else None,
+            vertical_fault_latched=getattr(getattr(self, "vertical_latch", None), "latched", False),
         )
 
     def _tick(self) -> None:
         now = self._now_s()
+        self._vertical_update(now)
         recovering = self._peripheral_pre_tick(now)
         snapshot = self._snapshot(now)
         if not recovering:
             self._drive_rc_flight_flow(snapshot, now)
         snapshot = self._snapshot(now)
         status, command = self.lifecycle.tick(snapshot)
-        if command is not None:
-            self._execute(command, snapshot, now)
+        if command is not None or self.vertical_inhibited:
+            self._execute(command or ActionCommand(), snapshot, now)
         self._update_tones(snapshot, status, now)
         self._publish_status(status, now, event="TICK")
 
     def _execute(self, command: ActionCommand, snapshot: VehicleSnapshot, now: float) -> None:
+        if hasattr(self, "_vertical_gate_command"):
+            command = self._vertical_gate_command(command, snapshot, now)
+            if command is None:
+                return
         if command.desired_mode and snapshot.mode.strip().upper() != command.desired_mode:
             self._request_mode(command.desired_mode, now)
         if command.velocity_enu is not None:
             target = self._position_target(command)
             self.preview_publisher.publish(target)
-            if (self.output_enabled and snapshot.authorized and snapshot.telemetry_fresh
+            if (self.output_enabled and (snapshot.authorized or getattr(self, "vertical_inhibited", False)) and snapshot.telemetry_fresh
                     and snapshot.connected and snapshot.armed
                     and snapshot.mode.strip().upper() == self.guided_mode):
+                if not self.vertical_inhibited and not self._vertical_begin_session(now):
+                    return
                 self.setpoint_publisher.publish(target)
                 self.last_sent_target = (tuple(command.velocity_enu), int(target.coordinate_frame), int(target.type_mask))
                 self.last_sent_s = now
@@ -814,6 +950,15 @@ class ActionExecutorNode(ActionPeripherals, Node):
             self._request_command("EMERGENCY_STOP", now)
 
     def _request_mode(self, mode: str, now: float) -> None:
+        if getattr(self, "vertical_inhibited", False):
+            return
+        if not self._vertical_ready_for_new_action(now):
+            return
+        if getattr(self, "vertical_native_land_confirmed", False) and mode.strip().upper() != self.land_mode:
+            return
+        if (self.vehicle_state.mode.strip().upper() not in self.entry_modes | {self.guided_mode, self.land_mode}
+                or not self._fresh(self.state_received_s, self.state_maximum_age_s, now)):
+            return
         if not self.output_enabled or not (
             self.lifecycle.active or self.lifecycle.retaining_control or self._orphan_rollback_due
         ):
@@ -832,6 +977,8 @@ class ActionExecutorNode(ActionPeripherals, Node):
             return
         request = SetMode.Request()
         request.custom_mode = mode
+        if not self._vertical_begin_session(now):
+            return
         normalized_mode = mode.strip().upper()
         self.mode_request_s = now
         self.mode_request_action_id = action_id
@@ -845,6 +992,9 @@ class ActionExecutorNode(ActionPeripherals, Node):
         )
 
     def _mode_result(self, future, action_id: str, requested_mode: str) -> None:
+        if getattr(self, "vertical_inhibited", False):
+            self.owned_mode_deadlines.pop(requested_mode, None)
+            return
         if not self.lifecycle.active or self.lifecycle.request.action_id != action_id:
             return
         try:
@@ -863,8 +1013,10 @@ class ActionExecutorNode(ActionPeripherals, Node):
         # A positive service reply is not completion.  _tick waits for State.mode.
 
     def _request_command(self, kind: str, now: float) -> None:
+        if getattr(self, "vertical_inhibited", False):
+            return
         enabled = self.allow_disarm if kind == "DISARM" else self.allow_emergency_stop
-        if kind == "DISARM" and self.lifecycle.land_phase in {"NEAR_GROUND_DISARM", "LANDED_DISARM"}:
+        if kind == "DISARM" and self.lifecycle.land_phase == "LANDED_DISARM":
             enabled = self.allow_landing_disarm
         if not enabled or not self.lifecycle.active:
             return
@@ -900,13 +1052,13 @@ class ActionExecutorNode(ActionPeripherals, Node):
         try:
             accepted = bool(future.result().success)
         except Exception as exc:
-            if kind == "DISARM" and self.lifecycle.land_phase in {"NEAR_GROUND_DISARM", "LANDED_DISARM"}:
+            if kind == "DISARM" and self.lifecycle.land_phase == "LANDED_DISARM":
                 self.lifecycle.reason = "DISARM_TRANSPORT_FAILED_CONTINUING_LAND"
                 return
             self.lifecycle.fail(self._now_s(), f"{kind}_TRANSPORT_FAILED", str(exc))
             return
         if not accepted:
-            if kind == "DISARM" and self.lifecycle.land_phase in {"NEAR_GROUND_DISARM", "LANDED_DISARM"}:
+            if kind == "DISARM" and self.lifecycle.land_phase == "LANDED_DISARM":
                 self.lifecycle.reason = "DISARM_REJECTED_CONTINUING_LAND"
                 return
             self.lifecycle.fail(self._now_s(), f"{kind}_REJECTED", "WAITING_TASK_DECISION")
@@ -976,15 +1128,31 @@ class ActionExecutorNode(ActionPeripherals, Node):
             "landing_heading_error_deg": math.degrees(self.landing_alignment.heading_error_rad) if self.landing_alignment else None,
             "landing_center_error_px": self.landing_alignment.center_error_px if self.landing_alignment else None,
             "landing_adjust_while_descending": True,
-            "landing_alignment_required_before_descent": True,
-            "land_center_tolerance_px": self.lifecycle.land_center_tolerance_px,
-            "land_alignment_dwell_s": self.lifecycle.land_alignment_dwell_s,
+            "landing_turn_while_descending": False,
+            "landing_yaw_alignment_complete": self.lifecycle.land_yaw_alignment_complete,
+            "landing_center_tolerance_px": self.lifecycle.land_center_tolerance_px,
+            "landing_descent_gate": "CENTER_HEADING_AND_YAW_RATE_STABLE",
+            "landing_yaw_poll_policy": "REUSE_UNEXPIRED_POSE_FOR_DUPLICATE_OR_TIMEOUT_IN_GUIDED_LANDING",
+            "landing_recovery_policy": "SHORT_POLL_GAP_NEW_FRAME_RESUMES_REAL_LOSS_VERIFIES",
+            "landing_target_status_reason": self.target_status_reason,
+            "landing_target_loss_sequence": self.target_loss_sequence,
+            "landing_recovery_requires_verification": self.lifecycle.land_recovery_requires_verification,
+            "landing_observation_age_s": (self.landing_alignment.source_age_s + now - self.landing_alignment.received_s
+                if self.landing_alignment else None),
+            "landing_descent_speed_mps": self.lifecycle.land_guided_descent_mps,
+            "landing_loss_policy": "BOUNDED_SAME_HEIGHT_SEARCH_THEN_HOLD",
+            "landing_search_radius_m": self.lifecycle.land_search_radius_m,
+            "landing_search_speed_mps": self.lifecycle.land_search_speed_mps,
+            "landing_search_waypoint": self.lifecycle.land_search_waypoint,
+            "landing_search_center_xy": self.lifecycle.land_search_center_xy,
+            "landing_search_stop_reason": self.lifecycle.land_search_stop_reason,
             "rc_flight_flow_enabled": self.rc_flight_flow_enabled,
             "landing_switch_state": self.landing_switch_state,
             "landing_switch_pwm": self.landing_switch_pwm,
             "stamp_monotonic_s": now,
         })
         payload.update(self._peripheral_status(now))
+        payload.update(self._vertical_status_payload(now))
         self._publish_event(payload)
 
     def _publish_event(self, payload: dict) -> None:
@@ -993,6 +1161,8 @@ class ActionExecutorNode(ActionPeripherals, Node):
         self.status_publisher.publish(message)
 
     def _expected_mode(self) -> Optional[str]:
+        if getattr(self, "vertical_inhibited", False):
+            return None
         if self._orphan_rollback_due:
             return self.lifecycle.fallback_mode
         return self.lifecycle.expected_mode
