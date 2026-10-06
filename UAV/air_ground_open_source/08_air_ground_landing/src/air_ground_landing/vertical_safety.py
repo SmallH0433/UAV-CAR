@@ -119,6 +119,9 @@ class VerticalHealthSnapshot:
     features: Dict[str, Any] = field(default_factory=dict)
     evidence_availability: Dict[str, bool] = field(default_factory=dict)
     confidence: str = "INSUFFICIENT"
+    input_source_times: Dict[str, Optional[float]] = field(default_factory=dict)
+    input_ages_s: Dict[str, Optional[float]] = field(default_factory=dict)
+    buffered_sample_counts: Dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return _json_safe(asdict(self))
@@ -169,6 +172,7 @@ class VerticalSafetyMonitor:
         self._fast = VerticalHealthState.UNKNOWN
         self._slow = VerticalHealthState.UNKNOWN
         self._features = {}
+        self._candidate_not_before_s = None
 
     def _age_ok(self, now, stamp, maximum):
         return _finite(stamp) and -self.config.future_tolerance_s <= now - stamp <= maximum + 1e-9
@@ -177,12 +181,41 @@ class VerticalSafetyMonitor:
         self._clear_windows()
         return self._snapshot(sample, VerticalHealthState.UNKNOWN, reason)
 
+    def _stale(self, sample, reason):
+        """Keep bounded measured history, never health or a pending fault dwell.
+
+        A delayed callback is not proof that the original sensor timeline has
+        a gap. Recovery still validates every original timestamp and window
+        gap; the stale tick itself cannot use the retained observations.
+        """
+        cutoff = sample.now_s - self.config.slow_window_s - self.config.max_sample_gap_s
+        for rows in self._series.values():
+            while rows and rows[0][0] < cutoff:
+                rows.popleft()
+        self._since = {"fast": None, "slow": None}
+        self._last_eval = None
+        self._fast = self._slow = VerticalHealthState.UNKNOWN
+        self._features = {}
+        # Measurement timestamps can lag the callback. Neither old evidence
+        # nor a resumed packet may count the unavailable interval as dwell.
+        self._candidate_not_before_s = sample.now_s
+        return self._snapshot(sample, VerticalHealthState.UNKNOWN, reason)
+
+    def _expired(self, now, stamp, maximum):
+        return _finite(stamp) and now - stamp > maximum + 1e-9
+
     def _snapshot(self, sample, state, reason, height=None, pnp_fresh=False, flags=False):
         times = {name: (series[-1][0] if series else None)
                  for name, series in self._series.items()}
         times.update(attitude=sample.attitude_time_s,
                      range_status=sample.range_status_time_s,
                      vertical_status=sample.vertical_status_time_s)
+        input_times = {name: getattr(sample, name + "_time_s")
+                       for name in ("pose", "velocity", "range", "pnp", "attitude",
+                                    "range_status", "vertical_status")}
+        input_ages = {name: sample.now_s - stamp
+                      if _finite(sample.now_s) and _finite(stamp) else None
+                      for name, stamp in input_times.items()}
         available = {"fast": self._fast != VerticalHealthState.UNKNOWN,
                      "slow": self._slow != VerticalHealthState.UNKNOWN,
                      "pnp_fresh": pnp_fresh, "vertical_flags": flags,
@@ -197,7 +230,9 @@ class VerticalSafetyMonitor:
             trusted_height_m=height, fast_state=self._fast, slow_state=self._slow,
             source_times=times, features=features, evidence_availability=available,
             confidence=("CORROBORATED" if available["slow"] else
-                        "FAST_ONLY" if available["fast"] else "INSUFFICIENT"))
+                        "FAST_ONLY" if available["fast"] else "INSUFFICIENT"),
+            input_source_times=input_times, input_ages_s=input_ages,
+            buffered_sample_counts={name: len(rows) for name, rows in self._series.items()})
 
     def _append(self, name, stamp, value):
         if stamp > self._highwater.get(name, -math.inf):
@@ -253,6 +288,8 @@ class VerticalSafetyMonitor:
             return VerticalHealthState.HEALTHY
         if self._since[name] is None:
             self._since[name] = end if candidate_start is None else candidate_start
+            if self._candidate_not_before_s is not None:
+                self._since[name] = max(self._since[name], self._candidate_not_before_s)
         return (VerticalHealthState.FAULT if end - self._since[name] >= duration - 1e-9
                 else VerticalHealthState.SUSPECT)
 
@@ -293,14 +330,22 @@ class VerticalSafetyMonitor:
         inputs = {"pose": (sample.pose_time_s, sample.z_m),
                   "velocity": (sample.velocity_time_s, sample.vz_mps),
                   "range": (sample.range_time_s, sample.range_m)}
+        stale_reason = None
         for name, (stamp, value) in inputs.items():
-            if not _finite(value) or not self._age_ok(now, stamp, c.source_max_age_s):
-                return self._unknown(sample, name.upper() + "_INVALID_OR_STALE")
-            if stamp < self._highwater.get(name, -math.inf):
+            if _finite(stamp) and stamp < self._highwater.get(name, -math.inf):
                 return self._unknown(sample, name.upper() + "_OUT_OF_ORDER")
-        if (sample.range_healthy is not True or
-                not self._age_ok(now, sample.range_status_time_s, c.status_max_age_s)):
+            if not _finite(value):
+                return self._unknown(sample, name.upper() + "_INVALID_OR_STALE")
+            if not self._age_ok(now, stamp, c.source_max_age_s):
+                if not self._expired(now, stamp, c.source_max_age_s):
+                    return self._unknown(sample, name.upper() + "_INVALID_OR_STALE")
+                stale_reason = stale_reason or name.upper() + "_INVALID_OR_STALE"
+        if sample.range_healthy is not True:
             return self._unknown(sample, "RANGE_QUALITY_UNKNOWN_OR_INVALID")
+        if not self._age_ok(now, sample.range_status_time_s, c.status_max_age_s):
+            if not self._expired(now, sample.range_status_time_s, c.status_max_age_s):
+                return self._unknown(sample, "RANGE_QUALITY_UNKNOWN_OR_INVALID")
+            stale_reason = stale_reason or "RANGE_QUALITY_UNKNOWN_OR_INVALID"
         if sample.range_quality is not None and (
                 not _finite(sample.range_quality) or
                 not c.minimum_range_quality < sample.range_quality <= 1.0):
@@ -311,9 +356,17 @@ class VerticalSafetyMonitor:
                 min(c.maximum_range_m, sample.range_max_m)):
             return self._unknown(sample, "RANGE_ENVELOPE_INVALID")
         if (not _finite(sample.roll_rad) or not _finite(sample.pitch_rad) or
-                not self._age_ok(now, sample.attitude_time_s, c.source_max_age_s) or
                 abs(sample.roll_rad) > c.max_tilt_rad or abs(sample.pitch_rad) > c.max_tilt_rad):
             return self._unknown(sample, "ATTITUDE_INVALID_OR_STALE")
+        if not self._age_ok(now, sample.attitude_time_s, c.source_max_age_s):
+            if not self._expired(now, sample.attitude_time_s, c.source_max_age_s):
+                return self._unknown(sample, "ATTITUDE_INVALID_OR_STALE")
+            stale_reason = stale_reason or "ATTITUDE_INVALID_OR_STALE"
+        # A stale pose must not hide a bad range, invalid velocity, backward
+        # source, or invalid attitude elsewhere in the same snapshot. Only an
+        # otherwise valid snapshot may preserve history for transport delay.
+        if stale_reason is not None:
+            return self._stale(sample, stale_reason)
         # Range's projection uses attitude measured close to that measurement.
         if abs(sample.attitude_time_s - sample.range_time_s) > c.max_sample_gap_s:
             return self._unknown(sample, "RANGE_ATTITUDE_UNALIGNED")
