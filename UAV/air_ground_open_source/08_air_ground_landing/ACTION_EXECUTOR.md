@@ -131,8 +131,7 @@ JSON 的默认精准 `LAND` 使用该流程；任务层也可显式传入：
 `land_recovery_timeout_s: 1.0`、`land_reacquire_dwell_s: 0.0`、
 `land_yaw_tolerance_deg: 4.0`、`land_yaw_gain_per_s: 0.8`、
 `land_maximum_yaw_rate_deg_s: 15.0`、`landing_alignment_maximum_age_s: 0.3`、
-`land_center_tolerance_px: 20.0`、`land_yaw_alignment_dwell_s: 0.5`；实机配置另外使用
-`land_yaw_tolerance_deg: 25.0` 和 `land_yaw_alignment_rate_tolerance_deg_s: 3.0`。
+`land_center_tolerance_px: 20.0`、`land_alignment_dwell_s: 0.4`。
 中心和朝向误差共同构成下降许可门槛，执行层使用同一份观测，不依赖任务层的 `target_aligned` 标记。状态 `GUIDED_ALIGN` 表示对准中，`GUIDED_VERIFY_ALIGNMENT` 表示驻留确认，`GUIDED_TRACK_DESCENT` 表示允许下降。0.10 m 交接后继续由飞控原生 LAND 执行末端落地，动作层不向 LAND 发送偏航/速度指令；既有末端锁存与低空丢标处理保持原有行为。
 普通独立 DISARM 的许可不变；低空丢标上锁由 `allow_landing_disarm_output` 单独控制。
 仅 hardware 和 sitl 配置打开此开关，offline/preview 保持关闭。

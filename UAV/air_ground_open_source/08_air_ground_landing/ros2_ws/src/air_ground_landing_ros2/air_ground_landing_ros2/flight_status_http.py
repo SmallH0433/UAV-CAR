@@ -190,14 +190,6 @@ class FlightStatusState:
             "motor_throttle_pct": motor_throttle if connected and vfr_age is not None and vfr_age <= 1.0 else None,
             "vfr_altitude_msl_m": vfr_altitude if connected and vfr_age is not None and vfr_age <= 1.0 else None,
         }
-        vertical_fresh = connected and executor_age is not None and executor_age <= 1.0
-        vertical_status = {key: value for key, value in executor.items() if key.startswith("vertical_")}
-        vertical_status["vertical_observations_fresh"] = vertical_fresh
-        if not vertical_fresh:
-            vertical_status.update(vertical_state="UNKNOWN", vertical_guard_reason="STATUS_STALE",
-                                   vertical_health=None, vertical_height_reference_shadow=None)
-        else:
-            vertical_status.setdefault("vertical_state", "UNKNOWN")
         return {
             "available": vehicle_age is not None,
             "flight_controller_connected": connected,
@@ -220,7 +212,6 @@ class FlightStatusState:
             "action": executor.get("action"),
             "action_state": executor.get("state"),
             "action_detail": executor.get("detail"),
-            **vertical_status,
             **{key: value for key, value in executor.items()
                if key.startswith(("target_echo_", "tone_", "orphaned_guided_"))},
             "follow_active": bool(executor.get("follow_active", False)),

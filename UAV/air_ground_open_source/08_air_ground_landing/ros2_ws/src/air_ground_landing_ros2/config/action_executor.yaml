@@ -26,13 +26,10 @@ action_executor:
     land_mode: LAND
     fallback_mode: LOITER
     entry_modes: [ALT_HOLD, LOITER]
-    # Safe baseline values; the hardware profile overrides flight values.
+    # Authoritative hardware values copied from the verified deployment configuration.
     land_guided_descent_mps: 0.10
-    # Require geometric image centering and calibrated tag yaw before descent.
+    # Simultaneous descent + geometric image centering + calibrated tag yaw.
     land_yaw_tolerance_deg: 4.0
-    land_center_tolerance_px: 20.0
-    land_yaw_alignment_dwell_s: 0.5
-    land_yaw_alignment_rate_tolerance_deg_s: 3.0
     land_yaw_gain_per_s: 0.8
     land_maximum_yaw_rate_deg_s: 15.0
     landing_alignment_maximum_age_s: 0.3
@@ -87,7 +84,7 @@ landing_target_adapter:
     environment: offline
     flight_use_approved: false
     allow_landing_target_output: false
-    status_url: http://127.0.0.1:8765/api/vision/status
+    status_url: http://127.0.0.1:8765/api/status
     http_timeout_s: 0.15
     poll_rate_hz: 10.0
     preview_topic: /landing/landing_target/preview

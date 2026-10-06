@@ -70,16 +70,16 @@ class YawFirstTests(unittest.TestCase):
         self.assertEqual(c.velocity_enu[2],0)
         self.assertFalse(e.land_yaw_alignment_complete)
 
-    def test_descent_and_reacquisition_restart_alignment_after_heading_drift(self):
+    def test_descent_and_reacquisition_do_not_restart_yaw_chase(self):
         e=self.start();self.settle(e)
         for t in (.9,1,1.1):
             _,c=e.tick(flight(t,landing_heading_error_rad=math.radians(-65)))
-            self.assertEqual(c.velocity_enu[2],0)
-            self.assertLess(c.yaw_rate_rad_s,0)
+            self.assertLess(c.velocity_enu[2],0)
+            self.assertEqual(c.yaw_rate_rad_s,0)
         e.tick(flight(1.2,candidate_fresh=False))
         _,c=e.tick(flight(1.3,landing_heading_error_rad=math.radians(40)))
-        self.assertEqual(c.velocity_enu[2],0)
-        self.assertGreater(c.yaw_rate_rad_s,0)
+        self.assertLess(c.velocity_enu[2],0)
+        self.assertEqual(c.yaw_rate_rad_s,0)
 
     def test_new_action_requires_new_alignment(self):
         e=self.start();self.settle(e)

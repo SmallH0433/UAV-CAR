@@ -3,7 +3,7 @@
   "scope": "offline_sitl_and_disarmed_bench",
   "vision": {
     "sensor": "ov9281",
-    "status_url": "http://127.0.0.1:8765/api/vision/status",
+    "status_url": "http://127.0.0.1:8765/api/status",
     "poll_hz": 10.0,
     "timeout_s": 1.0,
     "analysis_size": [1280, 800],
@@ -164,7 +164,7 @@
       "output_rate_hz": 20.0
     },
     "ibvs": {
-      "vision_status_url": "http://127.0.0.1:8765/api/vision/status",
+      "vision_status_url": "http://127.0.0.1:8765/api/status",
       "candidate_topic": "/landing/ibvs/candidate",
       "candidate_frame_contract": "ROS_FLU_values_MAVROS_converts_to_BODY_FRD",
       "output_rate_hz": 10.0,

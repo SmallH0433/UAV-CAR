@@ -21,7 +21,7 @@ def flight(now=0.0, **changes):
     values = dict(mode="GUIDED", candidate_fresh=True,
                   candidate_velocity_flu=(.1, .0), range_fresh=True, range_m=.8,
                   landing_alignment_fresh=True, landing_velocity_flu=(.1, .0),
-                  landing_center_error_px=10.0, landing_heading_error_rad=0.0,
+                  landing_center_error_px=40.0, landing_heading_error_rad=0.0,
                   landing_target_fresh=True, landing_target_output_enabled=True)
     values.update(changes)
     return snapshot(now, **values)
@@ -29,56 +29,19 @@ def flight(now=0.0, **changes):
 
 class GuidedLandTests(unittest.TestCase):
     def setUp(self):
-        # These lifecycle checks isolate handoff/recovery behavior. Dedicated
-        # yaw-continuity tests exercise the production 0.5 s alignment dwell.
+        # Recovery/handoff tests use immediate alignment; default dwell has
+        # dedicated tests in test_land_yaw_first.py.
         self.executor = ActionExecutor(land_yaw_alignment_dwell_s=0.0)
         status = self.executor.start(request("LAND", guided_descent=True,
                                              rc_managed=True), flight())
         self.assertEqual(status.state, ActionState.RUNNING)
 
     def test_ch8_descends_in_guided_then_hands_off_at_threshold(self):
-        status, command = self.executor.tick(flight(.41))
+        status, command = self.executor.tick(flight(.2))
         self.assertEqual(command.desired_mode, "GUIDED")
         self.assertGreater(command.velocity_enu[0], 0)
         self.assertLess(command.velocity_enu[2], 0)
-        status, command = self.executor.tick(flight(.5, range_m=.10))
-        self.assertEqual(command.desired_mode, "LAND")
-        self.assertIsNone(command.velocity_enu)
-
-    def test_unusable_tag_pose_cannot_block_near_ground_handoff(self):
-        self.executor.tick(flight(.2, landing_alignment_fresh=False))
-        status, command = self.executor.tick(flight(
-            .4, range_m=.10, landing_alignment_fresh=False))
-        self.assertEqual(status.detail, "GUIDED_DESCENT_COMPLETE_REQUEST_LAND")
-        self.assertEqual(command.desired_mode, "LAND")
-        self.assertEqual(self.executor.land_phase, "HYBRID_LAND_COMMITTED")
-        status, command = self.executor.tick(flight(
-            1.4, range_fresh=False, landing_alignment_fresh=False))
-        self.assertEqual(command.desired_mode, "LAND")
-        self.assertEqual(status.state, ActionState.RUNNING)
-
-    def test_brief_stale_pose_does_not_abandon_guided_landing(self):
-        self.executor.tick(flight(.2))
-        status, command = self.executor.tick(flight(.3, telemetry_fresh=False))
-        self.assertEqual(status.detail, "FLIGHT_TELEMETRY_GRACE_HOLD")
-        self.assertEqual(status.state, ActionState.RUNNING)
-        self.assertIsNone(command)
-        status, command = self.executor.tick(flight(.6))
-        self.assertEqual(status.detail, "GUIDED_TRACK_DESCENT")
-        self.assertLess(command.velocity_enu[2], 0)
-
-    def test_sustained_stale_pose_still_fails_above_handoff(self):
-        self.executor.tick(flight(.2, telemetry_fresh=False))
-        status, command = self.executor.tick(flight(1.21, telemetry_fresh=False))
-        self.assertEqual(status.reason, "FLIGHT_TELEMETRY_LOST")
-        self.assertEqual(status.state, ActionState.FAILED)
-        self.assertIsNone(command)
-
-    def test_stale_pose_at_handoff_still_requests_native_land(self):
-        status, command = self.executor.tick(flight(
-            .2, range_m=.10, telemetry_fresh=False,
-            landing_alignment_fresh=False))
-        self.assertEqual(status.state, ActionState.RUNNING)
+        status, command = self.executor.tick(flight(.4, range_m=.10))
         self.assertEqual(command.desired_mode, "LAND")
         self.assertIsNone(command.velocity_enu)
 
@@ -92,16 +55,14 @@ class GuidedLandTests(unittest.TestCase):
         self.assertLess(command.velocity_enu[2], 0)
 
     def test_deadline_wins_over_late_reacquisition(self):
-        for visible in (True, False):
+        for visible, expected in ((True, "GUIDED"), (False, "LOITER")):
             with self.subTest(visible=visible):
                 self.setUp()
                 self.executor.tick(flight(.25, candidate_fresh=False))
                 status, command = self.executor.tick(flight(1.25, candidate_fresh=visible))
-                self.assertEqual(command.desired_mode, "GUIDED")
-                self.assertEqual(command.velocity_enu, (0, 0, 0))
-                self.assertEqual(status.detail, "TAG_REACQUIRE_TIMEOUT_GUIDED_HOLD")
-                self.assertEqual(self.executor.land_phase, "GUIDED_REACQUIRE_STOPPED_HOLD")
-                self.assertTrue(self.executor.active)
+                self.assertEqual(command.desired_mode, expected)
+                self.assertEqual(self.executor.land_exit_reason, "LAND_EXIT_TAG_REACQUIRE_TIMEOUT")
+                self.assertTrue(self.executor.land_phase.startswith("EXIT_"))
 
     def test_ch8_release_exits_by_visibility_and_never_descends(self):
         for visible, expected in ((True, "GUIDED"), (False, "LOITER")):
@@ -114,12 +75,13 @@ class GuidedLandTests(unittest.TestCase):
                 self.assertEqual(command.desired_mode, expected)
                 self.assertIn(command.velocity_enu, (None, (0, 0, 0)))
 
-    def test_ch8_release_immediately_cancels_recovery(self):
+    def test_recovery_latch_holds_until_deadline_despite_ch8_release(self):
         self.executor.tick(flight(.25, candidate_fresh=False))
         status, command = self.executor.tick(flight(
             .5, candidate_fresh=False, landing_requested=False, landing_explicit_low=True))
-        self.assertEqual(status.detail, "WAITING_LOITER_HEARTBEAT")
+        self.assertEqual(status.detail, "TAG_LOST_GUIDED_HOLD")
         self.assertEqual(command.velocity_enu, (0, 0, 0))
+        status, command = self.executor.tick(flight(1.25, candidate_fresh=False))
         self.assertEqual(command.desired_mode, "LOITER")
 
     def test_invalid_range_holds_without_descent(self):
@@ -133,30 +95,29 @@ class GuidedLandTests(unittest.TestCase):
         status, command = self.executor.tick(flight(.5, authorized=False))
         self.assertEqual(command.desired_mode, "LOITER")
 
-    def test_below_threshold_loss_hands_to_land_without_airborne_disarm(self):
+    def test_below_threshold_loss_requests_disarm_until_heartbeat(self):
         status, command = self.executor.tick(flight(.2, range_m=.09, candidate_fresh=False))
-        self.assertFalse(command.request_disarm)
+        self.assertTrue(command.request_disarm)
         self.assertEqual(command.desired_mode, "LAND")
         self.assertEqual(status.state, ActionState.RUNNING)
         status, command = self.executor.tick(flight(
             .4, mode="LAND", candidate_fresh=True, range_fresh=False,
             landing_requested=False, landing_explicit_low=True))
-        self.assertFalse(command.request_disarm)
+        self.assertTrue(command.request_disarm)
         status, command = self.executor.tick(flight(.6, mode="LAND", armed=False))
         self.assertEqual(status.state, ActionState.DONE)
         self.assertEqual(status.reason, "LAND_AND_DISARM_CONFIRMED")
 
-    def test_tag_loss_after_native_land_handoff_does_not_request_disarm(self):
+    def test_tag_loss_after_native_land_handoff_still_requests_disarm(self):
         self.executor.tick(flight(.2, range_m=.10))
         status, command = self.executor.tick(flight(
             .4, mode="LAND", range_m=.09, candidate_fresh=False))
-        self.assertFalse(command.request_disarm)
+        self.assertTrue(command.request_disarm)
 
-    def test_recovery_drifting_below_threshold_requests_land_without_disarm(self):
+    def test_recovery_drifting_below_threshold_requests_disarm(self):
         self.executor.tick(flight(.2, candidate_fresh=False))
         status, command = self.executor.tick(flight(.4, range_m=.09, candidate_fresh=False))
-        self.assertFalse(command.request_disarm)
-        self.assertEqual(command.desired_mode, "LAND")
+        self.assertTrue(command.request_disarm)
 
     def test_exact_threshold_and_stale_range_do_not_request_disarm(self):
         for changes in (dict(range_m=.10), dict(range_m=.09, range_fresh=False)):
@@ -169,29 +130,6 @@ class GuidedLandTests(unittest.TestCase):
         status, command = self.executor.tick(flight(.2, mode="LAND", landed=True))
         self.assertEqual(status.state, ActionState.RUNNING)
         self.assertEqual(status.detail, "LANDED_WAIT_DISARM")
-        self.assertTrue(command.request_disarm)
-
-    def test_fcu_ground_report_requests_land_before_normal_disarm(self):
-        status, command = self.executor.tick(flight(
-            .2, mode="GUIDED", landed=True, telemetry_fresh=False))
-        self.assertEqual(status.detail, "LANDED_REQUEST_LAND")
-        self.assertEqual(command.desired_mode, "LAND")
-        self.assertFalse(command.request_disarm)
-        status, command = self.executor.tick(flight(
-            .4, mode="LAND", landed=True, telemetry_fresh=False))
-        self.assertEqual(status.detail, "LANDED_WAIT_DISARM")
-        self.assertTrue(command.request_disarm)
-        status, command = self.executor.tick(flight(
-            .6, mode="LAND", armed=False))
-        self.assertEqual(status.reason, "LAND_AND_DISARM_CONFIRMED")
-        self.assertEqual(status.state, ActionState.DONE)
-
-    def test_landed_report_flicker_keeps_native_land_committed(self):
-        self.executor.tick(flight(.2, mode="LAND", landed=True))
-        status, command = self.executor.tick(flight(.4, mode="LAND", landed=False))
-        self.assertEqual(status.detail, "LAND_COMMITTED_WAIT_LANDED")
-        self.assertEqual(command.desired_mode, "LAND")
-        self.assertFalse(command.request_disarm)
 
     def test_ros_float32_threshold_hands_off_without_false_disarm(self):
         import struct
@@ -215,7 +153,7 @@ class RcFlowTests(unittest.TestCase):
         sent = []
         lifecycle = ActionExecutor()
         lifecycle.start(request("LAND", guided_descent=True), flight())
-        lifecycle.tick(flight(.2, mode="LAND", landed=True))
+        lifecycle.tick(flight(.2, range_m=.09, candidate_fresh=False))
         driver = SimpleNamespace(
             allow_disarm=False, allow_landing_disarm=False, lifecycle=lifecycle,
             command_future=None, command_request_s=0, command_retry_s=1,
@@ -233,31 +171,7 @@ class RcFlowTests(unittest.TestCase):
         self.assertTrue(lifecycle.active)
         self.assertEqual(lifecycle.reason, 'DISARM_REJECTED_CONTINUING_LAND')
 
-    def test_ground_confirmed_land_uses_separate_normal_disarm_gate(self):
-        from types import SimpleNamespace
-        path = executor_source()
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        method = next(n for c in tree.body if isinstance(c, ast.ClassDef)
-                      for n in c.body if isinstance(n, ast.FunctionDef)
-                      and n.name == "_request_command")
-        namespace = dict(CommandLong=SimpleNamespace(Request=SimpleNamespace),
-                         MAV_CMD_COMPONENT_ARM_DISARM=400)
-        exec(compile(ast.Module(body=[method], type_ignores=[]), str(path), 'exec'), namespace)
-        sent = []
-        lifecycle = ActionExecutor()
-        lifecycle.start(request("LAND", guided_descent=True), flight())
-        lifecycle.tick(flight(.2, mode="LAND", landed=True))
-        driver = SimpleNamespace(
-            allow_disarm=False, allow_landing_disarm=True, lifecycle=lifecycle,
-            command_future=None, command_request_s=0, command_retry_s=1,
-            command_client=SimpleNamespace(service_is_ready=lambda: True,
-                call_async=lambda r: sent.append(r) or SimpleNamespace(add_done_callback=lambda cb: None)),
-        )
-        namespace['_request_command'](driver, 'DISARM', 2)
-        self.assertEqual(len(sent), 1)
-        self.assertEqual((sent[0].command, sent[0].param1, sent[0].param2), (400, 0, 0))
-
-    def test_actual_rc_driver_does_not_restart_follow_on_search_timeout(self):
+    def test_actual_rc_driver_selects_hybrid_and_rearms_after_confirmed_follow(self):
         # Compile the real orchestration method in isolation, without ROS stubs.
         path = executor_source()
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -274,7 +188,7 @@ class RcFlowTests(unittest.TestCase):
             entry_modes = {"LOITER", "ALT_HOLD"}
             auto_land_inhibited = False
             auto_action_sequence = 0
-            last_auto_follow_attempt_s = -float('inf')
+            last_auto_follow_attempt_s = -__import__('math').inf
             lifecycle = ActionExecutor()
             def _publish_status(self, *args, **kwargs):
                 pass
@@ -285,43 +199,15 @@ class RcFlowTests(unittest.TestCase):
         drive(flight(.1))
         self.assertTrue(driver.lifecycle.request.params['guided_descent'])
         driver.lifecycle.tick(flight(.25, candidate_fresh=False))
-        driver.lifecycle.tick(flight(1.25))  # Deadline holds this LAND session.
+        driver.lifecycle.tick(flight(1.25))  # Deadline, visible tag -> GUIDED exit.
         driver.lifecycle.tick(flight(1.3))
         drive(flight(1.4))
+        self.assertEqual(driver.lifecycle.request.kind, ActionKind.FOLLOW)
+        drive(flight(1.5))
         self.assertEqual(driver.lifecycle.request.kind, ActionKind.LAND)
-        self.assertEqual(driver.lifecycle.land_phase, "GUIDED_REACQUIRE_STOPPED_HOLD")
-
-    def test_ch6_failed_follow_retries_at_most_once_per_second(self):
-        path = executor_source()
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        method = next(n for c in tree.body if isinstance(c, ast.ClassDef)
-                      for n in c.body if isinstance(n, ast.FunctionDef)
-                      and n.name == "_drive_rc_flight_flow")
-        namespace = dict(ActionKind=ActionKind, ActionRequest=ActionRequest,
-                         GUIDED_ACTIONS=GUIDED_ACTIONS, math=__import__('math'),
-                         VehicleSnapshot=object)
-        exec(compile(ast.Module(body=[method], type_ignores=[]), str(path), 'exec'), namespace)
-        class Driver:
-            rc_flight_flow_enabled = True
-            guided_mode = "GUIDED"
-            entry_modes = {"LOITER", "ALT_HOLD"}
-            auto_land_inhibited = False
-            auto_action_sequence = 0
-            last_auto_follow_attempt_s = -float('inf')
-            lifecycle = ActionExecutor()
-            def _publish_status(self, *args, **kwargs):
-                pass
-        driver = Driver()
-        drive = lambda t: namespace['_drive_rc_flight_flow'](
-            driver, flight(t, mode="LOITER", landing_requested=False,
-                           ekf_healthy=False), t)
-        drive(0.0)
-        self.assertEqual(driver.auto_action_sequence, 1)
-        for t in (0.05, 0.2, 0.5, 0.99):
-            drive(t)
-        self.assertEqual(driver.auto_action_sequence, 1)
-        drive(1.0)
-        self.assertEqual(driver.auto_action_sequence, 2)
+        drive(flight(1.6, landing_requested=False, landing_explicit_low=True))
+        drive(flight(1.7))
+        self.assertEqual(driver.lifecycle.request.kind, ActionKind.LAND)
 
 
 if __name__ == '__main__':

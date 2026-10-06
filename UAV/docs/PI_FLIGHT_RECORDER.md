@@ -42,7 +42,7 @@
 ## 部署
 
 将 `tools/pi_flight_recorder.py`、`tools/install_pi_flight_recorder.sh`、
-`config/pi-flight-recorder.service` 按目录结构复制到树莓派同一目录。
+`config/systemd/pi-flight-recorder.service` 按目录结构复制到树莓派同一目录。
 以当前 MAVROS 所属用户执行：
 
 ```bash

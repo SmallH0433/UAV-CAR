@@ -83,19 +83,8 @@ class GuidedDescent:
                 self.fault = True
             return DescentOutput('UNSAFE_EVIDENCE_HOLD')
         if self.adjust_while_descending and not x.tag_fresh:
-            self.aligned_since = None
             self.near_since = None
             return DescentOutput('TAG_LOST_HOLD')
-        # Tracking during descent never bypasses initial or renewed alignment.
-        # In the tracking backend this also applies to the terminal phase.
-        if self.adjust_while_descending:
-            if not x.aligned:
-                self.aligned_since = self.near_since = None
-                return DescentOutput('ALIGN', track_tag=True)
-            if self.aligned_since is None:
-                self.aligned_since = x.now
-            if x.now-self.aligned_since < self.dwell_s:
-                return DescentOutput('VERIFY_ALIGNMENT', track_tag=True)
         if self.terminal_since is not None:
             if x.range_m > self.near_m + .05:
                 self.fault = True

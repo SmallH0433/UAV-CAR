@@ -94,11 +94,6 @@ class ActionPeripherals:
         self.echo_link_connected = connected
         if connected:
             self._ensure_target_echo_interval(now)
-        if getattr(self, "vertical_inhibited", False):
-            self._orphan_rollback_due = False
-            self.orphan_recovery.pending = False
-            self.orphan_recovery.reason = "VERTICAL_GUARD_AWAIT_PILOT"
-            return True
         due = self.orphan_recovery.update(now, fresh=fresh,
             connected=connected, armed=self.vehicle_state.armed,
             mode=self.vehicle_state.mode.strip().upper(),
