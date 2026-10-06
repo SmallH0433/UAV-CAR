@@ -38,10 +38,11 @@ class LandingCorrectionTests(unittest.TestCase):
 
     def test_later_misalignment_stops_descent_immediately(self):
         executor = self.start()
-        executor.tick(flight(0))
-        _, command = executor.tick(flight(.41))
+        for t in (0, .2, .4):
+            executor.tick(flight(t))
+        _, command = executor.tick(flight(.51))
         self.assertLess(command.velocity_enu[2], 0)
-        _, command = executor.tick(flight(.42, target_aligned=False,
+        _, command = executor.tick(flight(.52, target_aligned=False,
             landing_heading_error_rad=-1.0, landing_center_error_px=200))
         self.assertEqual(command.velocity_enu[2], 0)
         self.assertLess(command.yaw_rate_rad_s, 0)
@@ -89,18 +90,20 @@ class LandingCorrectionTests(unittest.TestCase):
                 executor = self.start()
                 executor.tick(flight(0, target_aligned=True, **changes))
                 status, command = executor.tick(flight(.6, target_aligned=True, **changes))
-                self.assertEqual(status.detail, "GUIDED_ALIGN")
+                expected = ("GUIDED_ALIGN_CENTER" if "landing_center_error_px" in changes
+                            else "GUIDED_ALIGN_YAW")
+                self.assertEqual(status.detail, expected)
                 self.assertEqual(command.velocity_enu[2], 0)
 
     def test_tolerance_boundaries_and_continuous_dwell(self):
         executor = self.start()
         at_limit = dict(landing_center_error_px=20,
                         landing_heading_error_rad=math.radians(4))
-        for t in (0, .2, .399):
+        for t in (0, .2, .4):
             status, command = executor.tick(flight(t, **at_limit))
-            self.assertEqual(status.detail, "GUIDED_VERIFY_ALIGNMENT")
+            self.assertEqual(status.detail, "GUIDED_ALIGNMENT_SETTLING")
             self.assertEqual(command.velocity_enu[2], 0)
-        status, command = executor.tick(flight(.4, **at_limit))
+        status, command = executor.tick(flight(.51, **at_limit))
         self.assertEqual(status.detail, "GUIDED_TRACK_DESCENT")
         self.assertLess(command.velocity_enu[2], 0)
 
@@ -111,13 +114,14 @@ class LandingCorrectionTests(unittest.TestCase):
         executor.tick(flight(.31))
         _, command = executor.tick(flight(.6))
         self.assertEqual(command.velocity_enu[2], 0)
-        _, command = executor.tick(flight(.72))
+        _, command = executor.tick(flight(.82))
         self.assertLess(command.velocity_enu[2], 0)
-        executor.tick(flight(.73, landing_heading_error_rad=.5))
-        executor.tick(flight(.74))
-        _, command = executor.tick(flight(1.0))
+        executor.tick(flight(.83, landing_heading_error_rad=.5))
+        executor.tick(flight(.84))
+        executor.tick(flight(1.04))
+        _, command = executor.tick(flight(1.24))
         self.assertEqual(command.velocity_enu[2], 0)
-        _, command = executor.tick(flight(1.15))
+        _, command = executor.tick(flight(1.35))
         self.assertLess(command.velocity_enu[2], 0)
 
     def test_range_loss_requires_new_alignment_dwell(self):
@@ -133,10 +137,15 @@ class LandingCorrectionTests(unittest.TestCase):
         self.assertLess(command.velocity_enu[2], 0)
 
     def test_alignment_parameters_are_validated(self):
-        for name in ("land_center_tolerance_px", "land_alignment_dwell_s"):
-            for value in (0, -1, math.nan, math.inf):
+        for name, values in (
+            ("land_center_tolerance_px", (0, -1, math.nan, math.inf)),
+            ("land_yaw_alignment_dwell_s", (-1, math.nan, math.inf)),
+            ("land_alignment_dwell_s", (-1, math.nan, math.inf)),
+        ):
+            for value in values:
                 with self.subTest(name=name, value=value), self.assertRaises(ValueError):
                     ActionExecutor(**{name: value})
+        self.assertEqual(ActionExecutor(land_alignment_dwell_s=0).land_yaw_alignment_dwell_s, 0)
 
     def test_precision_land_requires_alignment_even_in_terminal_phase(self):
         executor = self.start("PRECISION_LAND")
@@ -148,12 +157,14 @@ class LandingCorrectionTests(unittest.TestCase):
             self.assertGreater(command.yaw_rate_rad_s, 0)
         _, command = executor.tick(flight(1.1, range_m=.08, landing_alignment_fresh=False))
         self.assertEqual(command.velocity_enu, (0, 0, 0))
-        executor.tick(flight(1.2, range_m=.08))
-        executor.tick(flight(1.61, range_m=.08))
-        _, command = executor.tick(flight(2.02, range_m=.08))
+        for t in (1.2, 1.4, 1.6):
+            executor.tick(flight(t, range_m=.08))
+        _, command = executor.tick(flight(1.72, range_m=.08))
         self.assertLess(command.velocity_enu[2], 0)
+        executor.tick(flight(1.9, range_m=.08))
+        _, command = executor.tick(flight(2.05, range_m=.08))
         self.assertIsNotNone(executor._descent.terminal_since)
-        _, command = executor.tick(flight(2.03, range_m=.08, landing_heading_error_rad=.5))
+        _, command = executor.tick(flight(2.06, range_m=.08, landing_heading_error_rad=.5))
         self.assertEqual(command.velocity_enu[2], 0)
 
     def test_yaw_rate_respects_general_executor_limit(self):
@@ -171,24 +182,22 @@ class LandingCorrectionTests(unittest.TestCase):
             self.assertEqual(command.velocity_enu, (0, 0, 0))
             self.assertEqual(command.yaw_rate_rad_s, 0)
 
-    def test_tag_loss_timeout_keeps_zero_command_until_loiter_heartbeat(self):
+    def test_tag_loss_timeout_stays_guided_and_never_descends(self):
         executor = self.start()
         executor.tick(flight(.2, landing_heading_error_rad=.5))
         status, command = executor.tick(flight(.3, candidate_fresh=False))
         self.assertEqual(status.detail, "TAG_LOST_GUIDED_HOLD")
         self.assertEqual(command.velocity_enu, (0, 0, 0))
         self.assertEqual(command.yaw_rate_rad_s, 0)
+        status, command = executor.tick(flight(.81, candidate_fresh=False))
+        self.assertEqual(command.desired_mode, "GUIDED")
+        self.assertEqual(command.velocity_enu[2], 0)
         status, command = executor.tick(flight(1.31, candidate_fresh=False))
-        self.assertEqual(command.desired_mode, "LOITER")
+        self.assertEqual(status.detail, "TAG_REACQUIRE_TIMEOUT_GUIDED_HOLD")
+        self.assertEqual(command.desired_mode, "GUIDED")
         self.assertEqual(command.velocity_enu, (0, 0, 0))
         self.assertEqual(command.yaw_rate_rad_s, 0)
-        status, command = executor.tick(flight(1.4, candidate_fresh=False))
-        self.assertEqual(status.detail, "WAITING_LOITER_HEARTBEAT")
-        self.assertEqual(command.velocity_enu, (0, 0, 0))
-        self.assertEqual(command.yaw_rate_rad_s, 0)
-        status, command = executor.tick(flight(1.5, mode="LOITER", candidate_fresh=False))
-        self.assertEqual(status.state.value, "DONE")
-        self.assertEqual(status.reason, "LAND_EXIT_TAG_REACQUIRE_TIMEOUT")
+        self.assertTrue(executor.active)
 
     def test_recovery_reacquires_and_aligns_before_resuming_descent(self):
         executor = self.start()
@@ -202,7 +211,7 @@ class LandingCorrectionTests(unittest.TestCase):
         self.assertGreater(command.velocity_enu[0], 0)
         self.assertLess(command.yaw_rate_rad_s, 0)
 
-    def test_timeout_with_tag_exits_to_guided_without_descent(self):
+    def test_timeout_with_tag_holds_same_land_session_without_descent(self):
         executor = self.start()
         executor.tick(flight(.2))
         executor.tick(flight(.3, candidate_fresh=False))
@@ -211,8 +220,8 @@ class LandingCorrectionTests(unittest.TestCase):
         self.assertEqual(command.velocity_enu, (0, 0, 0))
         self.assertEqual(command.yaw_rate_rad_s, 0)
         status, command = executor.tick(flight(1.4))
-        self.assertEqual(status.reason, "LAND_EXIT_TAG_REACQUIRE_TIMEOUT")
-        self.assertEqual(status.state.value, "DONE")
+        self.assertEqual(status.detail, "TAG_REACQUIRE_TIMEOUT_GUIDED_HOLD")
+        self.assertEqual(status.state.value, "RUNNING")
         self.assertEqual(command.velocity_enu, (0.0, 0.0, 0.0))
 
 

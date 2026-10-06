@@ -25,7 +25,12 @@ class EkfReportTests(unittest.TestCase):
     def test_foreign_or_malformed_report_is_ignored(self):
         self.assertIsNone(self.report(367, system_id=200))
         self.assertIsNone(self.report(367, framing_status=2))
-        self.assertIsNone(self.report(367, length=21))
+        self.assertIsNone(self.report(367, length=20))
+
+    def test_mavlink2_trimmed_zero_flags_byte_is_accepted(self):
+        # At length 21 only the low flags byte is on the wire; MAVLink 2 may
+        # trim a zero-valued trailing extension byte.
+        self.assertTrue(self.report(367, length=21))
 
 
 if __name__ == '__main__':

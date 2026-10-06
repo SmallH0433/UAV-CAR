@@ -46,6 +46,14 @@ GUIDED_ACTIONS = frozenset({
 LAND_ACTIONS = frozenset({ActionKind.LAND})
 FLIGHT_ACTIONS = GUIDED_ACTIONS | LAND_ACTIONS
 
+# These report missing/newness of evidence, rather than a rejected/no target.
+TRANSIENT_LANDING_OBSERVATION_FAILURES = frozenset({
+    "BRIDGE_REJECTED:DUPLICATE_FRAME",
+    "VISION_STATUS_UNAVAILABLE:TimeoutError",
+    "BRIDGE_REJECTED:STALE_FRAME",
+    "OBSERVATION_EXPIRED",
+})
+
 
 @dataclass(frozen=True)
 class ActionRequest:
@@ -104,6 +112,18 @@ class VehicleSnapshot:
     landing_velocity_flu: Optional[tuple[float, float]] = None
     landing_center_error_px: float = math.nan
     landing_heading_error_rad: float = math.nan  # ROS FLU/ENU: positive left
+    # Original observation time, unchanged when a transport poll reuses a frame.
+    # A transport-free caller may omit this when each fresh snapshot is new.
+    landing_observation_s: Optional[float] = None
+    landing_observation_failure_reason: str = ""
+    # A real rejection cannot be hidden by a good callback before the next tick.
+    landing_observation_loss_sequence: int = 0
+    # Diagnostic observation fields; the ROS sole writer owns enforcement/latch.
+    vertical_state: str = "UNKNOWN"
+    vertical_reason: str = "NOT_OBSERVED"
+    vertical_observed_s: Optional[float] = None
+    vertical_trusted_height_m: Optional[float] = None
+    vertical_fault_latched: bool = False
 
 
 @dataclass(frozen=True)
@@ -160,12 +180,19 @@ class ActionExecutor:
         land_recovery_height_m: float = 0.10,
         land_recovery_timeout_s: float = 1.0,
         land_reacquire_dwell_s: float = 0.0,
-        land_guided_descent_mps: float = 0.10,
+        land_guided_descent_mps: float = 0.05,
+        land_search_radius_m: float = 0.5,
+        land_search_speed_mps: float = 0.05,
+        land_search_wait_s: float = 0.5,
+        land_reacquire_maximum_gap_s: float = 0.3,
         land_yaw_tolerance_rad: float = math.radians(4.0),
         land_yaw_gain_per_s: float = 0.8,
         land_maximum_yaw_rate_rad_s: float = math.radians(15.0),
+        land_yaw_alignment_dwell_s: float = 0.5,
+        land_alignment_dwell_s: Optional[float] = None,
+        land_yaw_alignment_maximum_gap_s: float = 0.3,
+        land_yaw_alignment_rate_tolerance_rad_s: float = math.radians(3.0),
         land_center_tolerance_px: float = 20.0,
-        land_alignment_dwell_s: float = 0.4,
     ) -> None:
         values = (
             position_tolerance_m,
@@ -208,14 +235,23 @@ class ActionExecutor:
         self.land_recovery_height_m = land_recovery_height_m
         self.land_recovery_timeout_s = land_recovery_timeout_s
         self.land_reacquire_dwell_s = land_reacquire_dwell_s
+        if not all(math.isfinite(v) and v > 0 for v in (
+            land_search_radius_m, land_search_speed_mps, land_reacquire_maximum_gap_s
+        )) or land_search_speed_mps > maximum_horizontal_speed_mps:
+            raise ValueError("LAND search must fit the horizontal speed limit")
+        if not math.isfinite(land_search_wait_s) or land_search_wait_s < 0:
+            raise ValueError("LAND search wait must be non-negative")
+        self.land_search_radius_m = land_search_radius_m
+        self.land_search_speed_mps = land_search_speed_mps
+        self.land_search_wait_s = land_search_wait_s
+        self.land_reacquire_maximum_gap_s = land_reacquire_maximum_gap_s
         if not math.isfinite(land_guided_descent_mps) or not 0 < land_guided_descent_mps <= maximum_vertical_speed_mps:
             raise ValueError("GUIDED landing descent must fit the vertical speed limit")
         self.land_guided_descent_mps = land_guided_descent_mps
         alignment_limits = (land_yaw_tolerance_rad,
                             land_yaw_gain_per_s,
                             land_maximum_yaw_rate_rad_s,
-                            land_center_tolerance_px,
-                            land_alignment_dwell_s)
+                            land_center_tolerance_px)
         if not all(math.isfinite(v) and v > 0 for v in alignment_limits):
             raise ValueError("landing alignment limits must be finite and positive")
         if land_yaw_tolerance_rad >= math.pi / 2:
@@ -223,10 +259,21 @@ class ActionExecutor:
         self.land_yaw_tolerance_rad = land_yaw_tolerance_rad
         self.land_yaw_gain_per_s = land_yaw_gain_per_s
         self.land_maximum_yaw_rate_rad_s = min(land_maximum_yaw_rate_rad_s, maximum_yaw_rate_rad_s)
+        # Keep the 8.10 keyword working for callers while the ROS profile uses
+        # the more precise yaw-alignment name.
+        if land_alignment_dwell_s is not None:
+            land_yaw_alignment_dwell_s = land_alignment_dwell_s
+        if not math.isfinite(land_yaw_alignment_dwell_s) or land_yaw_alignment_dwell_s < 0:
+            raise ValueError("LAND yaw alignment dwell must be finite and non-negative")
+        if not all(math.isfinite(v) and v > 0 for v in (
+            land_yaw_alignment_maximum_gap_s, land_yaw_alignment_rate_tolerance_rad_s
+        )):
+            raise ValueError("LAND yaw alignment gap and rate tolerance must be positive")
+        self.land_yaw_alignment_dwell_s = land_yaw_alignment_dwell_s
+        self.land_yaw_alignment_maximum_gap_s = land_yaw_alignment_maximum_gap_s
+        self.land_yaw_alignment_rate_tolerance_rad_s = land_yaw_alignment_rate_tolerance_rad_s
         self.land_center_tolerance_px = land_center_tolerance_px
-        self.land_alignment_dwell_s = land_alignment_dwell_s
-        self._descent = GuidedDescent(dwell_s=land_alignment_dwell_s,
-                                     adjust_while_descending=True)
+        self._descent = GuidedDescent(adjust_while_descending=True)
         self._seen_action_ids: set[str] = set()
         self.reset()
 
@@ -242,10 +289,21 @@ class ActionExecutor:
         self.completed_since: Optional[float] = None
         self.candidate_missing_since: Optional[float] = None
         self.land_phase = "INACTIVE"
+        self.land_yaw_alignment_complete = False
+        self.land_yaw_aligned_since_s: Optional[float] = None
+        self.land_yaw_last_aligned_s: Optional[float] = None
+        self.land_yaw_last_observation_s: Optional[float] = None
         self.land_hold_started_s: Optional[float] = None
         self.land_reacquired_since_s: Optional[float] = None
+        self.land_last_reacquired_s: Optional[float] = None
+        self.land_seen_observation_loss_sequence = 0
+        self.land_recovery_requires_verification = True
+        self.land_recovery_observation_s: Optional[float] = None
+        self.land_last_valid_observation_s: Optional[float] = None
+        self.land_search_center_xy: Optional[tuple[float, float]] = None
+        self.land_search_waypoint = 0
+        self.land_search_stop_reason = ""
         self.land_telemetry_loss_started_s: Optional[float] = None
-        self.land_alignment_since_s: Optional[float] = None
         self.land_exit_mode: Optional[str] = None
         self.land_exit_reason = ""
         self._land_expected_mode = self.land_mode
@@ -320,6 +378,7 @@ class ActionExecutor:
         self._seen_action_ids.add(request.action_id)
         self.started_s = snapshot.now_s
         self.last_tick_s = snapshot.now_s
+        self.land_seen_observation_loss_sequence = snapshot.landing_observation_loss_sequence
         self.last_velocity_command_s = snapshot.now_s
         rejection = self._precondition_rejection(request, snapshot)
         if rejection is not None:
@@ -404,6 +463,15 @@ class ActionExecutor:
             )
             return self._status(snapshot.now_s), None
         self.last_tick_s = snapshot.now_s
+        if (self.request.kind in {ActionKind.LAND, ActionKind.PRECISION_LAND}
+                and not self.land_yaw_alignment_complete
+                and (not math.isfinite(snapshot.yaw_rate_rad_s)
+                     or abs(snapshot.yaw_rate_rad_s) > self.land_yaw_alignment_rate_tolerance_rad_s)):
+            # Also observe gyro instability on ticks that hold for missing
+            # vision/range. Retain the frame marker so cached evidence cannot
+            # restart a stability window when angular speed drops again.
+            self.land_yaw_aligned_since_s = None
+            self.land_yaw_last_aligned_s = None
         if self.request.kind == ActionKind.DISARM and not snapshot.armed:
             command = self._tick_disarm(snapshot)
             return self._status(snapshot.now_s), command
@@ -450,7 +518,7 @@ class ActionExecutor:
             near_ground = bool(
                 snapshot.connected and snapshot.authorized and
                 (snapshot.landed or self.land_phase in {
-                    "HYBRID_LAND_COMMITTED", "NEAR_GROUND_DISARM", "LANDED_DISARM"
+                    "HYBRID_LAND_COMMITTED", "LANDED_DISARM"
                 } or (
                     snapshot.range_fresh and math.isfinite(snapshot.range_m)
                     and round(snapshot.range_m, 6) <= self.land_recovery_height_m
@@ -462,21 +530,34 @@ class ActionExecutor:
             if snapshot.telemetry_fresh:
                 self.land_telemetry_loss_started_s = None
             elif snapshot.connected and snapshot.authorized:
-                self.land_alignment_since_s = None
                 if self.land_telemetry_loss_started_s is None:
                     self.land_telemetry_loss_started_s = snapshot.now_s
                 if snapshot.now_s - self.land_telemetry_loss_started_s < 1.0:
                     self.detail = "FLIGHT_TELEMETRY_GRACE_HOLD"
+                    if (self.guided_landing and self.land_phase in {
+                            "GUIDED_REACQUIRE_HOLD", "GUIDED_REACQUIRE_STOPPED_HOLD"
+                    } and snapshot.mode.strip().upper() == self.guided_mode):
+                        command = self._guided_land_hold(snapshot, self.detail)
+                        return self._status(snapshot.now_s), command
                     return self._status(snapshot.now_s), None
         rejection = self._runtime_rejection(self.request.kind, snapshot)
         if rejection is not None:
+            # Brake a running search before relinquishing control to the
+            # established failure/orphaned-GUIDED policy. A zero target does
+            # not require position estimation and does not keep flying blind.
+            stop = None
+            if (self.guided_landing and self.land_phase in {
+                    "GUIDED_REACQUIRE_HOLD", "GUIDED_REACQUIRE_STOPPED_HOLD"
+            } and snapshot.connected and snapshot.authorized
+                    and snapshot.mode.strip().upper() == self.guided_mode):
+                stop = self._guided_land_hold(snapshot, "SEARCH_EVIDENCE_INVALID_GUIDED_HOLD")
             self._finish(
                 ActionState.FAILED,
                 rejection,
                 "CONTROL_RELEASED",
                 retain_hold=False,
             )
-            return self._status(snapshot.now_s), None
+            return self._status(snapshot.now_s), stop
         if self.request.kind == ActionKind.LAND:
             command = self._tick_land(snapshot)
             return self._status(snapshot.now_s), command
@@ -485,8 +566,6 @@ class ActionExecutor:
             and snapshot.mode.strip().upper() != self._desired_mode(self.request.kind)
         ):
             desired_mode = self._desired_mode(self.request.kind)
-            self.land_alignment_since_s = None
-            self._descent.aligned_since = None
             self.detail = f"WAITING_{desired_mode}_HEARTBEAT"
             return self._status(snapshot.now_s), ActionCommand(desired_mode=desired_mode)
         handler = {
@@ -568,7 +647,7 @@ class ActionExecutor:
             if not isinstance(guided_descent, bool):
                 raise ValueError("LAND guided_descent must be a boolean")
             if guided_descent:
-                self.land_phase = "GUIDED_TRACK_DESCENT"
+                self.land_phase = "GUIDED_ALIGN_YAW"
                 self._land_expected_mode = self.guided_mode
 
     def _tick_move(self, snapshot: VehicleSnapshot) -> ActionCommand:
@@ -719,6 +798,9 @@ class ActionExecutor:
             range_m=snapshot.range_m,
             range_fresh=snapshot.range_fresh,
             tag_fresh=self._landing_observation_valid(snapshot),
+            # The legacy descent state machine still owns its independent
+            # safety dwell. Feed it the same-frame centre/yaw evidence used by
+            # the new gate instead of the obsolete target_aligned flag.
             aligned=self._landing_aligned(snapshot),
             horizontal_speed=horizontal_speed,
             tilt_deg=snapshot.tilt_deg,
@@ -734,6 +816,9 @@ class ActionExecutor:
         self.detail = output.phase
         if not output.track_tag:
             return self._guided_land_hold(snapshot, output.phase)
+        alignment_command = self._guided_land_yaw_alignment(snapshot)
+        if alignment_command is not None:
+            return alignment_command
         return self._landing_tracking_command(snapshot, output.up_mps)
 
     def _tick_land(self, snapshot: VehicleSnapshot) -> ActionCommand:
@@ -757,11 +842,6 @@ class ActionExecutor:
             self._land_expected_mode = self.land_mode
             self.detail = "LAND_COMMITTED_WAIT_LANDED"
             return ActionCommand(desired_mode=self.land_mode)
-        if (self.request is not None
-                and self.guided_landing
-                and self.land_phase == "NEAR_GROUND_DISARM"
-                and snapshot.authorized):
-            return self._tick_guided_land(snapshot)
         assert self.request is not None
         params = self.request.params
         rc_managed = params.get("rc_managed", False) is True
@@ -923,7 +1003,6 @@ class ActionExecutor:
 
     def _guided_land_hold(self, snapshot: VehicleSnapshot, detail: str) -> ActionCommand:
         # Reset limiter memory as well as output: recovery must not reuse descent.
-        self.land_alignment_since_s = None
         self.last_velocity_command = (0.0, 0.0, 0.0)
         self.last_velocity_command_s = snapshot.now_s
         self.detail = detail
@@ -941,13 +1020,22 @@ class ActionExecutor:
                     and snapshot.landing_center_error_px >= 0)
 
     def _landing_aligned(self, snapshot: VehicleSnapshot) -> bool:
-        """Require centre and forward heading from the same fresh tag pose."""
-        return bool(self._landing_observation_valid(snapshot)
-                    and snapshot.landing_center_error_px <= self.land_center_tolerance_px
-                    and abs(_wrap_angle(snapshot.landing_heading_error_rad)) <= self.land_yaw_tolerance_rad + 1e-12)
+        """Require the same fresh pose to be centred and heading-aligned."""
+        return bool(
+            self._landing_observation_valid(snapshot)
+            and snapshot.landing_center_error_px <= self.land_center_tolerance_px
+            and abs(_wrap_angle(snapshot.landing_heading_error_rad))
+            <= self.land_yaw_tolerance_rad + 1e-12
+        )
 
     def _landing_tracking_command(self, snapshot: VehicleSnapshot, up_mps: float) -> ActionCommand:
-        """Centre and turn in ROS ENU; callers gate descent on alignment."""
+        """Centre the Tag; turn only before descent, while holding height."""
+        observation_s = snapshot.landing_observation_s
+        if (observation_s is not None and math.isfinite(observation_s)
+                and 0.0 <= observation_s <= snapshot.now_s
+                and (self.land_last_valid_observation_s is None
+                     or observation_s > self.land_last_valid_observation_s)):
+            self.land_last_valid_observation_s = observation_s
         vx, vy = snapshot.landing_velocity_flu
         east = math.cos(snapshot.yaw_rad) * vx - math.sin(snapshot.yaw_rad) * vy
         north = math.sin(snapshot.yaw_rad) * vx + math.cos(snapshot.yaw_rad) * vy
@@ -957,14 +1045,122 @@ class ActionExecutor:
             east, north = east * scale, north * scale
         error = _wrap_angle(snapshot.landing_heading_error_rad)
         rate_limit = self.land_maximum_yaw_rate_rad_s
-        yaw_rate = max(-rate_limit, min(rate_limit, self.land_yaw_gain_per_s * error))
-        # Use the same heading tolerance for the yaw deadband and descent gate.
-        if abs(error) <= self.land_yaw_tolerance_rad + 1e-12:
-            yaw_rate = 0.0
+        yaw_rate = 0.0
+        if (up_mps == 0.0 and not self.land_yaw_alignment_complete
+                and abs(error) > self.land_yaw_tolerance_rad):
+            yaw_rate = max(-rate_limit, min(rate_limit, self.land_yaw_gain_per_s * error))
         if up_mps == 0.0:
             self.last_velocity_command = (*self.last_velocity_command[:2], 0.0)
         command = self._limited_velocity_command(snapshot.now_s, (east, north, up_mps))
         return replace(command, yaw_rate_rad_s=yaw_rate)
+
+    def _guided_land_yaw_alignment(self, snapshot: VehicleSnapshot) -> Optional[ActionCommand]:
+        """Turn on fresh evidence; only new observations advance stable alignment."""
+        if self.land_yaw_alignment_complete:
+            return None
+        self.land_phase = "GUIDED_ALIGN_YAW"
+        error = abs(_wrap_angle(snapshot.landing_heading_error_rad))
+        centred = snapshot.landing_center_error_px <= self.land_center_tolerance_px
+        settled = (centred
+                   and error <= self.land_yaw_tolerance_rad + 1e-12
+                   and math.isfinite(snapshot.yaw_rate_rad_s)
+                   and abs(snapshot.yaw_rate_rad_s) <= self.land_yaw_alignment_rate_tolerance_rad_s)
+        observation_s = (snapshot.now_s if snapshot.landing_observation_s is None
+                         else snapshot.landing_observation_s)
+        new_observation = bool(
+            math.isfinite(observation_s) and 0.0 <= observation_s <= snapshot.now_s
+            and (self.land_yaw_last_observation_s is None
+                 or observation_s > self.land_yaw_last_observation_s)
+        )
+        if new_observation:
+            self.land_yaw_last_observation_s = observation_s
+        if not settled:
+            # The live angular rate can invalidate stability even on a reused
+            # camera frame. That old frame cannot restart the dwell afterwards.
+            self.land_yaw_aligned_since_s = None
+            self.land_yaw_last_aligned_s = None
+        elif new_observation:
+            if (self.land_yaw_last_aligned_s is None
+                    or observation_s - self.land_yaw_last_aligned_s > self.land_yaw_alignment_maximum_gap_s):
+                self.land_yaw_aligned_since_s = snapshot.now_s
+            self.land_yaw_last_aligned_s = observation_s
+            assert self.land_yaw_aligned_since_s is not None
+            self.land_yaw_alignment_complete = (
+                snapshot.now_s - self.land_yaw_aligned_since_s >= self.land_yaw_alignment_dwell_s
+            )
+        if self.land_yaw_alignment_complete:
+            return None
+        if settled:
+            self.detail = "GUIDED_ALIGNMENT_SETTLING"
+        elif not centred:
+            self.detail = "GUIDED_ALIGN_CENTER"
+        else:
+            self.detail = "GUIDED_ALIGN_YAW"
+        return self._landing_tracking_command(snapshot, 0.0)
+
+    def _begin_guided_land_reacquire(self, snapshot: VehicleSnapshot, detail: str,
+                                   *, require_verification: Optional[bool] = None) -> ActionCommand:
+        self.land_phase = "GUIDED_REACQUIRE_HOLD"
+        self.land_hold_started_s = snapshot.now_s
+        self.land_reacquired_since_s = self.land_last_reacquired_s = None
+        self.land_search_center_xy = tuple(snapshot.position_enu[:2])
+        self.land_search_waypoint = 0
+        self.land_search_stop_reason = ""
+        self.land_recovery_requires_verification = (
+            snapshot.landing_observation_failure_reason not in TRANSIENT_LANDING_OBSERVATION_FAILURES
+            if require_verification is None else require_verification
+        )
+        # A failing callback may already have cleared the current pose. Keep
+        # the last tracking frame so it cannot masquerade as a reacquisition.
+        self.land_recovery_observation_s = self.land_last_valid_observation_s
+        return self._guided_land_hold(snapshot, detail)
+
+    def _stop_guided_land_search(self, snapshot: VehicleSnapshot, detail: str) -> ActionCommand:
+        # Keep this LAND session active: do not cycle through LOITER/FOLLOW.
+        self.land_phase = "GUIDED_REACQUIRE_STOPPED_HOLD"
+        self.land_search_stop_reason = detail
+        return self._guided_land_hold(snapshot, detail)
+
+    def _guided_land_search(self, snapshot: VehicleSnapshot) -> ActionCommand:
+        """Bounded horizontal cross search; vertical/yaw targets stay zero."""
+        assert self.land_hold_started_s is not None
+        if snapshot.now_s - self.land_hold_started_s < self.land_search_wait_s:
+            return self._guided_land_hold(snapshot, "TAG_LOST_GUIDED_HOLD")
+        # Prolonged interruption/search must use the normal recovery dwell.
+        self.land_recovery_requires_verification = True
+        # Searching is permitted only with usable position, range and attitude.
+        # These bounds are in the FCU estimate, not a physical range guarantee.
+        if (snapshot.mode.strip().upper() != self.guided_mode
+                or not snapshot.range_fresh or not math.isfinite(snapshot.range_m)
+                or not self.land_recovery_height_m < snapshot.range_m <= 8.0
+                or not snapshot.telemetry_fresh or not snapshot.ekf_healthy
+                or not all(math.isfinite(v) for v in (*snapshot.position_enu, *snapshot.velocity_enu))
+                or not math.isfinite(snapshot.tilt_deg) or not 0 <= snapshot.tilt_deg <= 10
+                or math.hypot(*snapshot.velocity_enu[:2]) > 0.10):
+            return self._guided_land_hold(snapshot, "SEARCH_EVIDENCE_INVALID_GUIDED_HOLD")
+        assert self.land_search_center_xy is not None
+        px, py = snapshot.position_enu[:2]
+        cx, cy = self.land_search_center_xy
+        if math.hypot(px - cx, py - cy) >= self.land_search_radius_m:
+            return self._stop_guided_land_search(snapshot, "SEARCH_BOUNDARY_GUIDED_HOLD")
+        # Leave 20% braking margin inside the requested radius. Return through
+        # the centre between each leg, instead of orbiting or changing heading.
+        r = self.land_search_radius_m * 0.8
+        points = ((r, 0), (0, 0), (-r, 0), (0, 0), (0, r), (0, 0), (0, -r), (0, 0))
+        while self.land_search_waypoint < len(points):
+            dx, dy = points[self.land_search_waypoint]
+            ex, ey = cx + dx - px, cy + dy - py
+            distance = math.hypot(ex, ey)
+            if distance > min(0.03, r * 0.1):
+                speed = min(self.land_search_speed_mps, distance)
+                self.last_velocity_command = (*self.last_velocity_command[:2], 0.0)
+                command = self._limited_velocity_command(snapshot.now_s, (
+                    speed * ex / distance, speed * ey / distance, 0.0))
+                self.detail = "TAG_LOST_SAME_HEIGHT_SEARCH"
+                self._land_expected_mode = self.guided_mode
+                return replace(command, yaw_rate_rad_s=0.0)
+            self.land_search_waypoint += 1
+        return self._stop_guided_land_search(snapshot, "SEARCH_COMPLETE_GUIDED_HOLD")
 
     def _tick_guided_land(self, snapshot: VehicleSnapshot) -> ActionCommand:
         """One CH8 action: GUIDED track/descent, bounded recovery, native LAND."""
@@ -984,16 +1180,6 @@ class ActionExecutor:
         released = bool(self.request.params.get("rc_managed", False) and
                         (snapshot.landing_explicit_low or not snapshot.landing_requested))
 
-        # Strictly BELOW the threshold, using fresh range evidence. Once sent,
-        # the disarm phase persists until the FCU armed=false heartbeat.
-        if (self.land_phase == "NEAR_GROUND_DISARM" or
-                (range_valid and range_m < self.land_recovery_height_m
-                 and not tag_valid)):
-            self.land_phase = "NEAR_GROUND_DISARM"
-            self._land_expected_mode = self.land_mode
-            self.detail = "NEAR_GROUND_TAG_LOST_WAIT_DISARM"
-            return ActionCommand(desired_mode=self.land_mode, request_disarm=True)
-
         # Near-ground handoff is latched; CH8 cannot restart FOLLOW here.
         if self.land_phase == "HYBRID_LAND_COMMITTED":
             self._land_expected_mode = self.land_mode
@@ -1004,60 +1190,100 @@ class ActionExecutor:
         # The camera often loses a usable landing pose at touchdown even while
         # it still detects the Tag, so recovery here can strand FCU in GUIDED.
         if range_valid and range_m <= self.land_recovery_height_m:
+            # Losing the image near the ground does not prove touchdown.
+            # Native LAND owns the final descent and landing detection; only
+            # the FCU landed indication permits the LANDED_DISARM path above.
             self.land_phase = "HYBRID_LAND_COMMITTED"
             self._land_expected_mode = self.land_mode
             self.detail = "GUIDED_DESCENT_COMPLETE_REQUEST_LAND"
             return ActionCommand(desired_mode=self.land_mode)
 
-        if self.land_phase == "GUIDED_REACQUIRE_HOLD":
-            assert self.land_hold_started_s is not None
-            # Deadline wins even if the first reacquired frame arrives this tick.
-            if snapshot.now_s - self.land_hold_started_s >= self.land_recovery_timeout_s:
-                return self._begin_land_exit(
-                    self.guided_mode if tag_valid else self.fallback_mode,
-                    "LAND_EXIT_TAG_REACQUIRE_TIMEOUT",
-                )
-            if correction_valid:
-                if self.land_reacquired_since_s is None:
-                    self.land_reacquired_since_s = snapshot.now_s
-                if snapshot.now_s - self.land_reacquired_since_s >= self.land_reacquire_dwell_s:
-                    self.land_phase = "GUIDED_TRACK_DESCENT"
-                    self.land_hold_started_s = self.land_reacquired_since_s = None
-            else:
-                self.land_reacquired_since_s = None
-            if self.land_phase == "GUIDED_REACQUIRE_HOLD":
-                return self._guided_land_hold(snapshot, "LANDING_POSE_INVALID_GUIDED_HOLD" if tag_valid else "TAG_LOST_GUIDED_HOLD")
-
+        # RC cancellation must also work during search and a latched stop.
         if released:
             return self._begin_land_exit(
                 self.guided_mode if tag_valid else self.fallback_mode,
                 "LAND_EXIT_CH8_RELEASED",
             )
+        if self.land_phase == "GUIDED_REACQUIRE_STOPPED_HOLD":
+            return self._guided_land_hold(snapshot, self.land_search_stop_reason)
+
+        real_loss_event = (
+            snapshot.landing_observation_loss_sequence != self.land_seen_observation_loss_sequence
+        )
+        self.land_seen_observation_loss_sequence = snapshot.landing_observation_loss_sequence
+        if real_loss_event:
+            if self.land_phase != "GUIDED_REACQUIRE_HOLD":
+                return self._begin_guided_land_reacquire(
+                    snapshot, "TARGET_REJECTED_GUIDED_HOLD", require_verification=True,
+                )
+            self.land_recovery_requires_verification = True
+            self.land_reacquired_since_s = self.land_last_reacquired_s = None
+
+        if self.land_phase == "GUIDED_REACQUIRE_HOLD":
+            assert self.land_hold_started_s is not None
+            # Deadline wins even if the first reacquired frame arrives this tick.
+            if snapshot.now_s - self.land_hold_started_s >= self.land_recovery_timeout_s:
+                return self._stop_guided_land_search(
+                    snapshot, "TAG_REACQUIRE_TIMEOUT_GUIDED_HOLD",
+                )
+            if (snapshot.now_s - self.land_hold_started_s >= self.land_search_wait_s
+                    or (not correction_valid and snapshot.landing_observation_failure_reason
+                        not in TRANSIENT_LANDING_OBSERVATION_FAILURES)):
+                self.land_recovery_requires_verification = True
+            if correction_valid:
+                if (self.land_last_reacquired_s is None or
+                        snapshot.now_s - self.land_last_reacquired_s > self.land_reacquire_maximum_gap_s):
+                    self.land_reacquired_since_s = snapshot.now_s
+                self.land_last_reacquired_s = snapshot.now_s
+                observation_s = snapshot.landing_observation_s
+                new_observation = bool(
+                    observation_s is not None and math.isfinite(observation_s)
+                    and 0.0 <= observation_s <= snapshot.now_s
+                    and (self.land_recovery_observation_s is None
+                         or observation_s > self.land_recovery_observation_s)
+                )
+                # A short poll/age gap resumes on a NEW valid pose. Real target
+                # rejection, prolonged interruption or search retain the dwell.
+                if (not self.land_yaw_alignment_complete or
+                        (not self.land_recovery_requires_verification and new_observation) or
+                        snapshot.now_s - self.land_reacquired_since_s >= self.land_reacquire_dwell_s):
+                    self.land_phase = ("GUIDED_TRACK_DESCENT" if self.land_yaw_alignment_complete
+                                       else "GUIDED_ALIGN_YAW")
+                    self.land_hold_started_s = self.land_reacquired_since_s = None
+                    self.land_last_reacquired_s = None
+                    self.land_search_center_xy = None
+                    self.land_recovery_observation_s = None
+                else:
+                    return self._guided_land_hold(snapshot, "TAG_REACQUIRED_VERIFY_GUIDED_HOLD")
+            else:
+                if (self.land_last_reacquired_s is not None and
+                        snapshot.now_s - self.land_last_reacquired_s <= self.land_reacquire_maximum_gap_s):
+                    return self._guided_land_hold(snapshot, "TAG_REACQUIRED_VERIFY_GUIDED_HOLD")
+                self.land_reacquired_since_s = self.land_last_reacquired_s = None
+            if self.land_phase == "GUIDED_REACQUIRE_HOLD":
+                return self._guided_land_search(snapshot)
+
         if not range_valid:
             return self._guided_land_hold(snapshot, "RANGE_INVALID_GUIDED_HOLD")
         if tag_valid and not correction_valid:
-            self.land_phase = "GUIDED_REACQUIRE_HOLD"
-            self.land_hold_started_s = snapshot.now_s
-            self.land_reacquired_since_s = None
-            return self._guided_land_hold(snapshot, "LANDING_POSE_INVALID_GUIDED_HOLD")
+            return self._begin_guided_land_reacquire(snapshot, "LANDING_POSE_INVALID_GUIDED_HOLD")
         if not tag_valid:
-            self.land_phase = "GUIDED_REACQUIRE_HOLD"
-            self.land_hold_started_s = snapshot.now_s
-            self.land_reacquired_since_s = None
-            return self._guided_land_hold(snapshot, "TAG_LOST_GUIDED_HOLD")
+            return self._begin_guided_land_reacquire(snapshot, "TAG_LOST_GUIDED_HOLD")
         if mode != self.guided_mode:
             return self._guided_land_hold(snapshot, "WAITING_GUIDED_HEARTBEAT")
+        # Alignment is a continuing descent gate. If either the image centre
+        # or Tag heading leaves tolerance, stop vertical motion and require a
+        # fresh stable window before descending again.
+        if self.land_yaw_alignment_complete and not self._landing_aligned(snapshot):
+            self.land_yaw_alignment_complete = False
+            self.land_yaw_aligned_since_s = None
+            self.land_yaw_last_aligned_s = None
+        alignment_command = self._guided_land_yaw_alignment(snapshot)
+        if alignment_command is not None:
+            return alignment_command
+        self.land_phase = "GUIDED_TRACK_DESCENT"
+        self.detail = "GUIDED_TRACK_DESCENT"
         self._land_expected_mode = self.guided_mode
-        if not self._landing_aligned(snapshot):
-            self.land_alignment_since_s = None
-            self.land_phase = self.detail = "GUIDED_ALIGN"
-            return self._landing_tracking_command(snapshot, 0.0)
-        if self.land_alignment_since_s is None:
-            self.land_alignment_since_s = snapshot.now_s
-        if snapshot.now_s - self.land_alignment_since_s < self.land_alignment_dwell_s:
-            self.land_phase = self.detail = "GUIDED_VERIFY_ALIGNMENT"
-            return self._landing_tracking_command(snapshot, 0.0)
-        self.land_phase = self.detail = "GUIDED_TRACK_DESCENT"
         return self._landing_tracking_command(snapshot, -self.land_guided_descent_mps)
 
     def _tick_disarm(self, snapshot: VehicleSnapshot) -> ActionCommand:
