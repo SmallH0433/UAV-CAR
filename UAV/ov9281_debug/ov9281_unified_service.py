@@ -231,6 +231,106 @@ def view_distance(a, b):
     scales=(.05,.05,.05,.05,math.radians(5)); return math.sqrt(sum(((x-y)/s)**2 for x,y,s in zip(a,b,scales)))
 
 
+class CaptureTimestampEvidence:
+    """Additive timing evidence; never changes legacy vision acceptance.
+
+    libcamera SensorTimestamp uses CLOCK_BOOTTIME. On Raspberry Pi it marks
+    first-pixel readout; Picamera2's manual section 6.4.1 and installed
+    wait_for_timestamp_ subtract ExposureTime to obtain exposure start.
+    BOOTTIME includes suspend; Python monotonic does not. Read both clocks
+    together instead of assuming their boot-relative offsets are identical.
+    """
+    MAX_AGE_S = 0.35
+    MAX_CLOCK_BRACKET_NS = 5_000_000
+    MAX_OFFSET_CHANGE_NS = 5_000_000
+
+    def __init__(self, clock=time):
+        self.clock = clock
+        self.last_sensor_ns = None
+        self.last_capture_ns = None
+        self.last_offset_ns = None
+
+    @staticmethod
+    def invalid(reason, sequence=None):
+        return {
+            'capture_timestamp_source': 'libcamera_sensor_timestamp',
+            'capture_sensor_clock_id': 'CLOCK_BOOTTIME',
+            'capture_clock_id': 'CLOCK_MONOTONIC',
+            'capture_time_semantics': 'RPI_FIRST_PIXEL_EXPOSURE_START',
+            'capture_timing_valid': False, 'capture_timing_reason': reason,
+            'capture_monotonic_s': None, 'capture_sensor_timestamp_ns': None,
+            'capture_exposure_time_us': None, 'capture_analysis_sequence': sequence,
+            'capture_age_ms': None, 'capture_clock_offset_s': None,
+            'capture_clock_uncertainty_s': None,
+        }
+
+    def _clocks(self):
+        try:
+            before = self.clock.monotonic_ns()
+            boot = self.clock.clock_gettime_ns(self.clock.CLOCK_BOOTTIME)
+            after = self.clock.monotonic_ns()
+            if not all(isinstance(x, int) and not isinstance(x, bool) and x >= 0
+                       for x in (before, boot, after)):
+                return None
+            if not 0 <= after-before <= self.MAX_CLOCK_BRACKET_NS:
+                return None
+            midpoint = (before+after)//2
+            return boot, after, boot-midpoint, (after-before)/2
+        except (AttributeError, OSError, TypeError, ValueError, OverflowError):
+            # Timing support failure must not stop image analysis or refresh
+            # an old capture timestamp. No wall-clock/receipt fallback exists.
+            return None
+
+    def capture(self, metadata):
+        if not isinstance(metadata, dict):
+            return self.invalid('MISSING_CAPTURE_METADATA')
+        sensor, exposure = metadata.get('SensorTimestamp'), metadata.get('ExposureTime')
+        if not all(isinstance(x, int) and not isinstance(x, bool) and x > 0
+                   for x in (sensor, exposure)):
+            return self.invalid('INVALID_CAPTURE_METADATA')
+        clocks = self._clocks()
+        if clocks is None:
+            return self.invalid('CAPTURE_CLOCK_UNAVAILABLE_OR_UNCERTAIN')
+        boot, now, offset, uncertainty = clocks
+        if self.last_offset_ns is not None and abs(offset-self.last_offset_ns) > self.MAX_OFFSET_CHANGE_NS:
+            self.last_offset_ns = offset
+            return self.invalid('CAPTURE_CLOCK_OFFSET_CHANGED')
+        self.last_offset_ns = offset
+        start_boot = sensor-exposure*1000
+        start_mono = start_boot-offset
+        if sensor > boot or start_boot <= 0 or not 0 <= start_mono <= now:
+            return self.invalid('CAPTURE_TIMESTAMP_FUTURE_OR_WRONG_CLOCK')
+        if self.last_sensor_ns is not None and sensor <= self.last_sensor_ns:
+            return self.invalid('CAPTURE_TIMESTAMP_DUPLICATE_OR_BACKWARD')
+        if self.last_capture_ns is not None and start_mono <= self.last_capture_ns:
+            return self.invalid('CAPTURE_START_NOT_INCREASING')
+        if (boot-start_boot)/1e9 > self.MAX_AGE_S:
+            return self.invalid('CAPTURE_TIMESTAMP_STALE')
+        self.last_sensor_ns, self.last_capture_ns = sensor, start_mono
+        result = self.invalid('VALID')
+        result.update(capture_timing_valid=True, capture_monotonic_s=start_mono/1e9,
+                      capture_sensor_timestamp_ns=sensor, capture_exposure_time_us=exposure,
+                      capture_age_ms=(now-start_mono)/1e6,
+                      capture_clock_offset_s=offset/1e9,
+                      capture_clock_uncertainty_s=uncertainty/1e9)
+        return result
+
+    def publish(self, evidence, sequence):
+        if not evidence.get('capture_timing_valid'):
+            return dict(evidence, capture_analysis_sequence=sequence)
+        clocks = self._clocks()
+        if clocks is None:
+            return self.invalid('CAPTURE_CLOCK_UNAVAILABLE_OR_UNCERTAIN', sequence)
+        boot, now, offset, _ = clocks
+        if abs(offset/1e9-evidence['capture_clock_offset_s']) > self.MAX_OFFSET_CHANGE_NS/1e9:
+            return self.invalid('CAPTURE_CLOCK_OFFSET_CHANGED', sequence)
+        start_boot = evidence['capture_sensor_timestamp_ns']-evidence['capture_exposure_time_us']*1000
+        age_s = (boot-start_boot)/1e9
+        if not 0 <= age_s <= self.MAX_AGE_S or evidence['capture_monotonic_s'] > now/1e9:
+            return self.invalid('CAPTURE_TIMESTAMP_STALE_OR_CLOCK_BACKWARD', sequence)
+        return dict(evidence, capture_analysis_sequence=sequence, capture_age_ms=age_s*1000)
+
+
 class VisionState:
     def __init__(self, args):
         info = Picamera2.global_camera_info()
@@ -240,6 +340,10 @@ class VisionState:
         self.frame=None; self.frame_time=0.0; self.observation=None; self.observations=[]; self.overlay=None; self.found=False
         self.active_tag_id=None
         self.analysis_sequence=0
+        self.capture_clock = CaptureTimestampEvidence()
+        self.capture_timing = self.capture_clock.invalid('NO_CAPTURE_METADATA')
+        self.analysis_timing_pending = False
+        self.capture_analysis_mode = None
         self.capture_fps=self.analysis_fps=0.0; self.capture_count=self.analysis_count=0; self.rate_at=time.monotonic()
         self.output=args.collect_output; self.output.mkdir(parents=True,exist_ok=True)
         self.saved=len(list(self.output.glob('calib_[0-9][0-9].jpg'))); self.signatures=[]; self.last_save=0.0
@@ -305,7 +409,12 @@ class VisionState:
     def _analyse(self):
         period=1/self.args.analysis_fps
         while not self.stop.is_set():
-            started=time.monotonic(); arr=self.camera.capture_array('main'); gray=arr[:800,:1280]
+            started=time.monotonic()
+            # Picamera2 releases the same CompletedRequest after copying its
+            # arrays AND metadata. Never use a separate capture_metadata call.
+            arrays, metadata = self.camera.capture_arrays(['main'])
+            timing = self.capture_clock.capture(metadata)
+            arr=arrays[0]; gray=arr[:800,:1280]
             with self.lock: self.frame=gray.copy()
             with self.lock: mode=self.mode
             if mode=='apriltag': self._tag(gray)
@@ -313,6 +422,12 @@ class VisionState:
             now=time.monotonic()
             with self.lock:
                 self.frame_time=now; self.analysis_sequence+=1; self.analysis_count+=1; self.capture_count+=1
+                # _tag publishes its result immediately before this lock.
+                # Until sequence+timing commit together, status marks timing
+                # unavailable, never new tag coordinates with old metadata.
+                self.capture_timing=timing
+                self.capture_analysis_mode=mode
+                self.analysis_timing_pending=False
                 elapsed=now-self.rate_at
                 if elapsed>=1:
                     self.analysis_fps=self.analysis_count/elapsed; self.capture_fps=self.capture_count/elapsed
@@ -400,6 +515,7 @@ class VisionState:
         obs=None if primary is None else dict(primary)
         overlay=None if obs is None else obs['corners_px']
         with self.lock:
+            self.analysis_timing_pending=True
             self.observation=obs; self.observations=observations; self.overlay=overlay; self.found=obs is not None
             self.active_tag_id=None if obs is None else int(obs['tag_id'])
 
@@ -410,7 +526,9 @@ class VisionState:
             distinct=not self.signatures or min(view_distance(sig,old) for old in self.signatures)>=self.args.min_view_change
             if distinct and now-self.last_save>=self.args.save_interval and self.saved<self.args.target_count:
                 stem=f'calib_{self.saved:02d}'; cv2.imwrite(str(self.output/f'{stem}.jpg'),gray); marked=cv2.cvtColor(gray,cv2.COLOR_GRAY2BGR); cv2.drawChessboardCorners(marked,(9,6),refined,True); cv2.imwrite(str(self.output/f'{stem}_corners.jpg'),marked); self.signatures.append(sig); self.saved+=1; self.last_save=now; print(f'saved {self.saved}/{self.args.target_count}: {stem}.jpg',flush=True)
-        with self.lock: self.observation=None; self.observations=[]; self.overlay=None if refined is None else refined.reshape(-1,2).tolist(); self.found=bool(found)
+        with self.lock:
+            self.analysis_timing_pending=True
+            self.observation=None; self.observations=[]; self.overlay=None if refined is None else refined.reshape(-1,2).tolist(); self.found=bool(found)
 
     def status(self):
         with self.lock:
@@ -418,6 +536,10 @@ class VisionState:
             tag_state=(('DUAL TAGS DETECTED' if len(observations)>1 else 'TAG DETECTED') if found else ('TAG CANDIDATE REJECTED' if observations else 'SEARCHING FOR TAG'))
             result={'sensor':'ov9281','mode':mode,'state':tag_state if mode=='apriltag' else ('CHESSBOARD FOUND' if found else 'SEARCHING FOR CHESSBOARD'),'found':found,'analysis_sequence':self.analysis_sequence,'capture_fps':self.capture_fps,'analysis_fps':self.analysis_fps,'encoded_fps':self.stream.fps,'frame_age_ms':age,'saved':self.saved,'target':self.args.target_count,'overlay_points':overlay,'detections':observations,'configured_tags':[spec.as_dict() for spec in self.tag_specs.values()],'configured_quality_gates':{str(tag_id):gate.as_dict() for tag_id,gate in self.tag_quality_gates.items()},'tag_selection_policy':self.args.tag_selection_policy,'pose_enabled':True,'analysis_size':[1280,800],'preview_size':[640,400],'pixel_source':'Y_MONO','tag_family':'tag36h11','tag_size_m':None if obs is None else obs['tag_size_m'],'calibration':str(self.args.calibration),'range_correction':str(self.args.range_correction),'flight_controller_connected':False}
             if obs: result.update(obs)
+            if self.analysis_timing_pending or self.capture_analysis_mode != mode:
+                result.update(self.capture_clock.invalid('ANALYSIS_IN_PROGRESS_OR_MODE_CHANGED', self.analysis_sequence))
+            else:
+                result.update(self.capture_clock.publish(self.capture_timing, self.analysis_sequence))
             result['body_orientation_contract'] = {
                 'available': self.body_extrinsics is not None,
                 'frame': 'BODY_FRD', 'config_path': str(self.args.landing_config),
@@ -447,11 +569,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split('?', 1)[0]
         if path in ('/','/index.html'): return self.send_data(200,'text/html; charset=utf-8',HTML)
-        if path=='/api/status':
+        if path in ('/api/status','/api/vision/status'):
             result=self.state.status()
             result['camera_owns_mavlink']=False
             # Legacy field describes the camera's own connection, not telemetry.
             result['flight_controller_connected']=False
+            # Control consumers need the vision snapshot immediately. Reading
+            # flight telemetry here can consume their entire HTTP timeout and
+            # age an otherwise usable observation before it reaches ROS.
+            if path=='/api/vision/status':
+                return self.send_data(200,'application/json',json.dumps(result).encode())
             result['flight']=self.flight_status()
             result['flight_telemetry_connected']=bool(result['flight'].get('flight_controller_connected',False))
             return self.send_data(200,'application/json',json.dumps(result).encode())

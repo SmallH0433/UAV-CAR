@@ -60,8 +60,14 @@ action_executor:
     rollback_orphaned_guided: true
     orphaned_guided_grace_s: 1.0
 
+ibvs_adapter:
+  ros__parameters:
+    # Vision must not wait for the console's flight-telemetry HTTP request.
+    status_url: http://127.0.0.1:8765/api/vision/status
+
 landing_target_adapter:
   ros__parameters:
     environment: hardware
     flight_use_approved: true
     allow_landing_target_output: true
+    status_url: http://127.0.0.1:8765/api/vision/status

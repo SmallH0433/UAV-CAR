@@ -25,7 +25,7 @@ class IbvsAdapter(Node):
     def __init__(self) -> None:
         super().__init__("ibvs_adapter")
         self.declare_parameter("config_path", "")
-        self.declare_parameter("status_url", "http://127.0.0.1:8765/api/status")
+        self.declare_parameter("status_url", "http://127.0.0.1:8765/api/vision/status")
         self.declare_parameter("candidate_topic", "/landing/ibvs/candidate")
         self.declare_parameter("status_topic", "/landing/ibvs/status")
         self.declare_parameter("poll_rate_hz", 10.0)
@@ -85,7 +85,14 @@ class IbvsAdapter(Node):
                         # No new observation: retain the previously published
                         # sample without renewing its status, candidate or age.
                         return
-                    self._status(False, "BRIDGE_REJECTED:STALE_FRAME")
+                    # A repeated observation is not a newly rejected frame.
+                    # LAND owns its existing 0.3 s evidence deadline, whereas
+                    # FOLLOW still stops at this adapter's feature-age limit.
+                    # Publish neither a candidate nor a renewed capture time.
+                    reason = ("BRIDGE_REJECTED:DUPLICATE_FRAME"
+                              if math.isfinite(age_s) and age_s >= 0.0
+                              else "BRIDGE_REJECTED:STALE_FRAME")
+                    self._status(False, reason)
                     return
             self._status(False, f"BRIDGE_REJECTED:{bridge_result.reason}")
             return
@@ -131,7 +138,10 @@ class IbvsAdapter(Node):
         )
 
     def _status(self, healthy: bool, reason: str, **extra) -> None:
-        if not healthy:
+        if not healthy and reason not in {
+            "BRIDGE_REJECTED:DUPLICATE_FRAME",
+            "VISION_STATUS_UNAVAILABLE:TimeoutError",
+        }:
             self.last_valid_capture_s = None
         message = String()
         message.data = json.dumps(
