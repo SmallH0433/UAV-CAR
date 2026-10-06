@@ -1,13 +1,6 @@
 action_executor:
   ros__parameters:
     environment: hardware
-    # Observation only until the FC vertical cause and takeover chain are validated.
-    vertical_guard_mode: shadow
-    vertical_guard_state_path: /state/vertical_guard.json
-    vertical_guard_transition_s: 0.3
-    vertical_guard_reset_dwell_s: 3.0
-    range_status_topic: /landing/sensor_range/status
-    vertical_guard_reset_topic: /landing/vertical_guard/reset
     flight_use_approved: true
     allow_mode_change: true
     allow_setpoint_output: true
@@ -21,22 +14,16 @@ action_executor:
     landing_switch_off_below_pwm: 1200
     landing_switch_on_above_pwm: 1800
     landing_switch_maximum_age_s: 0.5
-    land_guided_descent_mps: 0.05
-    # Same-height search inside a 1 m diameter, with braking margin.
-    land_search_radius_m: 0.5
-    land_search_speed_mps: 0.05
-    land_search_wait_s: 0.5
-    land_reacquire_maximum_gap_s: 0.3
-    land_yaw_tolerance_deg: 25.0
-    land_center_tolerance_px: 20.0
+    land_guided_descent_mps: 0.10
+    land_yaw_tolerance_deg: 4.0
     land_yaw_alignment_dwell_s: 0.5
     land_yaw_alignment_rate_tolerance_deg_s: 3.0
     land_yaw_gain_per_s: 0.8
     land_maximum_yaw_rate_deg_s: 15.0
     landing_alignment_maximum_age_s: 0.3
     land_recovery_height_m: 0.10
-    land_recovery_timeout_s: 60.0
-    land_reacquire_dwell_s: 0.5
+    land_recovery_timeout_s: 1.0
+    land_reacquire_dwell_s: 0.0
     # Migrated from the Pi native-land hardware profile (2026-09-28).
     maximum_horizontal_speed_mps: 0.20
     maximum_horizontal_acceleration_mps2: 0.40
@@ -60,14 +47,8 @@ action_executor:
     rollback_orphaned_guided: true
     orphaned_guided_grace_s: 1.0
 
-ibvs_adapter:
-  ros__parameters:
-    # Vision must not wait for the console's flight-telemetry HTTP request.
-    status_url: http://127.0.0.1:8765/api/vision/status
-
 landing_target_adapter:
   ros__parameters:
     environment: hardware
     flight_use_approved: true
     allow_landing_target_output: true
-    status_url: http://127.0.0.1:8765/api/vision/status
