@@ -8,7 +8,7 @@ elastic_trajectory_adapter:
 
 ibvs_adapter:
   ros__parameters:
-    status_url: http://127.0.0.1:8765/api/status
+    status_url: http://127.0.0.1:8765/api/vision/status
     candidate_topic: /landing/ibvs/candidate
     status_topic: /landing/ibvs/status
     poll_rate_hz: 10.0
@@ -16,7 +16,7 @@ ibvs_adapter:
 
 landing_target_adapter:
   ros__parameters:
-    status_url: http://127.0.0.1:8765/api/status
+    status_url: http://127.0.0.1:8765/api/vision/status
     http_timeout_s: 0.15
     poll_rate_hz: 10.0
     environment: offline

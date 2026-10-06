@@ -52,7 +52,8 @@ class DuplicateFrameTests(unittest.TestCase):
             lifecycle=SimpleNamespace(active=False),
         )
         receiver_method = methods(executor_source(), {"_target_status"},
-            dict(String=object, json=json, LandingAlignment=LandingAlignment))["_target_status"]
+            dict(String=object, json=json, LandingAlignment=LandingAlignment,
+                 ActionKind=ActionKind))["_target_status"]
 
         def publish_status(message):
             self.statuses.append(json.loads(message.data))
@@ -108,8 +109,7 @@ class DuplicateFrameTests(unittest.TestCase):
         self.poll(1.14, frame_age_ms=0)
         self.assertFalse(self.receiver.target_healthy)
         self.assertIsNone(self.receiver.landing_alignment)
-        self.assertIsNone(self.adapter.last_valid_capture_s)
-        self.assertEqual(self.statuses[-1]["reason"], "BRIDGE_REJECTED:STALE_FRAME")
+        self.assertEqual(self.statuses[-1]["reason"], "BRIDGE_REJECTED:DUPLICATE_FRAME")
         self.assertEqual(len(self.candidates), 1)
 
     def test_duplicate_after_invalid_frame_cannot_revive_previous_evidence(self):
@@ -128,7 +128,7 @@ class DuplicateFrameTests(unittest.TestCase):
         self.assertIsNone(self.receiver.landing_alignment)
         self.assertEqual(self.statuses[-1]["reason"], "BRIDGE_REJECTED:TARGET_NOT_FOUND")
 
-    def test_http_error_clears_cache_and_duplicate_cannot_revive_it(self):
+    def test_http_error_revokes_follow_evidence_and_duplicate_cannot_revive_it(self):
         self.poll(1)
         self.error = TimeoutError()
         self.poll(1.04)
@@ -160,6 +160,95 @@ class DuplicateFrameTests(unittest.TestCase):
         self.poll(1.05)
         self.assertFalse(self.receiver.target_healthy)
 
+    def enable_guided_land_receiver(self):
+        self.receiver.lifecycle = SimpleNamespace(
+            active=True, request=SimpleNamespace(kind=ActionKind.LAND),
+            guided_landing=True, land_yaw_alignment_complete=True,
+            land_phase="GUIDED_TRACK_DESCENT")
+        self.receiver.candidate = self.candidates[-1]
+        self.receiver.candidate_received_s = self.now
+        self.receiver.candidate_maximum_age_s = 1.0
+        self.receiver.landing_alignment_maximum_age_s = .3
+        self.receiver._fresh = lambda stamp, limit, now: (
+            stamp is not None and 0 <= now - stamp <= limit)
+
+    def test_duplicate_between_feature_and_land_deadlines_does_not_revoke_land(self):
+        self.poll(1)
+        self.enable_guided_land_receiver()
+        evidence = self.receiver.landing_alignment
+        capture_s = self.adapter.last_valid_capture_s
+        for elapsed in (.16, .22, .29):
+            self.poll(capture_s + elapsed, frame_age_ms=0)
+            self.assertTrue(self.receiver.target_healthy)
+            self.assertIs(self.receiver.landing_alignment, evidence)
+            self.assertEqual(self.receiver.target_status_received_s, 1)
+            self.assertEqual(self.adapter.last_valid_capture_s, capture_s)
+        self.assertEqual(len(self.candidates), 1)
+        # Frozen responses cannot keep either landing pose or control alive.
+        self.poll(capture_s + .301, frame_age_ms=0)
+        self.assertFalse(self.receiver.target_healthy)
+        self.assertIsNone(self.receiver.landing_alignment)
+        self.poll(capture_s + .4, frame_age_ms=0)
+        self.assertFalse(self.receiver.target_healthy)
+        self.assertEqual(len(self.candidates), 1)
+
+    def test_timeout_then_duplicate_preserves_only_original_land_deadline(self):
+        self.poll(1)
+        self.enable_guided_land_receiver()
+        evidence = self.receiver.landing_alignment
+        capture_s = self.adapter.last_valid_capture_s
+        self.error = TimeoutError()
+        self.poll(1.04)
+        self.assertIs(self.receiver.landing_alignment, evidence)
+        self.error = None
+        self.poll(capture_s + .22, frame_age_ms=0)
+        self.assertIs(self.receiver.landing_alignment, evidence)
+        self.assertEqual(self.receiver.target_status_received_s, 1)
+        self.poll(capture_s + .301, frame_age_ms=0)
+        self.assertFalse(self.receiver.target_healthy)
+        self.assertIsNone(self.receiver.landing_alignment)
+
+    def test_actual_loss_after_duplicate_revokes_land_immediately(self):
+        self.poll(1)
+        self.enable_guided_land_receiver()
+        self.poll(1.15, frame_age_ms=0)
+        self.assertTrue(self.receiver.target_healthy)
+        self.poll(1.16, found=False)
+        self.assertFalse(self.receiver.target_healthy)
+        self.assertIsNone(self.receiver.landing_alignment)
+        self.assertIsNone(self.adapter.last_valid_capture_s)
+        self.assertGreater(self.receiver.target_loss_sequence, 0)
+
+    def test_new_stale_frame_still_revokes_land(self):
+        self.poll(1)
+        self.enable_guided_land_receiver()
+        self.poll(1.15, analysis_sequence=2, frame_age_ms=400)
+        self.assertFalse(self.receiver.target_healthy)
+        self.assertIsNone(self.receiver.landing_alignment)
+        self.assertEqual(self.statuses[-1]["reason"], "BRIDGE_REJECTED:STALE_FRAME")
+
+    def test_duplicate_does_not_complete_stable_window_without_new_observation(self):
+        self.poll(1)
+        executor = ActionExecutor(land_yaw_alignment_dwell_s=.1)
+        executor.start(ActionRequest("align", ActionKind.LAND, 5, {}), flight(1))
+        for t in (1, 1.05, 1.12):
+            self.poll(t)
+            evidence = self.receiver.landing_alignment
+            status, command = executor.tick(flight(t,
+                landing_observation_s=evidence.received_s - evidence.source_age_s,
+                landing_center_error_px=evidence.center_error_px,
+                landing_heading_error_rad=evidence.heading_error_rad))
+            self.assertEqual(command.velocity_enu[2], 0)
+            self.assertFalse(executor.land_yaw_alignment_complete)
+        self.poll(1.13, analysis_sequence=2)
+        evidence = self.receiver.landing_alignment
+        status, command = executor.tick(flight(1.13,
+            landing_observation_s=evidence.received_s - evidence.source_age_s,
+            landing_center_error_px=evidence.center_error_px,
+            landing_heading_error_rad=evidence.heading_error_rad))
+        self.assertEqual(status.detail, "GUIDED_TRACK_DESCENT")
+        self.assertLess(command.velocity_enu[2], 0)
+
     def test_land_alignment_dwell_survives_duplicate_polls(self):
         self.poll(1)
         executor = ActionExecutor()
@@ -173,6 +262,8 @@ class DuplicateFrameTests(unittest.TestCase):
                 candidate_fresh=self.receiver.target_healthy,
                 landing_alignment_fresh=evidence is not None and evidence.fresh(t, .3),
                 landing_velocity_flu=evidence.velocity_flu if evidence else None,
+                landing_observation_s=(evidence.received_s - evidence.source_age_s
+                                       if evidence else None),
                 landing_center_error_px=evidence.center_error_px if evidence else math.nan,
                 landing_heading_error_rad=evidence.heading_error_rad if evidence else math.nan))
             if t < 1.5:

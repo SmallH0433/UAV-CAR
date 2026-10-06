@@ -59,7 +59,7 @@ class LandingTargetAdapter(Node):
         super().__init__("landing_target_adapter")
         defaults = {
             "config_path": "",
-            "status_url": "http://127.0.0.1:8765/api/status",
+            "status_url": "http://127.0.0.1:8765/api/vision/status",
             "http_timeout_s": 0.15,
             "poll_rate_hz": 10.0,
             "environment": "offline",
